@@ -32,13 +32,15 @@ oxiview 是只面向 macOS / Windows / Linux 原生桌面平台的 Rust 自绘 U
 | `snapshot --review` | 列出待处理快照，人工查看 actual / diff |
 | `snapshot --accept <name\|crate/name\|all>` | 经人确认后更新快照基准 |
 | `bench` / `bench --record` | 比较本机性能基线 / 经人确认后记录基线 |
+| `new-crate <name> --context <context>` | 创建已登记 crate，继承 workspace 配置；拒绝覆盖 |
 | `doctor` | 检查 Rust 1.97 stable 与 cargo-deny；缺失时提示安装命令 |
 | `verify` / `verify --full` | doctor 通过后执行 fmt、lint、test、deps、docs；full 追加 bench |
 | `help [子命令]` / `--help` | 查看帮助 |
 
 退出码：`0` 全部通过；`1` 检查失败；`2` 环境缺失、参数或 xtask 自身错误（优先于 1）。doctor 失败时 verify 提前返回，其他检查失败仍继续汇总。
 每次调用覆盖 `target/xtask/report.json`，各项含名称、状态、耗时、失败摘要与产物路径；日志位于 `target/xtask/<检查名>.log`。
-`docs` 是 verify 内部检查项，无独立子命令：检查本文件和 docs 下 Markdown 的内联相对链接目标及 CLAUDE.md 软链，不验证锚点内容。
+`docs` 是 verify 内部检查项，无独立子命令：检查本文件、docs 下 Markdown 及技能正文的内联相对链接目标，检查 CLAUDE.md 和 .claude/skills 相对软链及技能 frontmatter，不验证锚点内容。
+技能 frontmatter 采用单行无引号字符串，必须且只能包含 name 与 description；name 与目录名一致。
 
 ## 文档索引
 
@@ -48,13 +50,13 @@ oxiview 是只面向 macOS / Windows / Linux 原生桌面平台的 Rust 自绘 U
 - [依赖管理](docs/conventions/dependencies.md)、[Git 工作流](docs/conventions/git-workflow.md)
 - [像素快照](docs/conventions/testing-snapshots.md)、[基准与性能基线](docs/conventions/testing-performance.md)
 
-## 技能索引（由 S7 提供）
+## 技能索引
 
-以下技能将位于 `.agents/skills/`；本步仅预告，不创建技能或相关命令。
+技能正本位于 `.agents/skills/`，Claude Code 通过 `.claude/skills` 相对软链读取。
 
 | 名称 | 用途 |
 | --- | --- |
-| `adr-glossary` | 维护 ADR 判断、编号、索引与规范术语；由 S7 提供。 |
-| `scaffold` | 按 workspace 与依赖规则创建 crate，提供控件与能力检查清单；由 S7 提供。 |
-| `review-checklist` | 审查依赖、安全边界、API、测试和可观测性；由 S7 提供。 |
-| `verify` | 选择验证命令、解读报告并遵守基线审批规则；由 S7 提供。 |
+| [adr-glossary](.agents/skills/adr-glossary/SKILL.md) | 维护 ADR 判断、编号、索引与规范术语。 |
+| [scaffold](.agents/skills/scaffold/SKILL.md) | 按 workspace 与依赖规则创建 crate，提供控件与能力检查清单。 |
+| [review-checklist](.agents/skills/review-checklist/SKILL.md) | 审查依赖、安全边界、API、测试和可观测性。 |
+| [verify](.agents/skills/verify/SKILL.md) | 选择验证命令、解读报告并遵守基线审批规则。 |

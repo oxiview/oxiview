@@ -8,6 +8,7 @@ mod check;
 mod deps;
 mod docs;
 mod report;
+mod scaffold;
 mod snapshot;
 
 use std::{path::Path, process::ExitCode};
@@ -61,6 +62,14 @@ enum Task {
         #[arg(long)]
         record: bool,
     },
+    /// 创建已在 layers.toml 登记的 crate，不覆盖已有目录。
+    NewCrate {
+        /// crate 名称。
+        name: String,
+        /// 必须与规则表中的上下文完全一致。
+        #[arg(long)]
+        context: String,
+    },
     /// 检查工具链和外部工具，不自动安装。
     Doctor,
 }
@@ -96,6 +105,12 @@ fn doctor(root: &Path, report: &mut Report) {
 }
 
 fn run(task: Task, root: &Path, report: &mut Report) {
+    if let Task::NewCrate { name, context } = task {
+        report
+            .checks
+            .push(execute(&scaffold::NewCrate { name, context }, root));
+        return;
+    }
     if let Task::Bench { record } = task {
         report
             .checks
@@ -142,7 +157,11 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         Task::Lint => vec![lint()],
         Task::Test => vec![test()],
         Task::Verify { .. } => vec![fmt(true), lint(), test()],
-        Task::Doctor | Task::Deps | Task::Snapshot { .. } | Task::Bench { .. } => Vec::new(),
+        Task::Doctor
+        | Task::Deps
+        | Task::Snapshot { .. }
+        | Task::Bench { .. }
+        | Task::NewCrate { .. } => Vec::new(),
     };
     for check in checks {
         report.checks.push(execute(&check, root));
@@ -210,7 +229,7 @@ fn main() -> ExitCode {
                 "{}: {:?}（{} 毫秒）",
                 item.name, item.status, item.duration_ms
             );
-            if (item.name == "snapshot" || item.name == "bench")
+            if (item.name == "snapshot" || item.name == "bench" || item.name == "new-crate")
                 && item.status == report::Status::Pass
                 && let Ok(log) =
                     std::fs::read_to_string(root.join(format!("target/xtask/{}.log", item.name)))

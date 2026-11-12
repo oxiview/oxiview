@@ -8,19 +8,19 @@ use crate::{check::Check, report::Status};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-struct Rules {
+pub(crate) struct Rules {
     exempt: Vec<String>,
     forbidden: Vec<String>,
     dev_only: Vec<String>,
-    crates: BTreeMap<String, Layer>,
+    pub(crate) crates: BTreeMap<String, Layer>,
     external: Vec<ExternalRule>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Layer {
-    context: String,
-    role: String,
+pub(crate) struct Layer {
+    pub(crate) context: String,
+    pub(crate) role: String,
     allow: Vec<String>,
 }
 
@@ -73,7 +73,7 @@ fn metadata(root: &Path) -> Result<Metadata, String> {
     serde_json::from_slice(&output.stdout).map_err(|error| format!("metadata JSON 无效：{error}"))
 }
 
-fn read_rules(root: &Path) -> Result<Rules, String> {
+pub(crate) fn read_rules(root: &Path) -> Result<Rules, String> {
     let source = fs::read_to_string(root.join("xtask/layers.toml"))
         .map_err(|error| format!("无法读取 layers.toml：{error}"))?;
     let rules: Rules =
