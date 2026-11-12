@@ -1,6 +1,6 @@
-# rust-ui
+# oxiview
 
-只面向原生桌面平台的 Rust 自绘 UI 框架，控件从布局到像素全部由框架自行绘制。
+oxiview 是只面向原生桌面平台的 Rust 自绘 UI 框架，控件从布局到像素全部由框架自行绘制。
 
 ## Language
 
@@ -148,5 +148,5 @@ _Avoid_: mock 平台、假后端
 _Avoid_: 阶段、版本
 
 **组装根（Composition root）**：
-唯一能同时看到所有端口与具体适配器、并负责把它们接起来的 crate（`rui-app`）。
+唯一能同时看到所有端口与具体适配器、并负责把它们接起来的 crate（`oxiview-app`）。
 _Avoid_: runtime、main crate
