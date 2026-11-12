@@ -136,3 +136,13 @@ _Avoid_: Layer（未明确时）、surface
 **原生子窗口（Native child view）**：
 嵌入框架窗口中的系统原生视图，始终位于自绘内容之上。
 _Avoid_: 原生控件、overlay
+
+## 工程
+
+**无头平台后端（Headless platform backend）**：
+不连接真实窗口系统、模拟窗口与输入的平台实现，是平台接口的第二个实现，用于测试与事件回放。
+_Avoid_: mock 平台、假后端
+
+**里程碑（Milestone）**：
+路线图中交付一个可运行演示、测试和指标的阶段，编号为 M-1 至 M15。
+_Avoid_: 阶段、版本

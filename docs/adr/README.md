@@ -19,3 +19,4 @@
 | [0015](0015-interruptible-animation.md) | 动画：可中断弹簧/缓动，合成层快路径 | 14 动画 |
 | [0016](0016-devtools-in-framework.md) | 开发者工具：热重载、Inspector、性能、快照、回放 | 15 开发者体验 |
 | [0017](0017-native-system-integration.md) | 原生系统集成：标题栏/材质、偏好、生命周期、分发 | 16 原生系统集成 |
+| [0018](0018-macos-first-headless-backend-hedge.md) | 平台顺序：macOS 先行，无头后端对冲，Windows/Linux 最后移植 | 2 平台抽象 |
