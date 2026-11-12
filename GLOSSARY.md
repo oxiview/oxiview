@@ -146,3 +146,7 @@ _Avoid_: mock 平台、假后端
 **里程碑（Milestone）**：
 路线图中交付一个可运行演示、测试和指标的阶段，编号为 M-1 至 M15。
 _Avoid_: 阶段、版本
+
+**组装根（Composition root）**：
+唯一能同时看到所有端口与具体适配器、并负责把它们接起来的 crate（`rui-app`）。
+_Avoid_: runtime、main crate

@@ -20,3 +20,8 @@
 | [0016](0016-devtools-in-framework.md) | 开发者工具：热重载、Inspector、性能、快照、回放 | 15 开发者体验 |
 | [0017](0017-native-system-integration.md) | 原生系统集成：标题栏/材质、偏好、生命周期、分发 | 16 原生系统集成 |
 | [0018](0018-macos-first-headless-backend-hedge.md) | 平台顺序：macOS 先行，无头后端对冲，Windows/Linux 最后移植 | 2 平台抽象 |
+| [0019](0019-local-only-verification.md) | 验证：只做本地验证，`cargo xtask` 唯一入口，不建 CI | 工程 |
+| [0020](0020-cargo-workspace-xtask-stable.md) | 构建：Cargo workspace + xtask，固定 stable，edition 2024 | 工程 |
+| [0021](0021-crate-layout-strategic-ddd.md) | 目录与 crate：平铺 + `rui-` 前缀，战略 DDD + 端口/适配器 | 工程 |
+| [0022](0022-foundation-libraries.md) | 基础库选型 | 工程 |
+| [0023](0023-agent-conventions-dual-harness.md) | Agent 公约：单一正本，Claude Code 与 Codex 共用 | 工程 |
