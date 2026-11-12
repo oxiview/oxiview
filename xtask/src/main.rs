@@ -1,0 +1,169 @@
+//! oxiview 本地工程任务入口。
+
+// 工程工具允许对内部不变量使用 expect；库 crate 不继承此例外。
+#![allow(clippy::expect_used)]
+
+mod check;
+mod report;
+
+use std::{path::Path, process::ExitCode};
+
+use check::{CommandCheck, execute};
+use clap::{Parser, Subcommand};
+use report::{CheckResult, Report};
+
+#[derive(Parser)]
+#[command(about = "oxiview 本地工程验证")]
+struct Cli {
+    /// 仅向 stdout 输出 JSON 报告。
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    command: Task,
+}
+
+#[derive(Subcommand)]
+enum Task {
+    /// 格式化代码。
+    Fmt {
+        /// 只检查，不修改文件。
+        #[arg(long)]
+        check: bool,
+    },
+    /// 执行严格 Clippy 检查。
+    Lint,
+    /// 执行 workspace 测试。
+    Test,
+    /// 环境检查通过后执行全部检查，最后汇总。
+    Verify,
+    /// 检查工具链和外部工具，不自动安装。
+    Doctor,
+}
+
+fn cargo_check(name: &'static str, args: Vec<&'static str>) -> CommandCheck {
+    CommandCheck {
+        name,
+        program: std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()),
+        args,
+        environment: false,
+        required_rust: false,
+        remedy: "请检查 Rust 工具链及 rustfmt、clippy 组件是否可用。",
+    }
+}
+
+fn doctor(root: &Path, report: &mut Report) {
+    let rustc = CommandCheck {
+        name: "doctor-rustc",
+        program: "rustc".into(),
+        args: vec!["--version"],
+        environment: true,
+        required_rust: true,
+        remedy: "需要 Rust stable 1.97；安装命令：rustup toolchain install 1.97.0 --component rustfmt --component clippy",
+    };
+    let deny = CommandCheck {
+        environment: true,
+        remedy: "需要 cargo-deny；安装命令：cargo install cargo-deny --locked",
+        ..cargo_check("doctor-cargo-deny", vec!["deny", "--version"])
+    };
+    for check in [&rustc, &deny] {
+        report.checks.push(execute(check, root));
+    }
+}
+
+fn run(task: Task, root: &Path, report: &mut Report) {
+    if matches!(task, Task::Doctor | Task::Verify) {
+        doctor(root, report);
+        if matches!(task, Task::Doctor) || report.exit_code() != 0 {
+            return;
+        }
+    }
+    let fmt = |check| {
+        let mut args = vec!["fmt", "--all"];
+        if check {
+            args.push("--check");
+        }
+        cargo_check("fmt", args)
+    };
+    let lint = || {
+        cargo_check(
+            "lint",
+            vec![
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )
+    };
+    let test = || cargo_check("test", vec!["test", "--workspace"]);
+    let checks = match task {
+        Task::Fmt { check } => vec![fmt(check)],
+        Task::Lint => vec![lint()],
+        Task::Test => vec![test()],
+        Task::Verify => vec![fmt(true), lint(), test()],
+        Task::Doctor => Vec::new(),
+    };
+    for check in checks {
+        report.checks.push(execute(&check, root));
+    }
+}
+
+fn main() -> ExitCode {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask 位于仓库根目录下");
+    let mut report = Report::default();
+    let mut json = std::env::args_os().any(|arg| arg == "--json");
+    if let Err(error) = std::fs::create_dir_all(root.join("target/xtask")) {
+        report
+            .checks
+            .push(CheckResult::error("xtask", error.to_string()));
+    } else {
+        match Cli::try_parse() {
+            Ok(cli) => {
+                json = cli.json;
+                run(cli.command, root, &mut report);
+            }
+            Err(error) => {
+                if error.exit_code() == 0 {
+                    eprintln!("{error}");
+                } else {
+                    report
+                        .checks
+                        .push(CheckResult::error("cli", error.to_string()));
+                }
+            }
+        }
+    }
+    let serialized = serde_json::to_string_pretty(&report).expect("报告只包含可序列化值");
+    if let Err(error) = std::fs::write(root.join("target/xtask/report.json"), &serialized) {
+        report.checks.push(CheckResult::error(
+            "report",
+            format!("无法写入报告：{error}"),
+        ));
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("报告只包含可序列化值")
+        );
+    } else {
+        for item in &report.checks {
+            println!(
+                "{}: {:?}（{} 毫秒）",
+                item.name, item.status, item.duration_ms
+            );
+            if let Some(summary) = &item.failure_summary {
+                eprintln!("{summary}");
+            }
+        }
+        println!(
+            "汇总：{} 项，退出码 {}；报告：target/xtask/report.json",
+            report.checks.len(),
+            report.exit_code()
+        );
+    }
+    ExitCode::from(report.exit_code())
+}
