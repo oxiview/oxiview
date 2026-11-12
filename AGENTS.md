@@ -33,6 +33,7 @@ oxiview 是只面向 macOS / Windows / Linux 原生桌面平台的 Rust 自绘 U
 | `snapshot --accept <name\|crate/name\|all>` | 经人确认后更新快照基准 |
 | `bench` / `bench --record` | 比较本机性能基线 / 经人确认后记录基线 |
 | `new-crate <name> --context <context>` | 创建已登记 crate，继承 workspace 配置；拒绝覆盖 |
+| `install-hooks` / `install-hooks --uninstall` | 可选安装推送前 verify hook；`--force` 备份后覆盖，卸载仅删除内容匹配的 hook |
 | `doctor` | 检查 Rust 1.97 stable 与 cargo-deny；缺失时提示安装命令 |
 | `verify` / `verify --full` | doctor 通过后执行 fmt、lint、test、deps、docs；full 追加 bench |
 | `help [子命令]` / `--help` | 查看帮助 |

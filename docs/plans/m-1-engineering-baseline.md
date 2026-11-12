@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: done
 milestone: M-1
 ---
 
@@ -146,3 +146,26 @@ oxiview/
 | 快照基准图存储 | 直接入库，不用 Git LFS；仓库变大后再评估迁移 |
 | 外部 cargo 工具 | 开始执行前由 agent 安装 `cargo-deny`；`cargo xtask doctor` 负责检查并提示安装命令，不自动安装 |
 | 执行方式 | 本计划只定稿，不立即执行；执行时按 S1–S8 顺序，每步验收后单独提交 |
+
+## 执行记录
+
+S1–S7 的实际产出依据提交记录与当前文件核对；S8 由协调者在验收后提交。全程仅实现工程规范与测试 harness，未实现框架功能。
+
+| 步骤 | 实际产出 | 偏离计划与原因 |
+| --- | --- | --- |
+| S1 | `04816f6`：虚拟 workspace、Rust 1.97 stable、edition 2024、统一依赖与 lint、许可证、README 和配置文件。 | 初期 `members` 仅含 xtask，避免 Cargo 拒绝无匹配项的 `crates/*`；S4 创建首个 crate 后加入通配符。S1 与 S2 合并提交，以便骨架具备可运行入口。 |
+| S2 | `04816f6`：fmt、lint、test、doctor、verify；统一 Check、日志、JSON 报告与退出码。 | doctor 当前只要求 Rust 与 cargo-deny；cargo-fuzz、cargo-semver-checks 留到对应里程碑，避免强制安装尚未使用的工具。 |
+| S3 | `39a6c02`：layers.toml 登记规划 crate，依赖方向与外部依赖归属检查、违规 fixture、cargo-deny 审查、架构文档。 | 公告数据库放在 `target/xtask/advisory-dbs`，避免依赖可写的用户目录；架构图采用文本形式。 |
+| S4 | `e26d7fb`：oxiview-testing 的 RGBA8/PNG、容差比较、差异图、快照断言与 pending 元数据；snapshot review/accept、自测与快照公约。 | 接受操作额外支持 `crate/name`，用于消除同名快照歧义；尚无渲染器，使用程序生成图像。 |
+| S5 | `7a88908`：Divan 图像比较基准、本机基线、bench/record、verify --full、回归判定与自测、性能公约。 | 采用三轮 median 的中位数降低噪声；Divan 版本固定并严格解析终端输出。macOS 沙箱限制 sysctl 时回退到 system_profiler；三项硬指标只记录 pending。 |
+| S6 | `811f960`：AGENTS.md 正本、CLAUDE.md 相对软链、四份公约、verify 内部 docs 检查。 | 链接检查限定内联相对链接目标，不验证锚点；提交由有权限的协调者执行。 |
+| S7 | `b75beeb`：四个项目技能、.claude/skills 相对软链、new-crate 脚手架及测试、技能检查；提交记录确认两种工具均能发现四个技能。 | new-crate 只创建已在 layers.toml 登记的 crate，避免猜测依赖规则或提前创建规划 crate。技能 frontmatter 限定为单行无引号字符串，只含 name、description。Codex 沙箱对技能目录与 Git 写入有限制，技能补丁应用与提交由协调者完成。 |
+| S8 | install-hooks 显式安装、幂等检查、冲突拒绝、force 备份、匹配卸载；独立 Git fixture 覆盖生命周期、路径配置、worktree 与 hook 执行；补齐命令说明，路线图 M-1 标记完成。 | 当前仓库 .git 只读，安装测试仅在 `target/xtask/` 下独立仓库执行；未在当前仓库安装 hook，未提交或推送。备份已存在时拒绝覆盖，避免丢失原 hook。ADR 索引已完整覆盖 0019–0024，本步未新增决策，核对后保持不变。 |
+
+S8 本地验收：`cargo test -p xtask` 的 43 项测试通过（其中 9 项为 hook 测试）；`cargo xtask verify` 的 7 项检查全部为 pass，包含格式、严格 Clippy、测试、依赖与文档检查。成功克隆到 `target/xtask/fresh-clone` 后，原始 S1–S7 检出及复制 S8 变更文件后的检出分别通过 verify。由于本仓库不能提交，后者是“全新检出 + S8 文件”的验证，不声称 S8 已提交；临时检出在验证后删除，报告保留于 `target/xtask/`。
+
+### 遗留事项
+
+- [ADR-0013](../adr/0013-external-content-compositing.md) 的共享 wgpu 设备进入公开 API，与[ADR-0021](../adr/0021-crate-layout-strategic-ddd.md)及公约“第三方类型不得出现在公开 API”存在张力，需在 M10 前通过 ADR 决策；M-1 不提前修改接口边界。
+- Windows / Linux 上的机器 ID 探测与软链检出尚未实测，需要对应原生平台验证。
+- [ADR-0001](../adr/0001-goals-and-non-goals.md) 三项硬指标仍为 pending：`input_to_pixel_ms`、`idle_cpu_percent` 在 M1 接入，`list_100k_scroll_dropped_frames` 在 M7 接入；不把预留指标视为已达标。

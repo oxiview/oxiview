@@ -19,6 +19,14 @@
 
 例如 `docs: 补齐工程公约`、`test(xtask): 覆盖文档链接失效场景`。提交前必须执行 `cargo xtask verify` 并通过；性能相关变更另按[基准公约](testing-performance.md)验证。审查 `target/xtask/report.json` 和变更内容，报告不入库。快照与基线变更必须经过人工确认，不能只看命令成功。
 
+## 可选的本地 hook
+
+显式运行 `cargo xtask install-hooks` 安装 `pre-push` hook；检出仓库、构建和 verify 都不会自动安装。hook 使用 POSIX sh，在当前仓库根执行 `cargo xtask verify`，失败时以相同退出码阻止本次推送。
+
+安装通过 `git rev-parse --git-path hooks` 定位目录，遵循 worktree 与 `core.hooksPath` 配置；共享该目录的检出也会受到影响。重复安装相同内容是幂等的，并在 Unix 上补齐执行权限。已有不同内容时拒绝覆盖；显式使用 `cargo xtask install-hooks --force` 会先备份为同目录的 `pre-push.backup`，已有备份时拒绝继续，需自行处理备份。非普通文件（包括软链）拒绝修改。
+
+`cargo xtask install-hooks --uninstall` 仅删除与本命令生成内容完全匹配的 hook；内容被修改时拒绝删除，不存在时无需操作。备份保留，恢复原 hook 由使用者自行完成；`--force` 与 `--uninstall` 不能同时使用。本地 hook 是辅助约束，不能替代提交前验证与人工审查。
+
 ## ADR 与术语
 
 采用 domain-modeling 的三条判断标准，**同时满足**时必须写 ADR：

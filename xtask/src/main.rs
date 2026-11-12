@@ -7,6 +7,7 @@ mod bench;
 mod check;
 mod deps;
 mod docs;
+mod hooks;
 mod report;
 mod scaffold;
 mod snapshot;
@@ -72,6 +73,15 @@ enum Task {
     },
     /// 检查工具链和外部工具，不自动安装。
     Doctor,
+    /// 显式安装可选的 pre-push 验证 hook。
+    InstallHooks {
+        /// 备份已有不同内容的 hook 后覆盖；已有备份时拒绝覆盖。
+        #[arg(long, conflicts_with = "uninstall")]
+        force: bool,
+        /// 只删除内容与本命令生成内容完全匹配的 hook。
+        #[arg(long)]
+        uninstall: bool,
+    },
 }
 
 fn cargo_check(name: &'static str, args: Vec<&'static str>) -> CommandCheck {
@@ -105,6 +115,12 @@ fn doctor(root: &Path, report: &mut Report) {
 }
 
 fn run(task: Task, root: &Path, report: &mut Report) {
+    if let Task::InstallHooks { force, uninstall } = task {
+        report
+            .checks
+            .push(execute(&hooks::InstallHooks { force, uninstall }, root));
+        return;
+    }
     if let Task::NewCrate { name, context } = task {
         report
             .checks
@@ -161,6 +177,7 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         | Task::Deps
         | Task::Snapshot { .. }
         | Task::Bench { .. }
+        | Task::InstallHooks { .. }
         | Task::NewCrate { .. } => Vec::new(),
     };
     for check in checks {
@@ -229,8 +246,10 @@ fn main() -> ExitCode {
                 "{}: {:?}（{} 毫秒）",
                 item.name, item.status, item.duration_ms
             );
-            if (item.name == "snapshot" || item.name == "bench" || item.name == "new-crate")
-                && item.status == report::Status::Pass
+            if matches!(
+                item.name.as_str(),
+                "snapshot" | "bench" | "new-crate" | "install-hooks"
+            ) && item.status == report::Status::Pass
                 && let Ok(log) =
                     std::fs::read_to_string(root.join(format!("target/xtask/{}.log", item.name)))
             {
