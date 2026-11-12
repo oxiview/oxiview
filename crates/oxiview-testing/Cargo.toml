@@ -14,3 +14,11 @@ png.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name = "compare"
+path = "../../benches/compare.rs"
+harness = false

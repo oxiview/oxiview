@@ -34,6 +34,8 @@ impl CheckResult {
 #[derive(Default, Serialize)]
 pub(crate) struct Report {
     pub checks: Vec<CheckResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub performance: Option<serde_json::Value>,
 }
 
 impl Report {

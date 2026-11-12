@@ -85,6 +85,19 @@ pub(crate) fn execute(check: &dyn Check, root: &Path) -> CheckResult {
             log.push_str(&format!("\n无法写入日志：{error}"));
         }
     }
+    if check.name() == "bench" {
+        for artifact in [
+            "bench-results.json",
+            "bench-1.log",
+            "bench-2.log",
+            "bench-3.log",
+        ] {
+            let path = format!("target/xtask/{artifact}");
+            if root.join(&path).is_file() {
+                artifacts.push(path);
+            }
+        }
+    }
     CheckResult {
         name: check.name().into(),
         status,

@@ -3,6 +3,7 @@
 // 工程工具允许对内部不变量使用 expect；库 crate 不继承此例外。
 #![allow(clippy::expect_used)]
 
+mod bench;
 mod check;
 mod deps;
 mod report;
@@ -48,7 +49,17 @@ enum Task {
         accept: Option<String>,
     },
     /// 环境检查通过后执行全部检查，最后汇总。
-    Verify,
+    Verify {
+        /// 普通验证之后追加性能基准。
+        #[arg(long)]
+        full: bool,
+    },
+    /// 运行基准并比较本机性能基线。
+    Bench {
+        /// 创建或更新仓库基线文件；仅在人确认后运行。
+        #[arg(long)]
+        record: bool,
+    },
     /// 检查工具链和外部工具，不自动安装。
     Doctor,
 }
@@ -84,13 +95,20 @@ fn doctor(root: &Path, report: &mut Report) {
 }
 
 fn run(task: Task, root: &Path, report: &mut Report) {
+    if let Task::Bench { record } = task {
+        report
+            .checks
+            .push(execute(&bench::BenchCheck { record }, root));
+        return;
+    }
+    let full = matches!(task, Task::Verify { full: true });
     if let Task::Snapshot { accept, .. } = task {
         report
             .checks
             .push(execute(&snapshot::SnapshotCheck { accept }, root));
         return;
     }
-    if matches!(task, Task::Doctor | Task::Verify) {
+    if matches!(task, Task::Doctor | Task::Verify { .. }) {
         doctor(root, report);
         if matches!(task, Task::Doctor) || report.exit_code() != 0 {
             return;
@@ -117,19 +135,24 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         )
     };
     let test = || cargo_check("test", vec!["test", "--workspace"]);
-    let include_deps = matches!(task, Task::Deps | Task::Verify);
+    let include_deps = matches!(task, Task::Deps | Task::Verify { .. });
     let checks = match task {
         Task::Fmt { check } => vec![fmt(check)],
         Task::Lint => vec![lint()],
         Task::Test => vec![test()],
-        Task::Verify => vec![fmt(true), lint(), test()],
-        Task::Doctor | Task::Deps | Task::Snapshot { .. } => Vec::new(),
+        Task::Verify { .. } => vec![fmt(true), lint(), test()],
+        Task::Doctor | Task::Deps | Task::Snapshot { .. } | Task::Bench { .. } => Vec::new(),
     };
     for check in checks {
         report.checks.push(execute(&check, root));
     }
     if include_deps {
         report.checks.push(execute(&deps::DepsCheck, root));
+    }
+    if full {
+        report
+            .checks
+            .push(execute(&bench::BenchCheck { record: false }, root));
     }
 }
 
@@ -160,6 +183,11 @@ fn main() -> ExitCode {
             }
         }
     }
+    if report.checks.iter().any(|item| item.name == "bench") {
+        report.performance = std::fs::read(root.join("target/xtask/bench-results.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    }
     let serialized = serde_json::to_string_pretty(&report).expect("报告只包含可序列化值");
     if let Err(error) = std::fs::write(root.join("target/xtask/report.json"), &serialized) {
         report.checks.push(CheckResult::error(
@@ -178,9 +206,10 @@ fn main() -> ExitCode {
                 "{}: {:?}（{} 毫秒）",
                 item.name, item.status, item.duration_ms
             );
-            if item.name == "snapshot"
+            if (item.name == "snapshot" || item.name == "bench")
                 && item.status == report::Status::Pass
-                && let Ok(log) = std::fs::read_to_string(root.join("target/xtask/snapshot.log"))
+                && let Ok(log) =
+                    std::fs::read_to_string(root.join(format!("target/xtask/{}.log", item.name)))
             {
                 print!("{log}");
             }
