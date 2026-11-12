@@ -4,6 +4,7 @@
 #![allow(clippy::expect_used)]
 
 mod check;
+mod deps;
 mod report;
 
 use std::{path::Path, process::ExitCode};
@@ -34,6 +35,8 @@ enum Task {
     Lint,
     /// 执行 workspace 测试。
     Test,
+    /// 检查依赖方向、许可证、安全公告和来源。
+    Deps,
     /// 环境检查通过后执行全部检查，最后汇总。
     Verify,
     /// 检查工具链和外部工具，不自动安装。
@@ -98,15 +101,19 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         )
     };
     let test = || cargo_check("test", vec!["test", "--workspace"]);
+    let include_deps = matches!(task, Task::Deps | Task::Verify);
     let checks = match task {
         Task::Fmt { check } => vec![fmt(check)],
         Task::Lint => vec![lint()],
         Task::Test => vec![test()],
         Task::Verify => vec![fmt(true), lint(), test()],
-        Task::Doctor => Vec::new(),
+        Task::Doctor | Task::Deps => Vec::new(),
     };
     for check in checks {
         report.checks.push(execute(&check, root));
+    }
+    if include_deps {
+        report.checks.push(execute(&deps::DepsCheck, root));
     }
 }
 
