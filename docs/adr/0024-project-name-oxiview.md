@@ -22,5 +22,5 @@ status: accepted
 
 ## Consequences
 
-- 建议尽早在 crates.io 占位发布 `oxiview` 的 `0.0.0` 空包，并注册 GitHub 组织 `oxiview` 与域名 `oxiview.dev`。这些都是对外操作，需要单独确认后再执行。
-- 仓库目录名 `rust-ui` 不属于代码命名，可以保留，也可以在合适时改名为 `oxiview`。
+- 2026-11-12 已在 crates.io 发布 `oxiview` 0.0.0 占位包（所有者 dangaogit，许可证 MIT OR Apache-2.0）。GitHub 组织 `oxiview` 与域名 `oxiview.dev` 由所有者自行注册。子 crate 名不单独占位，首次发布时再注册。
+- 仓库目录已从 `rust-ui` 改名为 `oxiview`。
