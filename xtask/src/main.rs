@@ -6,6 +6,7 @@
 mod bench;
 mod check;
 mod deps;
+mod docs;
 mod report;
 mod snapshot;
 
@@ -148,6 +149,9 @@ fn run(task: Task, root: &Path, report: &mut Report) {
     }
     if include_deps {
         report.checks.push(execute(&deps::DepsCheck, root));
+    }
+    if matches!(task, Task::Verify { .. }) {
+        report.checks.push(execute(&docs::DocsCheck, root));
     }
     if full {
         report
