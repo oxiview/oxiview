@@ -6,6 +6,7 @@
 mod check;
 mod deps;
 mod report;
+mod snapshot;
 
 use std::{path::Path, process::ExitCode};
 
@@ -37,6 +38,15 @@ enum Task {
     Test,
     /// 检查依赖方向、许可证、安全公告和来源。
     Deps,
+    /// 审阅或显式接受像素快照（会修改基准文件）。
+    Snapshot {
+        /// 列出待处理快照。
+        #[arg(long, required_unless_present = "accept", conflicts_with = "accept")]
+        review: bool,
+        /// 接受指定名称、crate/name 或 all。
+        #[arg(long)]
+        accept: Option<String>,
+    },
     /// 环境检查通过后执行全部检查，最后汇总。
     Verify,
     /// 检查工具链和外部工具，不自动安装。
@@ -74,6 +84,12 @@ fn doctor(root: &Path, report: &mut Report) {
 }
 
 fn run(task: Task, root: &Path, report: &mut Report) {
+    if let Task::Snapshot { accept, .. } = task {
+        report
+            .checks
+            .push(execute(&snapshot::SnapshotCheck { accept }, root));
+        return;
+    }
     if matches!(task, Task::Doctor | Task::Verify) {
         doctor(root, report);
         if matches!(task, Task::Doctor) || report.exit_code() != 0 {
@@ -107,7 +123,7 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         Task::Lint => vec![lint()],
         Task::Test => vec![test()],
         Task::Verify => vec![fmt(true), lint(), test()],
-        Task::Doctor | Task::Deps => Vec::new(),
+        Task::Doctor | Task::Deps | Task::Snapshot { .. } => Vec::new(),
     };
     for check in checks {
         report.checks.push(execute(&check, root));
@@ -162,6 +178,12 @@ fn main() -> ExitCode {
                 "{}: {:?}（{} 毫秒）",
                 item.name, item.status, item.duration_ms
             );
+            if item.name == "snapshot"
+                && item.status == report::Status::Pass
+                && let Ok(log) = std::fs::read_to_string(root.join("target/xtask/snapshot.log"))
+            {
+                print!("{log}");
+            }
             if let Some(summary) = &item.failure_summary {
                 eprintln!("{summary}");
             }

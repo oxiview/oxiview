@@ -73,6 +73,9 @@ fn supported_rust(output: &str) -> bool {
 pub(crate) fn execute(check: &dyn Check, root: &Path) -> CheckResult {
     let start = Instant::now();
     let (mut status, mut log) = check.run(root);
+    if check.name() == "test" && status != Status::Pass && crate::snapshot::has_pending(root) {
+        log.push_str("\n有待处理像素快照，请运行 cargo xtask snapshot --review。\n");
+    }
     let path = format!("target/xtask/{}.log", check.name());
     let mut artifacts = Vec::new();
     match std::fs::write(root.join(&path), &log) {
