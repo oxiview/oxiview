@@ -1,63 +1,65 @@
-# oxiview 工程公约
+# oxiview engineering conventions
 
-oxiview 是只面向 macOS / Windows / Linux 原生桌面平台的 Rust 自绘 UI 框架；当前处于 M-1 工程规范里程碑，M-1 完成后进入 M0。
+oxiview is a self-drawn Rust UI framework exclusively for native macOS / Windows / Linux desktop platforms. It is at the M-1 engineering baseline milestone; M0 follows M-1.
 
-## 硬规则
+## Hard rules
 
-- 只做原生平台，不使用 WebView、HTML/CSS、WASM 或浏览器目标；只实现本次指定的里程碑步骤。
-- 使用 Rust stable 1.97、edition 2024，不在框架构建中使用 nightly 或不稳定特性。
-- 提交前必须通过 `cargo xtask verify`；验证只在本地执行（[ADR-0019](docs/adr/0019-local-only-verification.md)）。
-- 库代码禁止 unwrap/expect/panic；测试、xtask、示例及编译期断言的有限例外见[错误公约](docs/conventions/unsafe-panic-errors.md)。
-- unsafe 仅限平台与渲染适配器；每个 unsafe 块写 `// SAFETY:`，unsafe 函数写 `# Safety`，详见[安全边界](docs/conventions/unsafe-panic-errors.md)。
-- 依赖方向以 [xtask/layers.toml](xtask/layers.toml) 为准；第三方类型不得出现在公开 API，须经防腐层转换。
-- 内部 crate 使用 `oxiview-*`、版本 `0.0.0`、`publish = false`；既有工程工具 `xtask` 与对外入口 `oxiview` 按 ADR 命名。
-- 依赖版本统一在根 `[workspace.dependencies]`，crate 用 `xxx.workspace = true` 继承；新增依赖遵循[依赖公约](docs/conventions/dependencies.md)。
-- 快照 `--accept` 与性能基线 `--record` 必须先经人确认；不得用更新基线掩盖失败。
-- 技能正本只在 `.agents/skills/` 创建，不得在 `.claude/skills/` 下直接新增（[ADR-0023](docs/adr/0023-agent-conventions-dual-harness.md)）。
-- 注释和文档用中文，代码标识符用英文；术语使用 [GLOSSARY.md](GLOSSARY.md) 的规范用词。
-- 决策同时满足“难以逆转、缺少上下文会令人意外、确有权衡”时必须写 ADR，并同步索引，见[Git 公约](docs/conventions/git-workflow.md)。
-- 只维护本文件正本；`CLAUDE.md` 必须是解析到本文件的相对路径软链。
-- 未经所有者明确要求不得推送远端。
+- Target native platforms only; do not use WebView, HTML/CSS, WASM, or browser targets. Implement only the specified milestone step.
+- Use Rust stable 1.97 and edition 2024; framework builds must not use nightly or unstable features.
+- `cargo xtask verify` must pass before committing. Run verification locally only ([ADR-0019](docs/adr/0019-local-only-verification.md)).
+- Library code must not use unwrap/expect/panic. See the [error conventions](docs/conventions/unsafe-panic-errors.md) for limited exceptions in tests, xtask, examples, and compile-time assertions.
+- Restrict unsafe to platform and rendering adapters. Every unsafe block needs `// SAFETY:` and every unsafe function needs `# Safety`; see [safety boundaries](docs/conventions/unsafe-panic-errors.md).
+- Follow [xtask/layers.toml](xtask/layers.toml) for dependency direction. Convert third-party types through an anti-corruption layer instead of exposing them in public APIs.
+- Internal crates use `oxiview-*`, version `0.0.0`, and `publish = false`; the existing `xtask` engineering tool and public `oxiview` facade follow the ADR naming decisions.
+- Define dependency versions in the root `[workspace.dependencies]`; crates inherit them with `xxx.workspace = true`. Follow the [dependency conventions](docs/conventions/dependencies.md) when adding dependencies.
+- Snapshot `--accept` and performance baseline `--record` require prior human confirmation. Never update baselines to hide failures.
+- Create canonical skills only in `.agents/skills/`, never directly in `.claude/skills/` ([ADR-0023](docs/adr/0023-agent-conventions-dual-harness.md)).
+- The default language is **English (`en`)** for project documentation, comments, descriptions, diagnostics, and commit messages. Use English identifiers and the canonical terms in [GLOSSARY.md](GLOSSARY.md).
+- Create or update translations into another language **only when explicitly requested**. Keep English documents at their unsuffixed paths; name translations with an uppercase `_LANG` suffix before the extension, for example `README.md` (English) and `README_ZH.md` (Chinese). Add language navigation at the top of each README with links to available translations.
+- Write an ADR and update its index when a decision is hard to reverse, surprising without context, and involves real trade-offs; see the [Git conventions](docs/conventions/git-workflow.md).
+- Maintain this file as the sole source of truth; `CLAUDE.md` must be a relative symlink resolving to it.
+- Do not push to a remote unless the owner explicitly requests it.
+- Do not append attribution, co-author lines, sign-offs, AI/tool/model credits, or other unsolicited commit footers or trailers. Include them only when the user explicitly requests them for that commit, using the identity they supply or confirm.
 
-## 命令速查
+## Command reference
 
-以下命令均以 `cargo xtask` 开头；不自动安装工具。全局 `--json` 只向 stdout 输出 JSON 报告。
+Prefix every command below with `cargo xtask`. Tools are never installed automatically. The global `--json` option restricts stdout to the JSON report.
 
-| 子命令 | 用途 |
+| Subcommand | Purpose |
 | --- | --- |
-| `fmt` / `fmt --check` | 格式化 workspace / 只检查格式 |
-| `lint` | workspace 全部 target 的 Clippy，`-D warnings` |
-| `test` | workspace 测试，包含像素快照自测 |
-| `deps` | 依赖方向与 cargo-deny 审查；先刷新安全公告数据库 |
-| `snapshot --review` | 列出待处理快照，人工查看 actual / diff |
-| `snapshot --accept <name\|crate/name\|all>` | 经人确认后更新快照基准 |
-| `bench` / `bench --record` | 比较本机性能基线 / 经人确认后记录基线 |
-| `new-crate <name> --context <context>` | 创建已登记 crate，继承 workspace 配置；拒绝覆盖 |
-| `install-hooks` / `install-hooks --uninstall` | 可选安装推送前 verify hook；`--force` 备份后覆盖，卸载仅删除内容匹配的 hook |
-| `doctor` | 检查 Rust 1.97 stable 与 cargo-deny；缺失时提示安装命令 |
-| `verify` / `verify --full` | doctor 通过后执行 fmt、lint、test、deps、docs；full 追加 bench |
-| `help [子命令]` / `--help` | 查看帮助 |
+| `fmt` / `fmt --check` | Format the workspace / check formatting only |
+| `lint` | Run Clippy on all workspace targets with `-D warnings` |
+| `test` | Run workspace tests, including pixel snapshot self-tests |
+| `deps` | Check dependency direction and run cargo-deny after refreshing the advisory database |
+| `snapshot --review` | List pending snapshots for human review of actual / diff images |
+| `snapshot --accept <name\|crate/name\|all>` | Update snapshot baselines after human confirmation |
+| `bench` / `bench --record` | Compare this machine's performance baseline / record it after human confirmation |
+| `new-crate <name> --context <context>` | Create a registered crate with inherited workspace settings; refuse overwrites |
+| `install-hooks` / `install-hooks --uninstall` | Optionally install a pre-push verify hook; `--force` backs up before overwriting; uninstall removes only matching hooks |
+| `doctor` | Check Rust 1.97 stable and cargo-deny; suggest installation commands for missing tools |
+| `verify` / `verify --full` | Run fmt, lint, test, deps, and docs after doctor passes; full adds bench |
+| `help [subcommand]` / `--help` | Show help |
 
-退出码：`0` 全部通过；`1` 检查失败；`2` 环境缺失、参数或 xtask 自身错误（优先于 1）。doctor 失败时 verify 提前返回，其他检查失败仍继续汇总。
-每次调用覆盖 `target/xtask/report.json`，各项含名称、状态、耗时、失败摘要与产物路径；日志位于 `target/xtask/<检查名>.log`。
-`docs` 是 verify 内部检查项，无独立子命令：检查本文件、docs 下 Markdown 及技能正文的内联相对链接目标，检查 CLAUDE.md 和 .claude/skills 相对软链及技能 frontmatter，不验证锚点内容。
-技能 frontmatter 采用单行无引号字符串，必须且只能包含 name 与 description；name 与目录名一致。
+Exit codes: `0` for success; `1` for failed checks; `2` for missing environment requirements, invalid arguments, or xtask errors (takes precedence over 1). verify returns early if doctor fails; other failures are aggregated.
+Each invocation overwrites `target/xtask/report.json`, recording each check's name, status, duration, failure summary, and artifact paths. Logs are in `target/xtask/<check-name>.log`.
+`docs` is an internal verify check with no standalone subcommand. It checks inline relative link targets in this file, Markdown under docs, and skill bodies; it also checks the CLAUDE.md and .claude/skills relative symlinks and skill frontmatter. It does not validate anchors.
+Skill frontmatter uses single-line unquoted strings and must contain exactly name and description; name must match the directory name.
 
-## 文档索引
+## Documentation index
 
-- [ADR 索引](docs/adr/README.md)、[路线图](docs/roadmap.md)、[计划目录](docs/plans/)、[M-1 计划](docs/plans/m-1-engineering-baseline.md)
-- [架构与上下文映射](docs/architecture.md)、[术语表](GLOSSARY.md)
-- [unsafe、panic 与错误](docs/conventions/unsafe-panic-errors.md)、[API 稳定性](docs/conventions/api-stability.md)
-- [依赖管理](docs/conventions/dependencies.md)、[Git 工作流](docs/conventions/git-workflow.md)
-- [像素快照](docs/conventions/testing-snapshots.md)、[基准与性能基线](docs/conventions/testing-performance.md)
+- [ADR index](docs/adr/README.md), [roadmap](docs/roadmap.md), [plans](docs/plans/), [M-1 plan](docs/plans/m-1-engineering-baseline.md)
+- [Architecture and context mapping](docs/architecture.md), [glossary](GLOSSARY.md)
+- [Unsafe, panic, and errors](docs/conventions/unsafe-panic-errors.md), [API stability](docs/conventions/api-stability.md)
+- [Dependency management](docs/conventions/dependencies.md), [Git workflow](docs/conventions/git-workflow.md)
+- [Pixel snapshots](docs/conventions/testing-snapshots.md), [Benchmarks and performance baselines](docs/conventions/testing-performance.md)
 
-## 技能索引
+## Skill index
 
-技能正本位于 `.agents/skills/`，Claude Code 通过 `.claude/skills` 相对软链读取。
+Canonical skills live in `.agents/skills/`; Claude Code reads them through the `.claude/skills` relative symlink.
 
-| 名称 | 用途 |
+| Name | Purpose |
 | --- | --- |
-| [adr-glossary](.agents/skills/adr-glossary/SKILL.md) | 维护 ADR 判断、编号、索引与规范术语。 |
-| [scaffold](.agents/skills/scaffold/SKILL.md) | 按 workspace 与依赖规则创建 crate，提供控件与能力检查清单。 |
-| [review-checklist](.agents/skills/review-checklist/SKILL.md) | 审查依赖、安全边界、API、测试和可观测性。 |
-| [verify](.agents/skills/verify/SKILL.md) | 选择验证命令、解读报告并遵守基线审批规则。 |
+| [adr-glossary](.agents/skills/adr-glossary/SKILL.md) | Maintain ADR criteria, numbering, the index, and canonical terminology. |
+| [scaffold](.agents/skills/scaffold/SKILL.md) | Create crates under workspace and dependency rules; provide widget and capability checklists. |
+| [review-checklist](.agents/skills/review-checklist/SKILL.md) | Review dependencies, safety boundaries, APIs, tests, and observability. |
+| [verify](.agents/skills/verify/SKILL.md) | Select verification commands, interpret reports, and follow baseline approval rules. |

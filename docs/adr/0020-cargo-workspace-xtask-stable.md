@@ -2,13 +2,13 @@
 status: accepted
 ---
 
-# 构建：纯 Cargo workspace + xtask，固定 stable 工具链，edition 2024
+# Build: Cargo workspace and xtask, pinned stable toolchain, edition 2024
 
-构建系统只用 Cargo，不引入 Bazel、Buck2、just、make 等额外工具。根 `Cargo.toml` 是一个虚拟 manifest，只声明 workspace，并通过 `[workspace.package]`、`[workspace.dependencies]`、`[workspace.lints]` 统一 edition、版本、依赖版本和 lint，各 crate 继承这些配置。任务自动化写成 Rust 的 `xtask` crate（ADR-0019）。
+Use Cargo alone for the build system, without Bazel, Buck2, just, make, or other tools. Root `Cargo.toml` is a virtual manifest declaring the workspace, with `[workspace.package]`, `[workspace.dependencies]`, and `[workspace.lints]` centralizing edition, versions, dependency versions, and lints for crates to inherit. Implement task automation in the Rust `xtask` crate (ADR-0019).
 
-`rust-toolchain.toml` 固定一个具体的 stable 版本（初始为 1.97），edition 2024，并声明 MSRV 与之相同。nightly 只用于工具类任务（miri、cargo-fuzz），不进入构建产物，也不使用任何不稳定特性。
+Pin a specific stable version in `rust-toolchain.toml` (initially 1.97), use edition 2024, and set MSRV to that same version. Nightly is limited to tooling tasks such as miri and cargo-fuzz; it does not enter build artifacts, which use no unstable features.
 
 ## Considered Options
 
-- **Cargo + just**：任务写法简洁，但多一个外部依赖，复杂逻辑仍要写脚本。
-- **Bazel / Buck2**：可复现性和缓存最好，但与 rust-analyzer 和 Cargo 生态的配合成本高。
+- **Cargo + just**: concise task definitions, but adds an external dependency and still needs scripts for complex logic.
+- **Bazel / Buck2**: strongest reproducibility and caching, but expensive integration with rust-analyzer and the Cargo ecosystem.

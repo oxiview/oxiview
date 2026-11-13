@@ -1,4 +1,4 @@
-//! 可选的本地 pre-push hook 安装与卸载。
+//! Optional local pre-push hook installation and removal.
 
 use std::{
     fs::{self, OpenOptions},
@@ -9,7 +9,7 @@ use std::{
 
 use crate::{check::Check, report::Status};
 
-const SCRIPT: &str = "#!/bin/sh\n# 由 oxiview cargo xtask install-hooks 安装。\nset -eu\nroot=$(git rev-parse --show-toplevel)\ncd \"$root\"\nexec cargo xtask verify\n";
+const SCRIPT: &str = "#!/bin/sh\n# Installed by oxiview cargo xtask install-hooks.\nset -eu\nroot=$(git rev-parse --show-toplevel)\ncd \"$root\"\nexec cargo xtask verify\n";
 
 pub(crate) struct InstallHooks {
     pub force: bool,
@@ -24,7 +24,7 @@ impl Check for InstallHooks {
     fn run(&self, root: &Path) -> (Status, String) {
         match self.apply(root) {
             Ok(message) => (Status::Pass, format!("{message}\n")),
-            Err(error) => (Status::Error, format!("hook 操作失败：{error}")),
+            Err(error) => (Status::Error, format!("Hook operation failed: {error}")),
         }
     }
 }
@@ -36,16 +36,16 @@ fn hook_path(root: &Path) -> io::Result<PathBuf> {
         .output()?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
-            "无法定位 hooks：{}",
+            "Cannot locate hooks: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
     }
     let path = String::from_utf8(output.stdout).map_err(io::Error::other)?;
     let path = path.trim_end_matches(['\r', '\n']);
     if path.is_empty() {
-        return Err(io::Error::other("Git 返回空 hooks 路径"));
+        return Err(io::Error::other("Git returned an empty hooks path"));
     }
-    // join 保留绝对路径；相对 core.hooksPath 按 Git 运行目录解析。
+    // join preserves absolute paths; resolve relative core.hooksPath from Git's working directory.
     Ok(root.join(path).join("pre-push"))
 }
 
@@ -57,7 +57,7 @@ fn make_executable(path: &Path) -> io::Result<()> {
         permissions.set_mode(permissions.mode() | 0o111);
         fs::set_permissions(path, permissions)?;
     }
-    // Windows 没有 POSIX 执行位，Git for Windows 通过 shebang 执行 hook。
+    // Windows has no POSIX executable bit; Git for Windows runs hooks through the shebang.
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
@@ -68,39 +68,48 @@ impl InstallHooks {
         let hook = hook_path(root)?;
         let existing = match fs::symlink_metadata(&hook) {
             Ok(metadata) if metadata.file_type().is_file() => Some(fs::read(&hook)?),
-            Ok(_) => return Err(io::Error::other("pre-push 不是普通文件，拒绝修改")),
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "pre-push is not a regular file; refusing to modify it",
+                ));
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
         };
         if self.uninstall {
             return match existing {
-                None => Ok("pre-push 不存在，无需卸载。".into()),
+                None => Ok("pre-push does not exist; nothing to uninstall.".into()),
                 Some(bytes) if bytes == SCRIPT.as_bytes() => {
                     fs::remove_file(&hook)?;
-                    Ok(format!("已卸载 {}；备份保留，需自行恢复。", hook.display()))
+                    Ok(format!(
+                        "Uninstalled {}; backups remain for manual restoration.",
+                        hook.display()
+                    ))
                 }
-                Some(_) => Err(io::Error::other("pre-push 内容不匹配，拒绝卸载")),
+                Some(_) => Err(io::Error::other(
+                    "pre-push content does not match; refusing to uninstall",
+                )),
             };
         }
         if let Some(bytes) = existing {
             if bytes == SCRIPT.as_bytes() {
                 make_executable(&hook)?;
-                return Ok(format!("{} 已安装。", hook.display()));
+                return Ok(format!("{} is already installed.", hook.display()));
             }
             if !self.force {
                 return Err(io::Error::other(
-                    "已有不同内容的 pre-push，拒绝覆盖；可用 --force 备份后覆盖",
+                    "A different pre-push already exists; use --force to back it up before replacing it",
                 ));
             }
             let backup = hook.with_file_name("pre-push.backup");
-            // 排他创建，保留前一次备份；写入和权限复制完成后才覆盖 hook。
+            // Create exclusively to preserve previous backups; replace the hook only after writing and copying permissions.
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&backup)
                 .map_err(|error| {
                     io::Error::other(format!(
-                        "无法创建备份 {}（已有备份时请先处理）：{error}",
+                        "Cannot create backup {} (handle any existing backup first): {error}",
                         backup.display()
                     ))
                 })?;
@@ -108,7 +117,7 @@ impl InstallHooks {
             file.set_permissions(fs::metadata(&hook)?.permissions())?;
             fs::write(&hook, SCRIPT)?;
         } else {
-            fs::create_dir_all(hook.parent().expect("hook 有父目录"))?;
+            fs::create_dir_all(hook.parent().expect("hook has a parent directory"))?;
             OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -117,7 +126,7 @@ impl InstallHooks {
         }
         make_executable(&hook)?;
         Ok(format!(
-            "已安装 {}，推送前执行 cargo xtask verify。",
+            "Installed {}; cargo xtask verify will run before pushes.",
             hook.display()
         ))
     }

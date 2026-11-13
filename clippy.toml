@@ -1,4 +1,4 @@
-# 测试代码允许使用 expect、unwrap 和 panic；库代码仍继承严格限制。
+# Tests may use expect, unwrap, and panic; library code retains strict restrictions.
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
 allow-panic-in-tests = true

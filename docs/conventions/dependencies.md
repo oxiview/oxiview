@@ -1,32 +1,32 @@
-# 依赖管理
+# Dependency management
 
-## 新增与升级审查
+## Adding and upgrading dependencies
 
-新增依赖前记录以下判断，升级导致来源、许可证或依赖树变化时重新检查：
+Record the following assessments before adding a dependency. Recheck when an upgrade changes sources, licenses, or the dependency tree:
 
-- 许可证可选择的分支在根 [deny.toml](../../deny.toml) 允许列表内，且兼容项目 MIT / Apache-2.0 分发；不在本文件复制允许列表。
-- 维护活跃：查看近期发布、提交、问题响应与安全公告，不能仅依据下载量。
-- 是否纯 Rust；非 Rust 部分的构建工具、系统库、目标平台支持和分发成本是什么。纯 Rust 优先，不把系统绑定误判为违规。
-- 新增传递依赖的数量、重复版本、编译时间与来源规模是否值得。
-- workspace 或标准库是否已有同类能力，能否复用并避免重复选型。
-- 是否可在所在上下文内部封装，避免第三方类型出现在公开 API。
+- A selectable license branch is allowed by the root [deny.toml](../../deny.toml) and compatible with MIT / Apache-2.0 distribution. Do not duplicate the allowlist here.
+- Active maintenance: inspect recent releases, commits, issue responses, and security advisories rather than download counts alone.
+- Whether it is pure Rust; for non-Rust parts, assess build tools, system libraries, target support, and distribution cost. Prefer pure Rust without treating system bindings as violations.
+- Whether the added transitive dependencies, duplicate versions, compilation time, and source footprint are worthwhile.
+- Whether the workspace or standard library already provides equivalent functionality that can be reused.
+- Whether it can be encapsulated within its owning context without exposing third-party types in public APIs.
 
-版本只写在根 [Cargo.toml](../../Cargo.toml) 的 `[workspace.dependencies]`，各 crate 的 dependencies / dev-dependencies / build-dependencies 按用途使用 `xxx.workspace = true` 继承，不自行重复版本。基础库遵循 [ADR-0022](../adr/0022-foundation-libraries.md)。
+Define versions only in `[workspace.dependencies]` in the root [Cargo.toml](../../Cargo.toml). Crates inherit them with `xxx.workspace = true` in dependencies / dev-dependencies / build-dependencies as appropriate; do not repeat versions. Foundation libraries follow [ADR-0022](../adr/0022-foundation-libraries.md).
 
-有归属限制的外部依赖在 [layers.toml](../../xtask/layers.toml) 的 `[[external]]` 登记 `packages` 与 `allow`；包名支持精确匹配和末尾 `*`。检查覆盖 workspace 声明的 normal / build / dev、可选及平台条件依赖的直接使用方，按真实包名识别重命名，不检查第三方库自身的传递使用方。类型级防腐层仍需代码审查，详见[架构](../architecture.md)。
+Register restricted external dependencies with `packages` and `allow` in [layers.toml](../../xtask/layers.toml) `[[external]]` entries. Package names support exact matching and trailing `*`. Checks cover direct consumers declared by the workspace across normal / build / dev, optional, and target-specific dependencies, resolving renames by real package name. They do not restrict transitive consumers inside third-party libraries. Type-level anti-corruption layers still require code review; see [architecture](../architecture.md).
 
-运行 `cargo xtask deps`，同时审查方向、许可证、安全公告、重复版本和来源；重复版本当前是警告，不等于全部禁止。提交前再通过 `cargo xtask verify`。刷新安全公告失败是环境错误，不可用旧结果冒充成功。
+Run `cargo xtask deps` to review direction, licenses, advisories, duplicate versions, and sources. Duplicate versions currently produce warnings rather than a blanket ban. Pass `cargo xtask verify` again before committing. Advisory refresh failure is an environment error; do not present old results as success.
 
-## 上游补丁队列
+## Upstream patch queue
 
-补丁集中在根 Cargo.toml 的 `[patch.crates-io]`，优先推动上游修复；使用可追溯的固定提交或受版本管理的本地补丁，不依赖个人机器上的目录。新增补丁必须在下表记录 crate、原因、上游 issue/PR 链接和明确移除条件。升级时检查上游是否已合入并发布，满足条件即移除 patch、登记项并重新验证。
+Keep patches in the root Cargo.toml `[patch.crates-io]` and prioritize upstream fixes. Use traceable pinned commits or version-controlled local patches, not machine-specific directories. Record each new patch below with its crate, reason, upstream issue/PR link, and explicit removal condition. On upgrades, check whether upstream has merged and released the fix. Once the condition is met, remove the patch and entry, then verify again.
 
-当前 deny 策略拒绝未允许的 Git 来源；使用 Git 补丁前必须审查并显式调整来源允许规则，不得绕过 cargo-deny。本步无补丁，不修改来源策略。
+The current deny policy rejects unapproved Git sources. Review and explicitly update source allow rules before using a Git patch; never bypass cargo-deny. This step adds no patches and changes no source policy.
 
-| crate | 原因 | 上游 issue / PR | 移除条件 |
+| Crate | Reason | Upstream issue / PR | Removal condition |
 | --- | --- | --- | --- |
-| 无 | 当前没有上游补丁 | 不适用 | 不适用 |
+| None | No upstream patches currently | Not applicable | Not applicable |
 
-## 何时写 ADR
+## When to write an ADR
 
-会锁定公开接口、数据格式、运行时、平台绑定或大面积实现的高成本选型，按 [Git 公约的三条标准](git-workflow.md) 判断；同时满足难以逆转、缺少上下文会令人意外、确有权衡时必须写 ADR。普通局部工具依赖不因“新增”二字自动要求 ADR；审查记录仍须完整。
+For costly choices that lock in public interfaces, data formats, runtimes, platform bindings, or extensive implementation, apply the [three Git convention criteria](git-workflow.md). An ADR is required when the decision is hard to reverse, surprising without context, and involves real trade-offs. A routine local tooling dependency does not need an ADR merely because it is new; a complete review record is still required.

@@ -1,30 +1,30 @@
 ---
 name: adr-glossary
-description: 判断是否需要 ADR、创建或替代 ADR、维护术语表，或发现用户术语与项目定义冲突时使用。
+description: Use when deciding whether an ADR is needed, creating or superseding ADRs, maintaining the glossary, or resolving conflicts between user terminology and project definitions.
 ---
 
-# ADR 与术语
+# ADRs and terminology
 
-## 决策记录
+## Decision records
 
-按[Git 公约](../../../docs/conventions/git-workflow.md)判断：难以逆转、缺少上下文会令人意外、确有权衡。三条均满足才写 ADR，否则在代码或变更说明中解释。
+Apply the [Git conventions](../../../docs/conventions/git-workflow.md): hard to reverse, surprising without context, and involving real trade-offs. Write an ADR only when all three criteria hold; otherwise explain in code or the change description.
 
-1. 阅读 [ADR 索引](../../../docs/adr/README.md)及相关决策。
-2. 扫描 `docs/adr/` 全部编号文件，取最大编号加一、补足四位，创建 `NNNN-英文短名.md`。不要按文件数或仅凭索引猜编号，协作时先协调编号。
-3. 沿用现有 `status` frontmatter，正文简短写清决策、背景与取舍；按需添加 Status / Considered Options / Consequences。
-4. 替代旧 ADR 时保留历史理由，将旧记录设为 `status: superseded`，在 Status 段链接新 ADR；新记录链接旧 ADR 并说明替代范围，决定获接受后用 `status: accepted`。
-5. 同次更新 `docs/adr/README.md` 的编号、标题、链接与维度，运行 `cargo xtask verify` 检查链接。
+1. Read the [ADR index](../../../docs/adr/README.md) and related decisions.
+2. Scan all numbered files in `docs/adr/`, increment the highest number, pad to four digits, and create `NNNN-english-short-name.md`. Do not infer the number from the file count or index alone; coordinate numbering when collaborating.
+3. Follow the existing `status` frontmatter. Briefly state the decision, context, and trade-offs; add Status / Considered Options / Consequences as needed.
+4. When superseding an ADR, preserve its historical rationale, set it to `status: superseded`, and link the new ADR in a Status section. The new record links back and states the scope of replacement; use `status: accepted` once accepted.
+5. Update the number, title, link, and dimension in `docs/adr/README.md` in the same change. Run `cargo xtask verify` to check links.
 
-## 术语表
+## Glossary
 
-先读 [GLOSSARY.md](../../../GLOSSARY.md)。用户使用冲突术语时立即指出规范词及含义差异，再继续任务，不静默沿用歧义。
+Read [GLOSSARY.md](../../../GLOSSARY.md) first. If the user uses a conflicting term, immediately identify the canonical term and difference in meaning, then continue; do not silently preserve ambiguity.
 
-新增条目沿用所属分组：
+Add entries under the appropriate group:
 
 ```markdown
-**中文术语（English term）**：
-只定义它是什么。
-_Avoid_: 避免用词、易混词
+**English term**:
+Define only what it is.
+_Avoid_: discouraged terms, easily confused terms
 ```
 
-定义不写实现细节、操作步骤或设计理由，这些进入架构、公约或 ADR。纯英文术语沿用既有格式，没有避免用词时可省略 `_Avoid_`。改名时同步相关文档与注释，保留历史 ADR 的决策理由。
+Keep implementation details, procedures, and design rationale in architecture documents, conventions, or ADRs. Omit `_Avoid_` when there are no discouraged terms. When renaming, update related documentation and comments while preserving historical ADR rationale.

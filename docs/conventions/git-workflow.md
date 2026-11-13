@@ -1,44 +1,44 @@
-# Git 工作流
+# Git workflow
 
-单人阶段直接在 main 上小步提交，每次提交可独立审查并保持验证通过；较大改动使用短期分支，完成后及时合回，避免长期分叉。仅实现当前获准的步骤，不顺手提前实现后续里程碑。
+During single-maintainer development, make small commits directly on main, each independently reviewable and passing verification. Use short-lived branches for larger changes and merge promptly to avoid long-lived divergence. Implement only the currently authorized step, without bringing later milestones forward.
 
-## 提交格式
+## Commit format
 
-使用 Conventional Commits：`type(scope): 描述`，scope 可省略，使用 crate 短名（去掉 `oxiview-`，如 `testing`、`render-cpu`；工程工具用 `xtask`）。type 为英文，描述可中文。
+Use Conventional Commits: `type(scope): description`. The optional scope is the crate's short name without `oxiview-`, such as `testing` or `render-cpu`; use `xtask` for engineering tooling. Write the type and description in English by default, following [AGENTS.md](../../AGENTS.md).
 
-| type | 用途 |
+| Type | Purpose |
 | --- | --- |
-| feat | 新能力 |
-| fix | 缺陷修复 |
-| docs | 文档 |
-| refactor | 不改变行为的结构调整 |
-| perf | 性能改进 |
-| test | 测试 |
-| build | 构建与依赖 |
-| chore | 工程维护 |
+| feat | New capability |
+| fix | Bug fix |
+| docs | Documentation |
+| refactor | Structural change without behavior changes |
+| perf | Performance improvement |
+| test | Tests |
+| build | Build and dependencies |
+| chore | Engineering maintenance |
 
-例如 `docs: 补齐工程公约`、`test(xtask): 覆盖文档链接失效场景`。提交前必须执行 `cargo xtask verify` 并通过；性能相关变更另按[基准公约](testing-performance.md)验证。审查 `target/xtask/report.json` 和变更内容，报告不入库。快照与基线变更必须经过人工确认，不能只看命令成功。
+Examples: `docs: complete engineering conventions`, `test(xtask): cover broken documentation links`. Run and pass `cargo xtask verify` before committing; additionally verify performance changes under the [benchmark conventions](testing-performance.md). Review `target/xtask/report.json` and the diff; do not commit reports. Snapshot and baseline changes require human confirmation, not just successful commands.
 
-## 可选的本地 hook
+## Optional local hook
 
-显式运行 `cargo xtask install-hooks` 安装 `pre-push` hook；检出仓库、构建和 verify 都不会自动安装。hook 使用 POSIX sh，在当前仓库根执行 `cargo xtask verify`，失败时以相同退出码阻止本次推送。
+Explicitly run `cargo xtask install-hooks` to install the `pre-push` hook. Checkout, build, and verify never install it automatically. The POSIX sh hook runs `cargo xtask verify` at the current repository root and blocks the push with the same exit code on failure.
 
-安装通过 `git rev-parse --git-path hooks` 定位目录，遵循 worktree 与 `core.hooksPath` 配置；共享该目录的检出也会受到影响。重复安装相同内容是幂等的，并在 Unix 上补齐执行权限。已有不同内容时拒绝覆盖；显式使用 `cargo xtask install-hooks --force` 会先备份为同目录的 `pre-push.backup`，已有备份时拒绝继续，需自行处理备份。非普通文件（包括软链）拒绝修改。
+Installation resolves the hooks directory with `git rev-parse --git-path hooks`, respecting worktrees and `core.hooksPath`; checkouts sharing that directory are also affected. Reinstalling identical content is idempotent and restores executable permissions on Unix. Different existing content is not overwritten unless `cargo xtask install-hooks --force` is explicit; it first backs up to `pre-push.backup` in the same directory. An existing backup blocks the operation until the user handles it. Non-regular files, including symlinks, are never modified.
 
-`cargo xtask install-hooks --uninstall` 仅删除与本命令生成内容完全匹配的 hook；内容被修改时拒绝删除，不存在时无需操作。备份保留，恢复原 hook 由使用者自行完成；`--force` 与 `--uninstall` 不能同时使用。本地 hook 是辅助约束，不能替代提交前验证与人工审查。
+`cargo xtask install-hooks --uninstall` removes only a hook whose content exactly matches this command's generated script. Modified content is rejected; a missing hook needs no action. Backups remain, and restoring the original hook is the user's responsibility. `--force` and `--uninstall` are mutually exclusive. Local hooks supplement, rather than replace, pre-commit verification and human review.
 
-## ADR 与术语
+## ADRs and terminology
 
-采用 domain-modeling 的三条判断标准，**同时满足**时必须写 ADR：
+Apply the three domain-modeling criteria. An ADR is required when **all three** hold:
 
-1. 难以逆转：日后改变决定有实质成本。
-2. 缺少上下文会令人意外：未来读者会问“为什么这样做”。
-3. 确有权衡：比较过真实可行的替代方案，并因明确原因作出选择。
+1. Hard to reverse: changing the decision later has meaningful cost.
+2. Surprising without context: a future reader would ask why it was done this way.
+3. Real trade-offs: viable alternatives were compared and a choice made for explicit reasons.
 
-不满足时在代码或变更说明中解释即可。ADR 使用 `docs/adr/NNNN-英文短名.md`，取现有最大编号加一并补足四位，状态和结构沿用现有记录；同次变更同步 [README 索引](../adr/README.md)。多人或多 agent 协作时先协调编号，避免碰撞；替代决策以新 ADR 说明关系，不静默重写历史理由。规范术语取自 [GLOSSARY.md](../../GLOSSARY.md)。
+Otherwise explain in code or the change description. Use `docs/adr/NNNN-english-short-name.md`, taking the highest existing number plus one and padding to four digits; follow existing status and structure. Update the [README index](../adr/README.md) in the same change. Coordinate numbering before multi-person or multi-agent work to avoid collisions. Superseding decisions use a new ADR explaining the relationship, without silently rewriting historical rationale. Use canonical terms from [GLOSSARY.md](../../GLOSSARY.md).
 
-## 协作与远端
+## Collaboration and remotes
 
-多 agent 共同贡献同一提交时，由协调者汇总验证并提交，在提交消息正文后空一行，按实际贡献添加 `Co-Authored-By: 名称 <邮箱>` trailer；每位共同作者一行，使用其已确认的署名，不虚构身份或邮箱。不把仅运行工具或旁观视为共同作者。
+When multiple agents contribute to one commit, the coordinator aggregates verification and commits. Do not automatically append attribution, co-author lines, sign-offs, AI/tool/model credits, or other unsolicited footers or trailers, including `Co-Authored-By:`, `Signed-off-by:`, and `Generated by` statements. Add them only when the user explicitly requests them for that commit, using the identity and attribution they supply or confirm. Tool use or collaboration alone does not authorize a trailer; never invent identities or email addresses.
 
-没有提交权限的 agent 提供变更和建议提交消息，由协调者执行提交。除非所有者明确要求，不推送到远端，不因分支已完成而自动推送。
+An agent without commit permission supplies changes and a suggested commit message; the coordinator commits. Do not push to a remote unless the owner explicitly requests it, even when a branch is complete.

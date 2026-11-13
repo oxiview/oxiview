@@ -1,4 +1,4 @@
-//! 数据驱动的依赖方向检查与 cargo-deny 审查。
+//! Data-driven dependency-direction checks and cargo-deny review.
 
 use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
@@ -46,7 +46,7 @@ struct Package {
 
 #[derive(Deserialize)]
 struct Dependency {
-    // Cargo 返回真实包名，避免 rename 绕过规则。
+    // Cargo returns real package names so renames cannot bypass rules.
     name: String,
     kind: Option<String>,
     target: Option<String>,
@@ -61,31 +61,32 @@ fn cargo(root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
 }
 
 fn metadata(root: &Path) -> Result<Metadata, String> {
-    // 无需解析传递依赖：检查所有直接声明，含未启用 feature 和其他目标平台。
+    // No transitive resolution is needed: check all direct declarations, including disabled features and other targets.
     let output = cargo(root, &["metadata", "--format-version", "1", "--no-deps"])
-        .map_err(|error| format!("无法运行 cargo metadata：{error}"))?;
+        .map_err(|error| format!("Cannot run cargo metadata: {error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "cargo metadata 失败：{}",
+            "cargo metadata failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    serde_json::from_slice(&output.stdout).map_err(|error| format!("metadata JSON 无效：{error}"))
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Invalid metadata JSON: {error}"))
 }
 
 pub(crate) fn read_rules(root: &Path) -> Result<Rules, String> {
     let source = fs::read_to_string(root.join("xtask/layers.toml"))
-        .map_err(|error| format!("无法读取 layers.toml：{error}"))?;
+        .map_err(|error| format!("Cannot read layers.toml: {error}"))?;
     let rules: Rules =
-        toml::from_str(&source).map_err(|error| format!("layers.toml 无效：{error}"))?;
+        toml::from_str(&source).map_err(|error| format!("Invalid layers.toml: {error}"))?;
     for (name, layer) in &rules.crates {
         if layer.context.is_empty() || layer.role.is_empty() {
-            return Err(format!("layers.toml：{name} 缺少 context 或 role"));
+            return Err(format!("layers.toml: {name} is missing context or role"));
         }
         for dependency in &layer.allow {
             if !rules.crates.contains_key(dependency) {
                 return Err(format!(
-                    "layers.toml：{name}.allow 引用了未登记的 {dependency}"
+                    "layers.toml: {name}.allow references unregistered {dependency}"
                 ));
             }
         }
@@ -112,21 +113,21 @@ fn violations(metadata: &Metadata, rules: &Rules) -> Vec<String> {
         let layer = rules.crates.get(&package.name);
         if layer.is_none() && !exempt {
             errors.push(format!(
-                "{}：违反强制登记规则，未在 layers.toml 登记",
+                "{}: violates mandatory registration; not registered in layers.toml",
                 package.name
             ));
         }
         for dependency in &package.dependencies {
             let kind = dependency.kind.as_deref().unwrap_or("normal");
             let edge = format!(
-                "{} -> {}（{kind}，目标 {}）",
+                "{} -> {} ({kind}, target {})",
                 package.name,
                 dependency.name,
-                dependency.target.as_deref().unwrap_or("全部")
+                dependency.target.as_deref().unwrap_or("all")
             );
-            // 禁止依赖工程工具的规则即使对豁免成员也生效。
+            // The ban on engineering-tool dependencies applies even to exempt members.
             if rules.forbidden.contains(&dependency.name) {
-                errors.push(format!("{edge}：违反 forbidden 规则"));
+                errors.push(format!("{edge}: violates the forbidden rule"));
                 continue;
             }
             if exempt {
@@ -134,7 +135,9 @@ fn violations(metadata: &Metadata, rules: &Rules) -> Vec<String> {
             }
             if rules.dev_only.contains(&dependency.name) {
                 if kind != "dev" {
-                    errors.push(format!("{edge}：违反 dev-only 规则，只允许 dev-dependency"));
+                    errors.push(format!(
+                        "{edge}: violates the dev-only rule; only dev-dependencies are allowed"
+                    ));
                 }
                 continue;
             }
@@ -142,7 +145,7 @@ fn violations(metadata: &Metadata, rules: &Rules) -> Vec<String> {
                 && !layer.is_some_and(|layer| layer.allow.contains(&dependency.name))
             {
                 errors.push(format!(
-                    "{edge}：违反 crates.{}.allow 依赖方向规则",
+                    "{edge}: violates the crates.{}.allow dependency-direction rule",
                     package.name
                 ));
             }
@@ -154,7 +157,7 @@ fn violations(metadata: &Metadata, rules: &Rules) -> Vec<String> {
                     && !rule.allow.contains(&package.name)
                 {
                     errors.push(format!(
-                        "{edge}：违反 external 规则 {:?}，仅允许 {:?}",
+                        "{edge}: violates external rule {:?}; only {:?} allowed",
                         rule.packages, rule.allow
                     ));
                 }
@@ -176,8 +179,8 @@ fn deny_status(success: bool, fetched: bool, code: Option<i32>) -> Status {
 }
 
 fn audit(root: &Path) -> (Status, String) {
-    // 先显式刷新数据库，将网络/缓存权限错误与发现安全公告区别开。
-    // 随后离线检查同一份数据库，避免二次下载失败被误判为违规。
+    // Explicitly refresh the database first to distinguish network/cache permission errors from advisory findings.
+    // Then check the same database offline so a second download failure is not mistaken for a violation.
     let mut log = String::new();
     for (args, fetched) in [
         (vec!["deny", "fetch", "db"], false),
@@ -189,7 +192,7 @@ fn audit(root: &Path) -> (Status, String) {
             Err(error) => {
                 return (
                     Status::Error,
-                    format!("{log}无法执行 cargo-deny：{error}；请运行 cargo xtask doctor。"),
+                    format!("{log}Cannot execute cargo-deny: {error}; run cargo xtask doctor."),
                 );
             }
         };
@@ -198,7 +201,7 @@ fn audit(root: &Path) -> (Status, String) {
         let status = deny_status(output.status.success(), fetched, output.status.code());
         if status != Status::Pass {
             if !fetched {
-                log.push_str("\n无法获取安全公告数据库：请检查网络、代理和数据库缓存权限后重试；未跳过安全审查。\n");
+                log.push_str("\nCannot fetch the advisory database: check networking, proxies, and cache permissions, then retry; security review was not skipped.\n");
             }
             return (status, log);
         }
@@ -217,11 +220,13 @@ impl Check for DepsCheck {
         let direction =
             read_rules(root).and_then(|rules| metadata(root).map(|data| violations(&data, &rules)));
         let (status, mut log) = match direction {
-            Ok(errors) if errors.is_empty() => (Status::Pass, "依赖方向检查通过。\n".into()),
+            Ok(errors) if errors.is_empty() => {
+                (Status::Pass, "Dependency-direction checks passed.\n".into())
+            }
             Ok(errors) => (Status::Fail, format!("{}\n", errors.join("\n"))),
             Err(error) => (Status::Error, format!("{error}\n")),
         };
-        // 方向违规也继续审查，保留全部诊断。
+        // Continue review after direction violations to retain all diagnostics.
         let (audit_status, audit_log) = audit(root);
         log.push_str(&audit_log);
         let combined = if [status, audit_status].contains(&Status::Error) {

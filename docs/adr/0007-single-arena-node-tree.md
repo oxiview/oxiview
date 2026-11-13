@@ -2,18 +2,18 @@
 status: accepted
 ---
 
-# 保留树：单层 arena 节点树，style / layout / paint 三级脏标记
+# Retained tree: a single arena node tree with style / layout / paint dirty flags
 
-框架只有**一层**保留的节点树：组件函数产出的结构直接就是节点，信号直接写节点属性。不再另设“视图树 → 渲染树”的中间层，少一层同步与内存开销。这一点与细粒度信号模型（ADR-0005）一致。节点存放在 slotmap 风格的 arena 中，用 `NodeId` 引用，不使用 `Rc<RefCell>` 互相引用，从而规避借用冲突并改善缓存局部性。
+The framework has **one** retained node-tree layer: component functions produce nodes directly, and signals write node properties directly. There is no intermediate view-tree-to-render-tree layer, removing synchronization and memory overhead. This matches fine-grained signals (ADR-0005). Store nodes in a slotmap-style arena referenced by `NodeId`, not interlinked `Rc<RefCell>` values, to avoid borrow conflicts and improve cache locality.
 
-每个节点分别维护 **style、layout、paint** 三种脏标记：样式变化不一定触发重排，重排不一定扩散到祖先，重绘只影响所在图层。失效传播在**布局边界**处截止（尺寸不依赖内容的子树）；**重绘边界**对应独立的合成图层，供 ADR-0004 的图层级持续渲染使用。
+Each node maintains separate **style, layout, and paint** dirty flags. Style changes need not trigger layout; layout need not propagate to ancestors; repainting affects only the containing layer. Invalidation stops at **layout boundaries** (subtrees sized independently of content). **Repaint boundaries** correspond to independent compositing layers, supporting ADR-0004's continuous layer rendering.
 
 ## Considered Options
 
-- **视图树 + 渲染树两层**（Flutter、Xilem/Masonry）：分层清晰，但细粒度信号模式下没有需要 diff 的视图层，第二棵树只会增加开销。
-- **ECS 存储**：数据布局更紧凑，但对通用 UI 而言心智负担大，且布局与事件需要树形遍历。
+- **Separate view and render trees** (Flutter, Xilem/Masonry): clear layering, but fine-grained signals need no diffable view layer, so the second tree only adds overhead.
+- **ECS storage**: more compact data layout, but greater conceptual burden for general UI, while layout and events still require tree traversal.
 
 ## Consequences
 
-- 节点类型必须是开放可扩展的（自定义控件要能定义自己的测量、绘制和事件处理），可以用 trait 对象挂在 arena 节点上。
-- 无障碍树（第 13 条）直接从这棵节点树派生，不另建一棵语义树。
+- Node types must be openly extensible: custom widgets define measurement, painting, and event handling, potentially through trait objects attached to arena nodes.
+- Derive the accessibility tree (decision 13) directly from this node tree instead of building a separate semantic tree.

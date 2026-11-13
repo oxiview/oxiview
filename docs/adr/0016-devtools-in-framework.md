@@ -2,17 +2,17 @@
 status: accepted
 ---
 
-# 开发者工具：热重载、Inspector、性能分析、无头快照与事件回放作为框架一等公民
+# Developer tools: hot reload, Inspector, profiling, headless snapshots, and event replay as framework features
 
-以下能力属于框架本体，不交给第三方：
+The framework owns the following capabilities rather than delegating them to third parties:
 
-- **热重载**：主题文件与资源热更新（ADR-0008）；Rust 代码用 subsecond 一类的二进制热补丁，尽量保留信号状态，保留失败时自动重建对应窗口。
-- **Inspector**：节点树、计算后的样式、布局框叠加显示，以及**信号依赖图**（哪个信号触发了哪些更新），用来弥补细粒度响应式难以调试的问题（ADR-0005）。
-- **性能面板**：按阶段显示帧耗时（样式、布局、绘制、GPU），支持导出 Tracy / Perfetto trace。
-- **无头渲染 + 像素快照测试**：在无窗口环境下渲染并与基准图逐像素比对，可以注入输入事件做 E2E 测试。这也是 ADR-0001 中性能硬指标进入 CI 的基础设施。
-- **事件录制与回放**：录制输入事件序列并确定性重放，用来复现缺陷。
+- **Hot reload**: theme and asset reload (ADR-0008); binary hot patching for Rust code using tools such as subsecond, preserving signal state where possible and rebuilding the affected window if preservation fails.
+- **Inspector**: node tree, computed styles, layout-box overlays, and the **signal dependency graph** showing which signals triggered which updates, addressing fine-grained reactivity's debugging difficulty (ADR-0005).
+- **Performance panel**: frame timings by stage (style, layout, painting, GPU), with Tracy / Perfetto trace export.
+- **Headless rendering and pixel snapshot tests**: render without windows and compare against baselines pixel by pixel, with injectable input for E2E tests. This also supports ADR-0001's hard performance targets in CI.
+- **Event recording and replay**: record input sequences and replay deterministically to reproduce bugs.
 
 ## Consequences
 
-- 确定性回放要求帧时钟、随机数、异步调度都可以注入或替换，框架内部不能直接读系统时间。
-- 无头渲染依赖 CPU 回退渲染器（ADR-0012）在 CI 环境中稳定输出，并且像素结果要跨平台一致，或者按平台分别建立基准。
+- Deterministic replay requires injectable or replaceable frame clocks, randomness, and async scheduling. Framework internals must not read system time directly.
+- Headless rendering relies on the CPU fallback renderer (ADR-0012) producing stable CI output. Pixels must either match across platforms or use separate platform baselines.

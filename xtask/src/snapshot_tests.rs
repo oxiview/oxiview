@@ -1,4 +1,4 @@
-//! 通过真实 harness 生成记录，在隔离目录验证审阅与接受流程。
+//! Generate records with the real harness and verify review/accept workflows in isolated directories.
 use super::*;
 use oxiview_testing::{CompareConfig, RgbaImage, SnapshotError, SnapshotHarness};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,18 +9,18 @@ impl Fixture {
     fn new() -> Self {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("根目录");
+            .expect("root directory");
         let path = root.join("target/xtask").join(format!(
             "snapshot-fixture-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&path).expect("临时目录");
+        fs::create_dir_all(&path).expect("temporary directory");
         Self(path)
     }
     fn harness(&self, name: &str) -> SnapshotHarness {
         let crate_root = self.0.join(name);
-        fs::create_dir_all(&crate_root).expect("调用方目录");
+        fs::create_dir_all(&crate_root).expect("caller directory");
         fs::write(
             crate_root.join("Cargo.toml"),
             format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n"),
@@ -44,7 +44,7 @@ fn checkerboard() -> RgbaImage {
             })
         })
         .collect();
-    RgbaImage::new(16, 16, pixels).expect("棋盘格")
+    RgbaImage::new(16, 16, pixels).expect("checkerboard")
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn missing_review_accept_and_overwrite_round_trip() {
         Err(SnapshotError::Mismatch { .. })
     ));
     assert!(!baseline.exists());
-    let entries = pending_entries(&fixture.0).expect("待处理记录");
+    let entries = pending_entries(&fixture.0).expect("pending records");
     assert_eq!(entries.len(), 1);
     let artifacts = &entries[0].directory;
     assert_eq!(
@@ -73,34 +73,37 @@ fn missing_review_accept_and_overwrite_round_trip() {
         &[255, 0, 255, 255]
     );
     let review = process(&fixture.0, None).expect("review");
-    assert!(review.contains("oxiview-example/board：缺失"));
+    assert!(review.contains("oxiview-example/board: Missing"));
     assert!(review.contains("pending.json"));
     assert!(!baseline.exists());
     assert!(
         process(&fixture.0, Some("board"))
             .expect("accept")
-            .contains("已创建基准文件")
+            .contains("Created baseline file")
     );
     assert!(!artifacts.join("pending.json").exists());
     harness
         .assert_snapshot("board", &image, &config)
-        .expect("接受后通过");
+        .expect("passes after acceptance");
 
-    let changed = RgbaImage::new(16, 16, vec![255; 16 * 16 * 4]).expect("变化图");
+    let changed = RgbaImage::new(16, 16, vec![255; 16 * 16 * 4]).expect("changed image");
     assert!(harness.assert_snapshot("board", &changed, &config).is_err());
-    assert_eq!(RgbaImage::read_png(&baseline).expect("未自动覆盖"), image);
+    assert_eq!(
+        RgbaImage::read_png(&baseline).expect("not overwritten automatically"),
+        image
+    );
     let review = process(&fixture.0, None).expect("review");
-    assert!(review.contains("超出容差"));
-    assert!(review.contains("差异像素=128"));
+    assert!(review.contains("Tolerance exceeded"));
+    assert!(review.contains("different_pixels=128"));
     assert!(
         process(&fixture.0, Some("all"))
             .expect("accept all")
-            .contains("已覆盖基准文件")
+            .contains("Overwritten baseline file")
     );
     harness
         .assert_snapshot("board", &changed, &config)
-        .expect("更新后通过");
-    assert!(pending_entries(&fixture.0).expect("已清理").is_empty());
+        .expect("passes after update");
+    assert!(pending_entries(&fixture.0).expect("cleaned up").is_empty());
 }
 
 #[test]
@@ -110,17 +113,17 @@ fn dimension_failure_and_stale_record_cleanup() {
     let image = checkerboard();
     let config = CompareConfig::default();
     assert!(harness.assert_snapshot("size", &image, &config).is_err());
-    process(&fixture.0, Some("all")).expect("接受");
-    let small = RgbaImage::new(1, 1, vec![0; 4]).expect("小图");
+    process(&fixture.0, Some("all")).expect("accept");
+    let small = RgbaImage::new(1, 1, vec![0; 4]).expect("small image");
     assert!(harness.assert_snapshot("size", &small, &config).is_err());
     assert!(
         process(&fixture.0, None)
             .expect("review")
-            .contains("尺寸不一致")
+            .contains("Dimensions differ")
     );
     harness
         .assert_snapshot("size", &image, &config)
-        .expect("恢复后通过");
+        .expect("passes after restoration");
     assert!(!has_pending(&fixture.0));
     assert!(process(&fixture.0, Some("size")).is_err());
 }
@@ -138,12 +141,12 @@ fn duplicate_names_require_qualification() {
     }
     assert!(
         process(&fixture.0, Some("board"))
-            .expect_err("拒绝歧义")
-            .contains("名称重复")
+            .expect_err("reject ambiguity")
+            .contains("Duplicate snapshot name")
     );
-    process(&fixture.0, Some("oxiview-one/board")).expect("明确选择");
-    assert_eq!(pending_entries(&fixture.0).expect("剩余").len(), 1);
-    process(&fixture.0, Some("all")).expect("接受剩余");
+    process(&fixture.0, Some("oxiview-one/board")).expect("explicit selection");
+    assert_eq!(pending_entries(&fixture.0).expect("remaining").len(), 1);
+    process(&fixture.0, Some("all")).expect("accept remaining");
 }
 
 #[test]
@@ -157,8 +160,8 @@ fn invalid_paths_and_corrupt_baselines_are_not_pending() {
         ));
     }
     let directory = fixture.0.join("oxiview-example/tests/snapshots");
-    fs::create_dir_all(&directory).expect("基准目录");
-    fs::write(directory.join("broken.png"), b"invalid png").expect("损坏的基准");
+    fs::create_dir_all(&directory).expect("baseline directory");
+    fs::write(directory.join("broken.png"), b"invalid png").expect("corrupted baseline");
     assert!(matches!(
         harness.assert_snapshot("broken", &checkerboard(), &CompareConfig::default()),
         Err(SnapshotError::Png(_))
@@ -182,14 +185,14 @@ fn failed_test_summary_points_to_review() {
             "test"
         }
         fn run(&self, _: &Path) -> (Status, String) {
-            (Status::Fail, "像素快照失败".into())
+            (Status::Fail, "Pixel snapshot failed".into())
         }
     }
     let result = crate::check::execute(&Failure, &fixture.0);
     assert!(
         result
             .failure_summary
-            .expect("失败汇总")
+            .expect("failure summary")
             .contains("cargo xtask snapshot --review")
     );
 }
@@ -205,14 +208,19 @@ fn partial_accept_error_preserves_modified_file_log() {
                 .is_err()
         );
     }
-    // 第二个目标故意为目录，验证失败报告保留已修改的第一个文件。
+    // Make the second target a directory to verify that the failure report preserves the first file's completed change.
     fs::create_dir_all(fixture.0.join("oxiview-example/tests/snapshots/second.png"))
-        .expect("制造复制失败");
-    let log = process(&fixture.0, Some("all")).expect_err("部分接受后失败");
-    assert!(log.contains("已创建基准文件"));
+        .expect("force copy failure");
+    let log = process(&fixture.0, Some("all")).expect_err("fails after partial acceptance");
+    assert!(log.contains("Created baseline file"));
     assert!(log.contains("first.png"));
-    assert!(log.contains("快照接受失败"));
-    assert_eq!(pending_entries(&fixture.0).expect("剩余记录").len(), 1);
+    assert!(log.contains("Snapshot acceptance failed"));
+    assert_eq!(
+        pending_entries(&fixture.0)
+            .expect("remaining records")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -228,13 +236,13 @@ fn tampered_pending_cannot_escape_workspace() {
         .0
         .join("target/xtask/snapshots/oxiview-example/board/pending.json");
     let mut value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&pending).expect("读取记录")).expect("JSON");
+        serde_json::from_slice(&fs::read(&pending).expect("read record")).expect("JSON");
     value["crate_root"] = "../escape".into();
-    fs::write(&pending, serde_json::to_vec(&value).expect("编码")).expect("篡改路径");
+    fs::write(&pending, serde_json::to_vec(&value).expect("encode")).expect("tamper with path");
     assert!(
         process(&fixture.0, Some("all"))
-            .expect_err("拒绝越界")
-            .contains("普通相对路径")
+            .expect_err("reject path escape")
+            .contains("ordinary relative paths")
     );
     assert!(pending.exists());
 }

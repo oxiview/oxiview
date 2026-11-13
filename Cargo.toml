@@ -27,7 +27,7 @@ missing_docs = "warn"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
-# 选择 pedantic 的无损转换检查；另启用冗余克隆和调试宏检查，避免整体开启的噪声。
+# Enable the pedantic lossless-cast check plus redundant-clone and debug-macro checks, avoiding blanket pedantic noise.
 cast_lossless = "warn"
 redundant_clone = "warn"
 dbg_macro = "warn"

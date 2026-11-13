@@ -1,6 +1,6 @@
-//! oxiview 本地工程任务入口。
+//! Local engineering task entry point for oxiview.
 
-// 工程工具允许对内部不变量使用 expect；库 crate 不继承此例外。
+// Engineering tools may use expect for internal invariants; library crates do not inherit this exception.
 #![allow(clippy::expect_used)]
 
 mod bench;
@@ -19,9 +19,9 @@ use clap::{Parser, Subcommand};
 use report::{CheckResult, Report};
 
 #[derive(Parser)]
-#[command(about = "oxiview 本地工程验证")]
+#[command(about = "Local engineering verification for oxiview")]
 struct Cli {
-    /// 仅向 stdout 输出 JSON 报告。
+    /// Print only the JSON report to stdout.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -30,55 +30,55 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Task {
-    /// 格式化代码。
+    /// Format code.
     Fmt {
-        /// 只检查，不修改文件。
+        /// Check without modifying files.
         #[arg(long)]
         check: bool,
     },
-    /// 执行严格 Clippy 检查。
+    /// Run strict Clippy checks.
     Lint,
-    /// 执行 workspace 测试。
+    /// Run workspace tests.
     Test,
-    /// 检查依赖方向、许可证、安全公告和来源。
+    /// Check dependency direction, licenses, advisories, and sources.
     Deps,
-    /// 审阅或显式接受像素快照（会修改基准文件）。
+    /// Review or explicitly accept pixel snapshots (modifies baseline files).
     Snapshot {
-        /// 列出待处理快照。
+        /// List pending snapshots.
         #[arg(long, required_unless_present = "accept", conflicts_with = "accept")]
         review: bool,
-        /// 接受指定名称、crate/name 或 all。
+        /// Accept a name, crate/name, or all.
         #[arg(long)]
         accept: Option<String>,
     },
-    /// 环境检查通过后执行全部检查，最后汇总。
+    /// Run all checks after environment validation, then summarize results.
     Verify {
-        /// 普通验证之后追加性能基准。
+        /// Add performance benchmarks after ordinary verification.
         #[arg(long)]
         full: bool,
     },
-    /// 运行基准并比较本机性能基线。
+    /// Run benchmarks and compare this machine's performance baseline.
     Bench {
-        /// 创建或更新仓库基线文件；仅在人确认后运行。
+        /// Create or update the repository baseline; run only after human confirmation.
         #[arg(long)]
         record: bool,
     },
-    /// 创建已在 layers.toml 登记的 crate，不覆盖已有目录。
+    /// Create a crate registered in layers.toml without overwriting existing directories.
     NewCrate {
-        /// crate 名称。
+        /// Crate name.
         name: String,
-        /// 必须与规则表中的上下文完全一致。
+        /// Must exactly match the context in the rules.
         #[arg(long)]
         context: String,
     },
-    /// 检查工具链和外部工具，不自动安装。
+    /// Check the toolchain and external tools without installing them.
     Doctor,
-    /// 显式安装可选的 pre-push 验证 hook。
+    /// Explicitly install the optional pre-push verification hook.
     InstallHooks {
-        /// 备份已有不同内容的 hook 后覆盖；已有备份时拒绝覆盖。
+        /// Back up a different existing hook before replacing it; refuse if a backup already exists.
         #[arg(long, conflicts_with = "uninstall")]
         force: bool,
-        /// 只删除内容与本命令生成内容完全匹配的 hook。
+        /// Remove only a hook whose content exactly matches this command's generated script.
         #[arg(long)]
         uninstall: bool,
     },
@@ -91,7 +91,7 @@ fn cargo_check(name: &'static str, args: Vec<&'static str>) -> CommandCheck {
         args,
         environment: false,
         required_rust: false,
-        remedy: "请检查 Rust 工具链及 rustfmt、clippy 组件是否可用。",
+        remedy: "Check that the Rust toolchain and rustfmt/clippy components are available.",
     }
 }
 
@@ -102,11 +102,11 @@ fn doctor(root: &Path, report: &mut Report) {
         args: vec!["--version"],
         environment: true,
         required_rust: true,
-        remedy: "需要 Rust stable 1.97；安装命令：rustup toolchain install 1.97.0 --component rustfmt --component clippy",
+        remedy: "Rust stable 1.97 is required; install with: rustup toolchain install 1.97.0 --component rustfmt --component clippy",
     };
     let deny = CommandCheck {
         environment: true,
-        remedy: "需要 cargo-deny；安装命令：cargo install cargo-deny --locked",
+        remedy: "cargo-deny is required; install with: cargo install cargo-deny --locked",
         ..cargo_check("doctor-cargo-deny", vec!["deny", "--version"])
     };
     for check in [&rustc, &deny] {
@@ -199,7 +199,7 @@ fn run(task: Task, root: &Path, report: &mut Report) {
 fn main() -> ExitCode {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask 位于仓库根目录下");
+        .expect("xtask is under the repository root");
     let mut report = Report::default();
     let mut json = std::env::args_os().any(|arg| arg == "--json");
     if let Err(error) = std::fs::create_dir_all(root.join("target/xtask")) {
@@ -228,24 +228,23 @@ fn main() -> ExitCode {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     }
-    let serialized = serde_json::to_string_pretty(&report).expect("报告只包含可序列化值");
+    let serialized =
+        serde_json::to_string_pretty(&report).expect("report contains only serializable values");
     if let Err(error) = std::fs::write(root.join("target/xtask/report.json"), &serialized) {
         report.checks.push(CheckResult::error(
             "report",
-            format!("无法写入报告：{error}"),
+            format!("Cannot write report: {error}"),
         ));
     }
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&report).expect("报告只包含可序列化值")
+            serde_json::to_string_pretty(&report)
+                .expect("report contains only serializable values")
         );
     } else {
         for item in &report.checks {
-            println!(
-                "{}: {:?}（{} 毫秒）",
-                item.name, item.status, item.duration_ms
-            );
+            println!("{}: {:?} ({} ms)", item.name, item.status, item.duration_ms);
             if matches!(
                 item.name.as_str(),
                 "snapshot" | "bench" | "new-crate" | "install-hooks"
@@ -260,7 +259,7 @@ fn main() -> ExitCode {
             }
         }
         println!(
-            "汇总：{} 项，退出码 {}；报告：target/xtask/report.json",
+            "Summary: {} checks, exit code {}; report: target/xtask/report.json",
             report.checks.len(),
             report.exit_code()
         );

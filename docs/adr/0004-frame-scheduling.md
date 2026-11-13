@@ -2,13 +2,13 @@
 status: accepted
 ---
 
-# 帧调度：默认按需渲染，预留窗口级与图层级持续渲染，时钟对齐显示器 vsync
+# Frame scheduling: on-demand by default, reserved continuous window/layer rendering, display-vsync clocks
 
-每个窗口有一个**帧策略**，默认是**按需**：只有在状态失效、动画进行或系统要求重绘时才请求一帧，空闲时不运行帧循环，并且只重绘脏区域。这是“空闲 CPU 约 0%”这一硬指标（ADR-0001）的前提。为了满足 3D 视口、视频、游戏式场景，策略还支持两种持续渲染：**窗口级持续**，整个窗口每个 vsync 都出一帧；**图层级持续**，单个合成图层每帧刷新，窗口其余部分仍然按需。前期只实现按需渲染，另外两种只在接口中预留。
+Each window has a **frame policy**, defaulting to **on-demand**: request frames only when state is invalidated, animations run, or the system requests repainting. There is no idle frame loop, and only dirty regions are repainted. This is required for the approximately 0% idle CPU target (ADR-0001). For 3D viewports, video, and game-like scenes, the policy also supports **continuous window rendering**, producing a whole-window frame every vsync, and **continuous layer rendering**, refreshing one compositing layer each frame while the rest of the window remains on-demand. Initially implement only on-demand rendering and reserve the other two in the interface.
 
-帧时钟按窗口所在显示器的 vsync 对齐（CVDisplayLink/CADisplayLink、DXGI、Wayland presentation-time），支持多显示器刷新率不同和可变刷新率（VRR）。动画用**预测呈现时间戳**采样，不用“当前时间”采样，以免抖动。
+Align the frame clock to the window's display vsync (CVDisplayLink/CADisplayLink, DXGI, Wayland presentation-time), supporting different refresh rates across monitors and variable refresh rate (VRR). Sample animations at the **predicted presentation timestamp**, rather than the current time, to avoid jitter.
 
 ## Consequences
 
-- 合成器需要有“图层”概念（见第 12 条合成与外部内容），即使前期只实现按需渲染也是如此。
-- 窗口在不同刷新率的显示器之间移动时，必须切换帧时钟源。
+- The compositor needs a layer concept (see decision 12 on compositing and external content), even when only on-demand rendering is implemented initially.
+- Switch frame-clock sources when a window moves between displays with different refresh rates.

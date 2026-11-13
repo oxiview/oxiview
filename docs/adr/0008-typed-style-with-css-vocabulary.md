@@ -2,25 +2,25 @@
 status: accepted
 ---
 
-# 样式模型：类型化属性 + CSS 词汇 + 受限主题规则，不实现 CSS
+# Styling: typed properties, CSS vocabulary, and restricted theme rules without implementing CSS
 
-样式是节点上的**类型化属性**，可以由信号驱动，在编译期检查。属性的**命名和语义对齐 CSS**（盒模型、`padding`、`border_radius`、`box_shadow`、渐变、Flex/Grid 属性、过渡），让设计师和前端沿用熟悉的词汇。但框架**不实现 CSS**：没有任意选择器、没有层叠、不解析 CSS 文本。这与 ADR-0001“不使用任何 Web 技术”一致。
+Styles are **typed properties** on nodes, driven by signals and checked at compile time. Property **names and semantics align with CSS** (box model, `padding`, `border_radius`, `box_shadow`, gradients, Flex/Grid properties, transitions), giving designers and frontend developers familiar vocabulary. The framework **does not implement CSS**: no arbitrary selectors, no cascading, and no CSS text parser. This follows ADR-0001's exclusion of Web technologies.
 
-交互态默认用**内置状态变体**表达：框架为每个节点维护 hover / pressed / focused / disabled 等状态信号，样式写作 `.bg(t.primary).hover(|s| s.bg(t.primary_hover))`，状态切换可以带过渡动画。组件也可以覆盖内置状态，自己用信号维护。
+Interaction states use **built-in state variants** by default. The framework maintains hover / pressed / focused / disabled state signals for each node. Styles look like `.bg(t.primary).hover(|s| s.bg(t.primary_hover))`; state transitions can animate. Components may override built-in states with their own signals.
 
-**主题**由设计 token（颜色、间距、圆角、字号、阴影等）和**主题规则**组成。主题规则只有两级：“控件类型”和“控件类型 + 状态”，用来给控件设定默认样式。主题可以从外置文件（自有格式，如 RON / TOML）加载，开发态下支持热更新。系统暗色模式和强调色的变化以信号形式推送。
+A **theme** consists of design tokens (colors, spacing, corner radii, font sizes, shadows, and others) and **theme rules**. Rules have only two levels: widget type, and widget type plus state, providing widget defaults. Themes can load from external files in an owned format such as RON / TOML and hot reload during development. System dark-mode and accent-color changes arrive as signals.
 
-## 为什么不实现 CSS3
+## Why not implement CSS3
 
-CSS 的选择器和层叠是为“结构与样式分离的文档”设计的。在“组件只执行一次 + 信号直写属性”的模型里（ADR-0005），类名或状态的变化会触发子树重新匹配，相当于把 diff 带了回来，失效也不再精确。完整实现 CSS 语义的成本极高，“子集”的边界会被反复追问。GTK4 的经验表明，选择器匹配成本和“样式从哪来”的调试难题会长期存在。CSS 真正值得借用的只有**属性词汇**和**外部样式热更新**，本方案保留了这两样。
+CSS selectors and cascading serve documents with separate structure and styling. In the execute-once, direct-signal-property model (ADR-0005), class or state changes would rematch subtrees, effectively restoring diffing and weakening precise invalidation. Full CSS semantics are extremely costly; the limits of a subset would face repeated challenges. GTK4 illustrates persistent selector-matching costs and difficulty tracing style origins. The valuable parts to borrow are **property vocabulary** and **external style hot reload**, both retained here.
 
 ## Considered Options
 
-- **实现 CSS3 子集**（Blitz、Vizia、GTK4）：资产可复用，但与细粒度信号模型冲突，并且违背 ADR-0001。
-- **自定义带选择器的样式语言**（Qt QSS 式）：灵活，但需要自建解析器和 LSP，并承担匹配开销。
-- **纯类型化属性、不对齐 CSS 词汇**：最简单，但会让设计侧的沟通成本变高。
+- **A CSS3 subset** (Blitz, Vizia, GTK4): reusable assets, but conflicts with fine-grained signals and ADR-0001.
+- **A custom selector-based style language** (Qt QSS style): flexible, but requires a parser and LSP while retaining matching overhead.
+- **Typed properties without CSS vocabulary**: simplest, but increases communication costs with designers.
 
 ## Consequences
 
-- 主题规则以后可以扩展，但必须保持“无任意选择器、无层叠”这条红线，否则需要新的 ADR 替代本条。
-- 样式值的单位与语义（例如 `border-radius` 的百分比、阴影的扩展半径）以 CSS 规范为参照编写文档，避免同名不同义。
+- Theme rules may expand, but arbitrary selectors and cascading remain prohibited unless a new ADR supersedes this decision.
+- Document style units and semantics, such as percentage border radii and shadow spread, against CSS specifications to avoid identical names with different meanings.

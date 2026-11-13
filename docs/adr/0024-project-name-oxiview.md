@@ -2,25 +2,25 @@
 status: accepted
 ---
 
-# 项目命名：oxiview
+# Project name: oxiview
 
-框架正式命名为 **oxiview**：oxide（氧化物，即铁锈，暗指 Rust）+ view（视图）。对外总入口 crate 是 `oxiview`，内部 crate 统一使用 `oxiview-<子系统>` 前缀（ADR-0021）。Rust 代码中的 crate 名写作 `oxiview_*`，类型前缀不强制带项目名。
+The framework is officially named **oxiview**: oxide (rust, alluding to Rust) + view. The public facade crate is `oxiview`; internal crates use `oxiview-<subsystem>` (ADR-0021). Rust code refers to crates as `oxiview_*`; types need not carry the project name as a prefix.
 
-定名时（2026-11-12）核实的可用性：
+Availability checked when naming the project (2026-11-12):
 
-- crates.io：`oxiview` 以及规划中的全部 16 个子 crate（`-base`、`-reactive`、`-scene`、`-render-cpu`、`-render-wgpu`、`-text`、`-layout`、`-platform`、`-platform-macos`、`-platform-headless`、`-core`、`-style`、`-widgets`、`-app`、`-macros`、`-testing`）均未被占用；近似名 `oxi-view`、`oxi_view`、`oxiviews`、`oxyview` 也未被占用。
-- GitHub：组织名 `oxiview` 未被占用，也没有同名仓库。
-- 域名：`oxiview.dev`、`oxiview.rs`、`oxiview.io` 未注册；`oxiview.com` 已被注册。
+- crates.io: `oxiview` and all 16 planned subcrates (`-base`, `-reactive`, `-scene`, `-render-cpu`, `-render-wgpu`, `-text`, `-layout`, `-platform`, `-platform-macos`, `-platform-headless`, `-core`, `-style`, `-widgets`, `-app`, `-macros`, `-testing`) were available, as were similar names `oxi-view`, `oxi_view`, `oxiviews`, and `oxyview`.
+- GitHub: organization name `oxiview` was available, with no repository of the same name.
+- Domains: `oxiview.dev`, `oxiview.rs`, and `oxiview.io` were unregistered; `oxiview.com` was registered.
 
 ## Considered Options
 
-- **`rui`**：crates.io 上已有同领域的 Rust UI 库（audulus/rui）。
-- **`rsui`**：crates.io 上已有同领域的 Rust 跨平台 UI 库；GitHub 组织名已被占用。
-- **`rstyle`**：名称全部可用，但容易被理解为样式库或代码格式化工具，并且与样式子系统 `-style` 重名。
-- **`newui`**：名称全部可用，但过于通用，搜索结果会被 JetBrains “New UI” 淹没，名字也会随时间过时。
-- **`viewloom`、`heddleui`** 等：可用，最终选择了更短、Rust 意象更明确的 oxiview。
+- **`rui`**: an existing Rust UI library in the same domain on crates.io (audulus/rui).
+- **`rsui`**: an existing cross-platform Rust UI library on crates.io; GitHub organization already taken.
+- **`rstyle`**: available everywhere, but easily mistaken for a styling library or code formatter and redundant with the `-style` subsystem.
+- **`newui`**: available everywhere, but too generic, overshadowed in search by JetBrains New UI, and likely to age poorly.
+- **`viewloom`, `heddleui`**, and others: available; oxiview was chosen for brevity and clearer Rust imagery.
 
 ## Consequences
 
-- 2026-11-12 已在 crates.io 发布 `oxiview` 0.0.0 占位包（所有者 dangaogit，许可证 MIT OR Apache-2.0）。GitHub 组织 `oxiview` 与域名 `oxiview.dev` 由所有者自行注册。子 crate 名不单独占位，首次发布时再注册。
-- 仓库目录已从 `rust-ui` 改名为 `oxiview`。
+- The `oxiview` 0.0.0 placeholder was published on crates.io on 2026-11-12 (owner dangaogit, MIT OR Apache-2.0). The owner handles registration of the GitHub organization `oxiview` and domain `oxiview.dev`. Subcrate names are not reserved separately; register them at first publication.
+- The repository directory was renamed from `rust-ui` to `oxiview`.

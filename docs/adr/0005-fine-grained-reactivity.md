@@ -2,20 +2,20 @@
 status: accepted
 ---
 
-# 响应式模型：线程局部的细粒度信号 + 结构协调，内置本地执行器
+# Reactivity: thread-local fine-grained signals and structural reconciliation, with a built-in local executor
 
-视图只构建一次。**信号**的变化通过依赖追踪直接更新绑定它的节点属性，不重新执行组件，也不做虚拟树 diff。条件分支和列表这类**结构变化**由专门的控制流原语处理，列表按 key 协调。思路接近 SolidJS、Leptos、Floem。选择它是因为失效粒度最细，空闲时零开销，最符合 ADR-0001 的性能硬指标。
+Build views only once. **Signal** changes directly update bound node properties through dependency tracking, without re-executing components or diffing virtual trees. Dedicated control-flow primitives handle **structural changes** such as conditionals and lists, reconciling lists by key. The approach resembles SolidJS, Leptos, and Floem. It provides the finest invalidation granularity and zero idle overhead, best matching ADR-0001's hard performance targets.
 
-响应式运行时是**线程局部**的，每个窗口线程一个实例（ADR-0003）。信号句柄是 `Copy + !Send` 的，读写不加锁。每个窗口线程内置一个单线程**本地执行器**：`spawn_local` 启动的 future 可以直接读写信号；计算密集的工作用 `spawn_background` 交给后台线程池，结果投递回原窗口线程。框架不绑定 tokio 等具体异步运行时。
+The reactive runtime is **thread-local**, with one instance per window thread (ADR-0003). Signal handles are `Copy + !Send`, with lock-free reads and writes. Each window thread includes a single-threaded **local executor**: futures started by `spawn_local` can access signals directly; `spawn_background` sends compute-intensive work to a background pool and delivers results to the originating window thread. The framework does not bind to a particular async runtime such as tokio.
 
 ## Considered Options
 
-- **组件重执行 + 虚拟树 diff**（Dioxus、Xilem）：心智模型简单，但有 diff 开销，失效粒度停在组件这一级。
-- **Elm 单向数据流**（iced）：可预测，但大树要整棵重建，并且样板代码多。
-- **可插拔响应式层**：会让控件库要同时兼容多种模型，被否决。
+- **Component re-execution and virtual-tree diffing** (Dioxus, Xilem): simple mental model, but incurs diff overhead and limits invalidation granularity to components.
+- **Elm unidirectional data flow** (iced): predictable, but rebuilds large trees and requires substantial boilerplate.
+- **Pluggable reactive layer**: would force the widget library to support multiple models; rejected.
 
 ## Consequences
 
-- 必须提供 Show / For / Switch 一类控制流原语，组件作者不能用普通的 `if` / `for` 表达动态结构。
-- 依赖图的调试能力（查看谁依赖谁、谁触发了更新）必须进入开发者工具（第 15 条）。
-- 信号的生命周期由归属的作用域（Scope）管理，作用域销毁时，属于它的信号和 effect 一并释放。
+- Provide control-flow primitives such as Show / For / Switch; component authors cannot express dynamic structure with ordinary `if` / `for`.
+- Dependency-graph debugging (who depends on whom and what triggered an update) must be part of developer tools (decision 15).
+- Scopes own signal lifetimes. Destroying a scope releases its signals and effects together.

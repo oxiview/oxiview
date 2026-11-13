@@ -1,8 +1,8 @@
-//! 原生桌面平台的像素快照测试 harness。
+//! Pixel snapshot test harness for native desktop platforms.
 //!
-//! 使用自有 RGBA8 图像，不依赖渲染器。调用方显式提供 crate 与 workspace
-//! 的绝对路径；默认测试只读取基准图，更新需运行 `cargo xtask snapshot --accept`。
-//! 详细用法见仓库 `docs/conventions/testing-snapshots.md`。
+//! Uses owned RGBA8 images without a renderer. Callers explicitly provide absolute
+//! crate and workspace paths; tests only read baselines. Update with `cargo xtask snapshot --accept`.
+//! See `docs/conventions/testing-snapshots.md` in the repository for usage.
 
 use serde::Serialize;
 use std::{
@@ -12,32 +12,34 @@ use std::{
 };
 use thiserror::Error;
 
-/// 快照的输入、编解码、文件操作或比较错误。
+/// Snapshot input, codec, file operation, or comparison errors.
 #[derive(Debug, Error)]
 pub enum SnapshotError {
-    /// 输入不满足图像、配置或路径约束。
-    #[error("快照输入无效：{0}")]
+    /// Input violates image, configuration, or path constraints.
+    #[error("Invalid snapshot input: {0}")]
     InvalidInput(String),
-    /// 读写文件失败。
-    #[error("快照文件操作失败：{0}")]
+    /// File read or write failed.
+    #[error("Snapshot file operation failed: {0}")]
     Io(#[from] std::io::Error),
-    /// PNG 编解码失败；不向调用方暴露第三方类型。
-    #[error("PNG 处理失败：{0}")]
+    /// PNG encoding or decoding failed; third-party types are not exposed to callers.
+    #[error("PNG processing failed: {0}")]
     Png(String),
-    /// pending 元数据编码失败。
-    #[error("快照元数据编码失败：{0}")]
+    /// Pending metadata encoding failed.
+    #[error("Snapshot metadata encoding failed: {0}")]
     Metadata(String),
-    /// 基准缺失或比较失败，产物已写入此目录。
-    #[error("像素快照失败：{reason}；产物：{artifacts}；运行 cargo xtask snapshot --review")]
+    /// Baseline missing or comparison failed; artifacts were written to this directory.
+    #[error(
+        "Pixel snapshot failed: {reason}; artifacts: {artifacts}; run cargo xtask snapshot --review"
+    )]
     Mismatch {
-        /// 失败原因。
+        /// Failure reason.
         reason: String,
-        /// actual、diff 与 pending 所在目录。
+        /// Directory containing actual, diff, and pending artifacts.
         artifacts: PathBuf,
     },
 }
 
-/// 按行排列、非预乘 alpha 的 RGBA8 图像。
+/// Row-major RGBA8 image with non-premultiplied alpha.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RgbaImage {
     width: u32,
@@ -46,14 +48,14 @@ pub struct RgbaImage {
 }
 
 impl RgbaImage {
-    /// 创建非空图像；缓冲长度必须恰好为宽 × 高 × 4。
+    /// Create a nonempty image; buffer length must equal width × height × 4.
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, SnapshotError> {
         let size = u64::from(width)
             .checked_mul(u64::from(height))
             .and_then(|n| n.checked_mul(4));
         if width == 0 || height == 0 || size != Some(pixels.len() as u64) {
             return Err(SnapshotError::InvalidInput(
-                "尺寸或 RGBA8 缓冲长度不合法".into(),
+                "Invalid dimensions or RGBA8 buffer length".into(),
             ));
         }
         Ok(Self {
@@ -63,20 +65,20 @@ impl RgbaImage {
         })
     }
 
-    /// 图像宽度（像素）。
+    /// Image width in pixels.
     pub fn width(&self) -> u32 {
         self.width
     }
-    /// 图像高度（像素）。
+    /// Image height in pixels.
     pub fn height(&self) -> u32 {
         self.height
     }
-    /// 按 RGBA 顺序排列的像素缓冲。
+    /// Pixel buffer in RGBA order.
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
 
-    /// 写入 RGBA8 PNG；父目录须已存在。
+    /// Write an RGBA8 PNG; the parent directory must exist.
     pub fn write_png(&self, path: &Path) -> Result<(), SnapshotError> {
         let mut encoder = png::Encoder::new(
             BufWriter::new(fs::File::create(path)?),
@@ -96,7 +98,7 @@ impl RgbaImage {
             .map_err(|e| SnapshotError::Png(e.to_string()))
     }
 
-    /// 读取 RGBA8 PNG；其他色彩类型及位深明确报错。
+    /// Read an RGBA8 PNG; reject other color types and bit depths explicitly.
     pub fn read_png(path: &Path) -> Result<Self, SnapshotError> {
         let decoder = png::Decoder::new(BufReader::new(fs::File::open(path)?));
         let mut reader = decoder
@@ -104,13 +106,13 @@ impl RgbaImage {
             .map_err(|e| SnapshotError::Png(e.to_string()))?;
         let size = reader
             .output_buffer_size()
-            .ok_or_else(|| SnapshotError::Png("图像过大".into()))?;
+            .ok_or_else(|| SnapshotError::Png("Image too large".into()))?;
         let mut pixels = vec![0; size];
         let info = reader
             .next_frame(&mut pixels)
             .map_err(|e| SnapshotError::Png(e.to_string()))?;
         if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-            return Err(SnapshotError::Png("基准必须是 RGBA8 PNG".into()));
+            return Err(SnapshotError::Png("Baseline must be an RGBA8 PNG".into()));
         }
         pixels.truncate(info.buffer_size());
         Self::new(info.width, info.height, pixels)
@@ -126,33 +128,33 @@ impl RgbaImage {
     }
 }
 
-/// 像素比较配置，默认要求完全一致。
+/// Pixel comparison configuration, requiring exact equality by default.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CompareConfig {
-    /// 每个通道允许的绝对差（包含边界），包含 alpha 通道。
+    /// Inclusive absolute difference allowed per channel, including alpha.
     pub channel_tolerance: u8,
-    /// 允许超出通道容差的像素比例，必须是 0–1 范围内的有限数。
+    /// Allowed ratio of pixels exceeding channel tolerance; must be finite and within 0–1.
     pub allowed_diff_ratio: f64,
 }
 
-/// 可序列化的像素差异指标。
+/// Serializable pixel difference metrics.
 #[derive(Clone, Debug, Serialize)]
 pub struct Comparison {
-    /// 尺寸相同且差异比例不超限时通过。
+    /// Passes when dimensions match and the differing-pixel ratio is within the limit.
     pub passed: bool,
-    /// 两张图的尺寸是否一致。
+    /// Whether both images have the same dimensions.
     pub dimensions_match: bool,
-    /// 超出通道容差的像素数，非通道数。
+    /// Number of pixels, not channels, exceeding channel tolerance.
     pub diff_pixels: u64,
-    /// 差异像素数除以两张图的包围矩形像素数。
+    /// Differing pixels divided by the pixel count of both images' bounding rectangle.
     pub diff_ratio: f64,
-    /// 所有像素的最大通道绝对差（含容差内差异）；缺失像素视为 255。
+    /// Maximum absolute channel difference, including differences within tolerance; missing pixels count as 255.
     pub max_channel_diff: u8,
 }
 
-/// 比较图像并生成差异图：一致（含容差内）像素淡化，差异像素用不透明品红高亮。
+/// Compare images and generate a diff: fade matching pixels within tolerance; highlight differences in opaque magenta.
 ///
-/// 尺寸不同始终失败；差异图覆盖两图的包围矩形，不存在于任一图的区域为透明。
+/// Different dimensions always fail; the diff spans both images' bounding rectangle, with areas absent from both transparent.
 pub fn compare(
     actual: &RgbaImage,
     expected: &RgbaImage,
@@ -160,7 +162,7 @@ pub fn compare(
 ) -> Result<(Comparison, RgbaImage), SnapshotError> {
     if !config.allowed_diff_ratio.is_finite() || !(0.0..=1.0).contains(&config.allowed_diff_ratio) {
         return Err(SnapshotError::InvalidInput(
-            "允许差异比例必须在 0–1 之间".into(),
+            "Allowed difference ratio must be between 0 and 1".into(),
         ));
     }
     let width = actual.width.max(expected.width);
@@ -210,7 +212,7 @@ pub fn compare(
     Ok((comparison, RgbaImage::new(width, height, diff)?))
 }
 
-/// 固定调用方与产物路径的快照断言入口，不读取进程当前目录。
+/// Snapshot assertions with fixed caller and artifact paths, independent of the process working directory.
 pub struct SnapshotHarness {
     workspace_root: PathBuf,
     crate_root: PathBuf,
@@ -234,8 +236,8 @@ struct Pending<'a> {
 }
 
 impl SnapshotHarness {
-    /// 使用已存在的绝对目录创建入口。crate 必须位于 workspace 内。
-    /// crate 名及快照名只允许 ASCII 字母、数字、连字符、下划线。
+    /// Create a harness using existing absolute directories. The crate must be inside the workspace.
+    /// Crate and snapshot names allow only ASCII letters, digits, hyphens, and underscores.
     pub fn new(
         workspace_root: &Path,
         crate_root: &Path,
@@ -243,14 +245,14 @@ impl SnapshotHarness {
     ) -> Result<Self, SnapshotError> {
         if !workspace_root.is_absolute() || !crate_root.is_absolute() || !valid_name(crate_name) {
             return Err(SnapshotError::InvalidInput(
-                "需要绝对根目录及合法 crate 名".into(),
+                "Absolute roots and a valid crate name are required".into(),
             ));
         }
         let workspace_root = workspace_root.canonicalize()?;
         let crate_root = crate_root.canonicalize()?;
         if !crate_root.starts_with(&workspace_root) {
             return Err(SnapshotError::InvalidInput(
-                "crate 不在 workspace 内".into(),
+                "Crate is outside the workspace".into(),
             ));
         }
         Ok(Self {
@@ -260,8 +262,8 @@ impl SnapshotHarness {
         })
     }
 
-    /// 断言快照；失败写入 actual.png、diff.png、pending.json，但永远不写入基准。
-    /// 成功时删除该快照的旧 pending 记录，防止接受已经过期的失败图像。
+    /// Assert a snapshot; failures write actual.png, diff.png, and pending.json, but never the baseline.
+    /// On success, remove stale pending records to prevent accepting obsolete failure images.
     pub fn assert_snapshot(
         &self,
         name: &str,
@@ -270,15 +272,15 @@ impl SnapshotHarness {
     ) -> Result<(), SnapshotError> {
         if !valid_name(name) || name == "all" {
             return Err(SnapshotError::InvalidInput(
-                "快照名不合法，all 为保留字".into(),
+                "Invalid snapshot name; all is reserved".into(),
             ));
         }
-        // 即使基准缺失，也先验证比较配置。
+        // Validate comparison settings first, even when the baseline is missing.
         if !config.allowed_diff_ratio.is_finite()
             || !(0.0..=1.0).contains(&config.allowed_diff_ratio)
         {
             return Err(SnapshotError::InvalidInput(
-                "允许差异比例必须在 0–1 之间".into(),
+                "Allowed difference ratio must be between 0 and 1".into(),
             ));
         }
         let baseline = self
@@ -304,9 +306,9 @@ impl SnapshotHarness {
                 }
                 (
                     if result.dimensions_match {
-                        "超出容差"
+                        "Tolerance exceeded"
                     } else {
-                        "尺寸不一致"
+                        "Dimensions differ"
                     },
                     Some(result),
                     diff,
@@ -319,7 +321,7 @@ impl SnapshotHarness {
                     .flat_map(|_| [255, 0, 255, 255])
                     .collect();
                 (
-                    "缺失",
+                    "Missing",
                     None,
                     RgbaImage::new(image.width, image.height, pixels)?,
                 )
@@ -327,7 +329,7 @@ impl SnapshotHarness {
             Err(e) => return Err(e),
         };
         fs::create_dir_all(&artifacts)?;
-        // 先撤销旧记录，只有两张图均写入成功后才发布新的 pending。
+        // Remove the old record first; publish new pending metadata only after both images are written.
         match fs::remove_file(&pending_path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

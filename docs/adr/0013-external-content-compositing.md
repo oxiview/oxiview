@@ -2,14 +2,14 @@
 status: accepted
 ---
 
-# 合成：共享 GPU 设备的纹理图层 + 原生子窗口嵌入
+# Compositing: texture layers sharing a GPU device and embedded native child views
 
-外部内容有两种接入方式：
+External content enters in two ways:
 
-1. **纹理图层**（首选）：框架向应用暴露自己的 wgpu 设备。应用在同一设备上把 3D 场景、视频帧或自定义绘制渲染到纹理，纹理作为一个合成图层参与界面合成，可以被裁剪、变换、叠加其他 UI，并可由图层级持续渲染驱动（ADR-0004）。
-2. **原生子窗口嵌入**：系统提供的、无法渲染到纹理的组件（如系统地图、受 DRM 保护的视频播放器）以原生子视图（NSView / 子 HWND / wl_subsurface）嵌入，框架负责同步它的位置、尺寸、可见性和裁剪。
+1. **Texture layers** (preferred): the framework exposes its wgpu device to applications. Applications use that same device to render 3D scenes, video frames, or custom content into textures. Each texture participates in UI composition as a compositing layer, supporting clipping, transforms, UI overlays, and continuous layer rendering (ADR-0004).
+2. **Embedded native child views**: system components that cannot render into textures, such as system maps or DRM-protected video players, embed as native views (NSView / child HWND / wl_subsurface). The framework synchronizes position, size, visibility, and clipping.
 
 ## Consequences
 
-- 原生子窗口有经典的“空域（airspace）”问题：它总是盖在自绘内容之上，不能被 UI 覆盖、无法半透明混合，也不能参与 transform 动画。框架需要在文档和 API 上明确这一限制，例如在其上方弹出菜单时，需要把菜单放到独立的弹出窗口里。
-- 纹理图层与共享设备要求应用使用相同版本的 wgpu，这会成为公开 API 的一部分。
+- Native child views have the classic airspace limitation: they always sit above self-drawn content, cannot be covered by UI or blended translucently, and cannot participate in transform animations. Document this explicitly in APIs and documentation. For example, a menu above such a view needs a separate popup window.
+- Texture layers and a shared device require applications to use the same wgpu version, making it part of the public API.

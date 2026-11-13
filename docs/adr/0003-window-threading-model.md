@@ -2,19 +2,19 @@
 status: accepted
 ---
 
-# 线程模型：主线程只泵事件，默认每个窗口一个 UI 线程
+# Threading model: the main thread pumps events; one window thread per window by default
 
-**主线程**只负责接收系统事件和调用必须在主线程执行的系统 API，例如菜单、IME 光标位置、窗口创建。每个窗口默认拥有一个独立的**窗口线程**，在该线程上运行状态、布局、绘制和 GPU 呈现。CAMetalLayer、DXGI swapchain 和 Vulkan/Wayland surface 都允许在非主线程呈现。应用也可以把多个窗口放到同一个窗口线程上（**共享线程模式**）。这样一个窗口卡顿不会拖累其他窗口，主线程也不会因为 UI 计算而延迟事件响应。
+The **main thread** only receives system events and calls APIs that require it, such as menus, IME cursor positioning, and window creation. Each window has its own **window thread** by default, running state, layout, painting, and GPU presentation. CAMetalLayer, DXGI swapchains, and Vulkan/Wayland surfaces allow presentation off the main thread. Applications may also place multiple windows on one window thread (**shared-thread mode**). A stalled window then need not stall others, and UI computation does not delay main-thread event handling.
 
-窗口线程内的状态和信号都是 `!Send` 的，只在本线程内使用，没有锁。跨窗口线程共享数据时，使用应用级的 `Send` 状态加上消息或订阅机制。处于共享线程模式的窗口之间可以直接共享 `!Send` 状态。
+State and signals on a window thread are `!Send`, used only on that thread without locks. Share data across window threads through application-level `Send` state with messages or subscriptions. Windows in shared-thread mode can directly share `!Send` state.
 
 ## Considered Options
 
-- **所有窗口共享一个 UI 线程**（GPUI、多数框架的做法）：跨窗口共享状态最简单，但单个窗口的重计算会阻塞全部窗口。作为可选模式保留。
-- **全部状态 Send + Sync**：热路径上有锁开销，并且会迫使响应式运行时引入原子操作，被否决。
+- **One UI thread shared by all windows** (GPUI and most frameworks): simplest cross-window state sharing, but heavy computation in one window blocks all windows. Retained as an optional mode.
+- **All state Send + Sync**: adds locks on hot paths and forces atomic operations into the reactive runtime; rejected.
 
 ## Consequences
 
-- 响应式运行时（第 4 条决策）必须是线程局部的，每个窗口线程一个实例。
-- 事件从主线程传到窗口线程会多一次跨线程跳转，必须计入“输入到像素 ≤ 1 帧”的预算并由 CI 监测。
-- 平台后端必须保证主线程和窗口线程之间的消息通道低延迟，并且不会因 macOS 模态循环、Windows 拖动 resize 循环这类阻塞而饿死。
+- The reactive runtime (decision 4) must be thread-local, with one instance per window thread.
+- Forwarding events from the main thread to a window thread adds a cross-thread hop. Include it in the input-to-pixel ≤ 1 frame budget and monitor it in CI.
+- Platform backends must provide low-latency main/window-thread channels that are not starved by blocking operations such as macOS modal loops or Windows drag-resize loops.

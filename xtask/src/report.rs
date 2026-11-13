@@ -1,4 +1,4 @@
-//! 机器可读报告与退出码约定。
+//! Machine-readable reports and exit-code conventions.
 
 use serde::Serialize;
 

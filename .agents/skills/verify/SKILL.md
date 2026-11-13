@@ -1,35 +1,35 @@
 ---
 name: verify
-description: 日常改动、渲染或性能变更完成，或验证、快照、性能基线失败时使用，选择 xtask 命令并解读报告。
+description: Use after routine, rendering, or performance changes, or when verification, snapshots, or performance baselines fail; select xtask commands and interpret reports.
 ---
 
-# 验证
+# Verification
 
-所有命令从仓库根目录运行，只在本地验证。
+Run all commands from the repository root. Verify locally only.
 
-## 选择命令
+## Select commands
 
-- 日常迭代按需要运行 `cargo xtask fmt`、`cargo xtask lint`、`cargo xtask test`；依赖变更运行 `cargo xtask deps`。
-- 交付前运行 `cargo xtask verify`，包括 doctor、fmt、lint、test、deps、docs；docs 没有独立子命令。
-- 涉及渲染时运行 `cargo xtask test` 并检查相关像素快照，再运行 verify。M-1 只有程序生成图像的 harness 自测，不能宣称已验证真实渲染。
-- 性能相关改动运行 `cargo xtask bench` 或 `cargo xtask verify --full`；普通 verify 不跑基准。测量要求见[基准公约](../../../docs/conventions/testing-performance.md)。
-- 环境问题运行 `cargo xtask doctor`；缺工具只报告安装命令，不自动安装。参数查 `cargo xtask --help` 或 `cargo xtask help <子命令>`。
+- During routine iteration, run `cargo xtask fmt`, `cargo xtask lint`, or `cargo xtask test` as needed; run `cargo xtask deps` for dependency changes.
+- Before delivery, run `cargo xtask verify`, which includes doctor, fmt, lint, test, deps, and docs. docs has no standalone subcommand.
+- For rendering changes, run `cargo xtask test`, inspect relevant pixel snapshots, then run verify. M-1 has only harness self-tests with generated images; do not claim real rendering was verified.
+- For performance changes, run `cargo xtask bench` or `cargo xtask verify --full`; ordinary verify skips benchmarks. See the [benchmark conventions](../../../docs/conventions/testing-performance.md) for measurement requirements.
+- For environment issues, run `cargo xtask doctor`. Report installation commands for missing tools; do not install automatically. For arguments, use `cargo xtask --help` or `cargo xtask help <subcommand>`.
 
-## 读取结果
+## Read results
 
-每次调用覆盖 `target/xtask/report.json`，下一次运行前保留需报告的结果。读取 `checks` 内的 `name`、`status`、`duration_ms`、`failure_summary`、`artifacts`，按路径查看 `target/xtask/<检查名>.log`。`--json` 使 xtask 的 stdout 仅输出 JSON。
+Each invocation overwrites `target/xtask/report.json`; preserve results needed for reporting before the next run. Read each check's `name`, `status`, `duration_ms`, `failure_summary`, and `artifacts`, then inspect `target/xtask/<check-name>.log` as needed. `--json` restricts xtask stdout to JSON.
 
-退出码：0 全部通过；1 检查失败；2 环境缺失、参数或 xtask 自身错误（优先于 1）。doctor 失败时 verify 提前返回，其他检查失败仍继续汇总。bench 详情在 `performance` 和 `bench-results.json`，原始测量在 `bench-1.log` 至 `bench-3.log`。
+Exit codes: 0 for success; 1 for failed checks; 2 for environment, argument, or xtask errors (takes precedence over 1). verify returns early if doctor fails; other failures are aggregated. Benchmark details are in `performance` and `bench-results.json`, with raw measurements in `bench-1.log` through `bench-3.log`.
 
-## 快照失败
+## Snapshot failures
 
-1. 运行 `cargo xtask snapshot --review`，读取原因与产物路径。
-2. 向人展示 `actual.png` 与 `diff.png`，说明差异；基准缺失也需要确认。
-3. 非预期变化先修复代码；只有人明确确认后才运行 `cargo xtask snapshot --accept <name>`，同名时用 `<crate>/<name>`。`--accept all` 需要确认全部待处理项。
-4. 重跑测试与 verify，审查基准变更。详见[像素快照公约](../../../docs/conventions/testing-snapshots.md)。
+1. Run `cargo xtask snapshot --review`; read the reasons and artifact paths.
+2. Show the human `actual.png` and `diff.png` and explain the differences. A missing baseline also requires confirmation.
+3. Fix unintended changes first. Run `cargo xtask snapshot --accept <name>` only after explicit human confirmation; use `<crate>/<name>` for duplicate names. `--accept all` requires confirmation of every pending item.
+4. Rerun tests and verify, then review baseline changes. See the [pixel snapshot conventions](../../../docs/conventions/testing-snapshots.md).
 
-## 性能回归
+## Performance regressions
 
-先排查代码、基准输入、机器负载与工具链差异。只有人确认是预期变化才运行 `cargo xtask bench --record`，随后运行 `cargo xtask bench` 确认可复现并审查基线。首次缺少本机基线也须人确认。不得用 accept 或 record 掩盖失败。
+First investigate code, benchmark inputs, machine load, and toolchain differences. Run `cargo xtask bench --record` only after the human confirms the change is expected; then run `cargo xtask bench` to confirm reproducibility and review the baseline. A missing initial baseline also requires human confirmation. Never use accept or record to hide failures.
 
-报告实际命令、退出码、失败原因与未验证部分，不把 pending 指标写成通过。
+Report the actual commands, exit codes, failure reasons, and unverified areas. Do not report pending metrics as passing.

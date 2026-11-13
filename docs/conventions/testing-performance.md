@@ -1,49 +1,49 @@
-# 基准与性能基线
+# Benchmarks and performance baselines
 
-`cargo xtask bench` 是 workspace 的性能验证入口。默认 `cargo xtask verify` 不运行基准；`cargo xtask verify --full` 在普通验证之后追加 bench，前面的检查失败也继续汇总（doctor 环境检查失败仍提前返回）。仅使用 Rust stable 1.97、edition 2024，不需要 nightly。
+`cargo xtask bench` is the workspace performance verification entry point. Ordinary `cargo xtask verify` skips benchmarks; `cargo xtask verify --full` adds bench after ordinary checks and continues aggregating even if earlier checks fail (doctor environment failures still return early). Use Rust stable 1.97 and edition 2024 only; nightly is unnecessary.
 
-## 编写基准
+## Writing benchmarks
 
-默认使用 [Divan 0.1.21](https://github.com/nvzqz/divan)，该项目持续维护，许可证 MIT OR Apache-2.0，MSRV 为 1.80。本仓库精确固定版本，升级时必须重新验证输出解析。新增传递依赖主要是 divan-macros、condtype、regex-lite、terminal_size 及其系统依赖；许可证、安全公告与重复版本由 `cargo xtask deps` 审查。
+The default is [Divan 0.1.21](https://github.com/nvzqz/divan), a maintained project licensed MIT OR Apache-2.0 with MSRV 1.80. This repository pins the exact version; upgrades must revalidate output parsing. Added transitive dependencies mainly include divan-macros, condtype, regex-lite, terminal_size, and their system dependencies. `cargo xtask deps` reviews licenses, advisories, and duplicate versions.
 
-依赖版本仅在根 `[workspace.dependencies]` 定义，各 crate 在 dev-dependencies 中继承 `divan.workspace = true`。按 ADR-0021，workspace 示例源码在根 `benches/compare.rs`，由 `oxiview-testing` 的 `[[bench]]` 指定路径并设置 `harness = false`。新增 target 也遵循此约定；不要另建框架 crate。
+Define versions only in root `[workspace.dependencies]`; crates inherit `divan.workspace = true` in dev-dependencies. Under ADR-0021, workspace example source lives in root `benches/compare.rs`, referenced by the `oxiview-testing` `[[bench]]` target with `harness = false`. Follow this convention for new targets; do not create another framework crate.
 
-示例测量 S4 的 `compare`：256×256 与 1024×1024 的相同渐变 RGBA8 图像，包含逐像素比较及差异图分配，输入图像构造在计时之外。通过 black_box 保留真实计算，结果交给 Divan 消费。基准中可使用 expect，库代码仍禁止 unwrap/expect/panic。
+The example measures S4 `compare` on identical 256×256 and 1024×1024 gradient RGBA8 images, including per-pixel comparison and diff-image allocation. Image construction is outside the timed region. Use black_box to preserve real computation and let Divan consume the result. Benchmarks may use expect; library code still prohibits unwrap/expect/panic.
 
-## 测量与解析
+## Measurement and parsing
 
-xtask 顺序执行三次 `cargo bench --workspace --benches --locked`，使用优化后的 bench profile。示例每轮 100 个样本、每样本 10 次迭代；每轮读取 Divan 的 median，再取三轮中位数作为最终值（统一 ns）。这不是置信区间或统计显著性检验；运行时应保持供电、散热、编译配置与后台负载稳定，不并行运行其他性能测试。
+xtask runs `cargo bench --workspace --benches --locked` sequentially three times using the optimized bench profile. The example uses 100 samples per run and 10 iterations per sample. Read Divan's median from each run, then take the median of those three values as the final result in ns. This is not a confidence interval or statistical significance test. Keep power, cooling, build configuration, and background load stable; do not run other performance tests concurrently.
 
-Divan 当前提供终端统计表。解析器校验表头与列数，恢复树状名称为 `target/函数/参数`，支持 ps/ns/µs/μs/us/ms/s；要求有限正数、非零采样数，拒绝重复指标、空输出和三轮指标集合不一致。清除子进程继承的 `DIVAN_*` 覆盖项，避免过滤或 test 模式改变测量。新增基准使用不含空白的名称，不启用计数器附加行或自定义输出。格式变更必须修改解析器及测试，不能把解析失败当成通过。标准 libtest 的零基准输出忽略。
+Divan currently emits terminal statistics tables. The parser validates headers and column counts, reconstructs tree names as `target/function/argument`, and supports ps/ns/µs/μs/us/ms/s. It requires finite positive values and nonzero sample counts, rejecting duplicate metrics, empty output, and inconsistent metric sets across runs. Clear inherited `DIVAN_*` overrides so filtering or test mode cannot alter measurement. New benchmarks use whitespace-free names without counter rows or custom output. Format changes require parser and test updates; parsing failure must never count as success. Standard libtest output with zero benchmarks is ignored.
 
-报告写入 `target/xtask/report.json`，其中 `performance.metrics` 包含各项当前值、基线值、状态与阈值，硬指标显示 `pending`；`bench-results.json` 是同一详细数据的独立产物。`bench.log` 保存判定摘要，`bench-1.log` 至 `bench-3.log` 保存原始 stdout/stderr。每次 bench 先清理这些旧产物，避免失败时引用过期测量；`--json` 只向 stdout 打印报告。
+Reports go to `target/xtask/report.json`. `performance.metrics` includes each current value, baseline, status, and threshold; hard-target metrics show `pending`. `bench-results.json` is a standalone artifact with the same details. `bench.log` records the decision summary; `bench-1.log` through `bench-3.log` preserve raw stdout/stderr. Every bench run first removes these old artifacts to avoid referencing stale measurements after failure. `--json` prints only the report to stdout.
 
-## 记录与更新
+## Recording and updating
 
-1. 关闭重负载程序，确认当前代码和基准输入符合预期。
-2. **必须由人确认后**才执行 `cargo xtask bench --record`。命令会明确提示创建或覆盖 `perf/baselines/<machine-id>.json`，该文件需要审查并提交。默认 bench 和 verify 永不写基线。
-3. 紧接着运行 `cargo xtask bench`，确认测量可复现；出现回归应先排查代码和环境，不要通过反复 record 隐藏失败。
-4. 更新已有基线保留各指标的 `regression_percent`（默认 10，可逐项覆盖为 0–100），更新数值、机器描述和记录时间。已记录指标消失时即使 record 也失败，删除或重命名指标需要人工审查基线变更。
+1. Close heavy workloads and confirm the current code and benchmark inputs are as intended.
+2. Run `cargo xtask bench --record` **only after human confirmation**. The command explicitly reports creation or replacement of `perf/baselines/<machine-id>.json`, which must be reviewed and committed. Default bench and verify never write baselines.
+3. Immediately run `cargo xtask bench` to confirm reproducibility. Investigate code and environment on regression; do not repeatedly record to hide failures.
+4. Updating a baseline preserves each metric's `regression_percent` (default 10, individually configurable from 0–100) while updating values, machine description, and recording time. Missing recorded metrics fail even with record. Deleting or renaming metrics requires human review of baseline changes.
 
-机器标识使用架构、型号、CPU 名称、内存字节数的固定 FNV-1a 64 位哈希，附操作系统名称。macOS 读取 `hw.model`、`machdep.cpu.brand_string`、`hw.memsize`，沙箱拒绝时使用 `system_profiler SPHardwareDataType -detailLevel mini -json` 的对应字段（mini 排除序列号和 UUID）；Windows 使用 CIM 型号/CPU/物理内存；Linux 使用 DMI 型号、`/proc/cpuinfo`、`/proc/meminfo`。不读取序列号、用户名或主机名。操作系统版本与 rustc 版本记录在描述中，不参与哈希，重复运行得到同一 ID。
+The machine identifier uses a fixed FNV-1a 64-bit hash of architecture, model, CPU name, and memory bytes, prefixed with the operating system. macOS reads `hw.model`, `machdep.cpu.brand_string`, and `hw.memsize`; if sandboxing denies access, it uses corresponding fields from `system_profiler SPHardwareDataType -detailLevel mini -json` (mini excludes serial numbers and UUIDs). Windows uses CIM model/CPU/physical memory; Linux uses the DMI model, `/proc/cpuinfo`, and `/proc/meminfo`. It reads no serial numbers, usernames, or hostnames. OS and rustc versions are recorded in the description but excluded from the hash, so repeated runs yield the same ID.
 
-硬件配置相同的机器会共享标识；不使用设备唯一隐私标识就无法保证区分它们。内存升级会生成新 ID；Linux 的 MemTotal 是内核可用内存，内核/启动配置变化也可能生成新 ID。不支持的探测环境明确报错，不退化为 unknown ID。Windows/Linux 实现尚需在对应原生平台实测。
+Machines with identical hardware configurations share an identifier; distinguishing them cannot be guaranteed without unique private device identifiers. Memory upgrades create a new ID. Linux MemTotal is kernel-available memory, so kernel/boot configuration changes may also change the ID. Unsupported probing environments return explicit errors instead of falling back to an unknown ID. Windows/Linux implementations still need testing on their native platforms.
 
-文件使用 schema_version=1，时间为 UTC Unix 秒，指标记录 value、unit、direction（lower 越小越好、higher 越大越好）、regression_percent、target。本步骤的微基准均为 lower；硬指标 value=null 表示未测量，不等于零。
+Files use schema_version=1 and UTC Unix seconds. Metrics record value, unit, direction (lower is better or higher is better), regression_percent, and target. This step's microbenchmarks all use lower; hard-target value=null means unmeasured, not zero.
 
-## 判定规则
+## Decision rules
 
-- lower：当前值减基线值大于 `基线值 × 阈值 / 100` 才失败；higher 使用基线值减当前值。恰好等于阈值通过，改善通过；基线为零时不允许向坏方向增加。
-- 本机无基线、新指标无基线或已记录指标未测量：失败，退出码 1。无基线时提示人工确认后使用 `--record`，避免把未经比较的结果视作已验证。
-- 回归及基准子进程非零退出：失败，退出码 1。环境、文件或解析错误：退出码 2，与既有 xtask 约定一致。
-- 其他机器基线只在日志中显示原始内容，不参与校验和判定。当前机器的系统与工具链描述也显示在日志中；跨系统/工具链更新应人工评估是否重新记录。
+- lower: fail only if current minus baseline exceeds `baseline × threshold / 100`; higher uses baseline minus current. Exactly meeting the threshold passes, as do improvements. A zero baseline allows no change in the worse direction.
+- No baseline for this machine, a new metric without a baseline, or an unmeasured recorded metric: fail with exit code 1. Missing baselines prompt use of `--record` after human confirmation, avoiding claims of verification without comparison.
+- Regressions and nonzero benchmark subprocess exits: fail with exit code 1. Environment, file, or parsing errors use exit code 2, matching xtask conventions.
+- Other machines' baselines are shown as raw log content only, without validation or comparison. Current system and toolchain descriptions also appear in the log; a human should assess whether to record again after system/toolchain changes.
 
-## 硬指标接入计划
+## Hard-target integration plan
 
-| 指标 | 目标 | 当前状态 | 接入时机 |
+| Metric | Target | Current status | Integration milestone |
 | --- | --- | --- | --- |
-| `input_to_pixel_ms` | 8.0 ms | pending | M1 接入输入到呈现的真实测量 |
-| `idle_cpu_percent` | 0.0 % | pending | M1 接入空闲帧策略及 CPU 测量 |
-| `list_100k_scroll_dropped_frames` | 0 frames | pending | M7 接入 10 万行列表滚动测量 |
+| `input_to_pixel_ms` | 8.0 ms | pending | M1 adds real input-to-presentation measurement |
+| `idle_cpu_percent` | 0.0 % | pending | M1 adds idle frame policy and CPU measurement |
+| `list_100k_scroll_dropped_frames` | 0 frames | pending | M7 adds 100,000-row list scrolling measurement |
 
-三个指标仅预留目标，不伪造测量、不参与本步骤的通过/失败判定。接入时必须同时增加真实测量源、单位与方向校验、硬目标判定及对应自测，再升级基线协议；当前协议拒绝把它们手工填成已测量值。这里不实现窗口、渲染、帧策略或控件功能。
+These three metrics reserve targets only; they neither fabricate measurements nor affect this step's pass/fail result. Integration must add real measurement sources, unit and direction validation, hard-target checks, and corresponding self-tests together, then upgrade the baseline protocol. The current protocol rejects manually populated measured values for them. This step implements no windows, rendering, frame policies, or widgets.

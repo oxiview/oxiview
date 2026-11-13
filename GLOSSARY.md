@@ -1,152 +1,152 @@
 # oxiview
 
-oxiview 是只面向原生桌面平台的 Rust 自绘 UI 框架，控件从布局到像素全部由框架自行绘制。
+oxiview is a self-drawn Rust UI framework exclusively for native desktop platforms. The framework handles every widget from layout to pixels.
 
 ## Language
 
-**自绘（Self-drawn）**：
-框架只向操作系统申请窗口表面，所有控件的布局与绘制都由框架完成，不使用系统原生控件。
-_Avoid_: 原生控件、自渲染
+**Self-drawn**:
+The framework requests only a window surface from the operating system. It handles all widget layout and painting without using native system widgets.
+_Avoid_: native widgets, self-rendering
 
-**原生平台（Native platform）**：
-macOS、Windows、Linux 三个桌面操作系统，直接通过各自的系统 API 对接，不经过任何 Web 技术。
-_Avoid_: 跨端（不加限定时会被误解为包含 Web/移动端）
+**Native platform**:
+The macOS, Windows, and Linux desktop operating systems, accessed directly through their system APIs without any Web technology.
+_Avoid_: cross-platform (without qualification, it may imply Web or mobile support)
 
-**自有风格（House style）**：
-框架默认提供、三端外观一致的视觉风格，可通过主题替换或自定义。
-_Avoid_: 原生观感、默认皮肤
+**House style**:
+The framework's default visual style, consistent across all three platforms and replaceable or customizable through themes.
+_Avoid_: native look and feel, default skin
 
-## 平台与线程
+## Platforms and threads
 
-**主线程（Main thread）**：
-进程启动时的系统线程，只负责接收系统事件和调用必须在其上执行的系统 API，不运行 UI 逻辑。
-_Avoid_: UI 线程
+**Main thread**:
+The system thread created at process startup. It only receives system events and calls system APIs that require it; it does not run UI logic.
+_Avoid_: UI thread
 
-**窗口线程（Window thread）**：
-运行一个或多个窗口的状态、布局、绘制与呈现的线程。默认每个窗口一个。
-_Avoid_: 渲染线程、UI 线程
+**Window thread**:
+A thread running state, layout, painting, and presentation for one or more windows. The default is one thread per window.
+_Avoid_: render thread, UI thread
 
-**共享线程模式（Shared-thread mode）**：
-多个窗口被放在同一个窗口线程上运行的配置，同线程窗口之间可以直接共享状态。
+**Shared-thread mode**:
+A configuration in which multiple windows run on the same window thread and can share state directly.
 
-**能力（Capability）**：
-平台层暴露的一项系统服务（如菜单、托盘、剪贴板），应用可在运行时查询当前平台是否支持。
-_Avoid_: 插件、特性
+**Capability**:
+A system service exposed by the platform layer, such as menus, the system tray, or the clipboard. Applications can query its availability at runtime.
+_Avoid_: plugin, feature
 
-## 帧与响应式
+## Frames and reactivity
 
-**帧策略（Frame policy）**：
-窗口决定何时产出新帧的规则，分为按需、窗口级持续、图层级持续三种。
-_Avoid_: 渲染模式、刷新模式
+**Frame policy**:
+The rule determining when a window produces a new frame: on-demand, continuous at window level, or continuous at layer level.
+_Avoid_: rendering mode, refresh mode
 
-**按需渲染（On-demand rendering）**：
-只在状态失效、动画或系统要求时才产出新帧，空闲时不运行帧循环。
-_Avoid_: 懒渲染、被动渲染
+**On-demand rendering**:
+Producing frames only for invalidated state, animation, or system requests, with no frame loop while idle.
+_Avoid_: lazy rendering, passive rendering
 
-**信号（Signal）**：
-可被依赖追踪的响应式值，变化时直接通知依赖它的计算和节点属性。
-_Avoid_: State、Observable、Atom
+**Signal**:
+A reactive value whose dependencies can be tracked. Changes directly notify dependent computations and node properties.
+_Avoid_: State, Observable, Atom
 
-**作用域（Scope）**：
-信号与副作用的所有者，销毁时连带释放其拥有的全部响应式资源。
-_Avoid_: Owner、Context
+**Scope**:
+The owner of signals and effects. Destroying it releases all reactive resources it owns.
+_Avoid_: Owner, Context
 
-**结构协调（Structural reconciliation）**：
-条件或列表等视图结构变化时，按 key 增删、移动节点的过程，是框架中唯一会改变树形状的更新路径。
-_Avoid_: diff、重渲染
+**Structural reconciliation**:
+Adding, removing, and moving nodes by key when view structure changes, such as in conditionals or lists. This is the framework's only update path that changes tree shape.
+_Avoid_: diff, re-render
 
-## 组件与节点
+## Components and nodes
 
-**组件（Component）**：
-接收 props、返回视图的函数，在挂载时只执行一次。
-_Avoid_: Widget（专指底层可绘制节点类型时才用）、View 函数
+**Component**:
+A function that receives props and returns a view, executed only once at mount time.
+_Avoid_: Widget (reserved for low-level drawable node types), View function
 
-**Props**：
-组件的输入参数结构体。
+**Props**:
+The input parameter struct of a component.
 
-**节点（Node）**：
-保留树中的一个元素，带有样式、布局结果和绘制内容，由 `NodeId` 标识。
-_Avoid_: Element、RenderObject
+**Node**:
+An element in the retained tree with style, layout results, and painting content, identified by `NodeId`.
+_Avoid_: Element, RenderObject
 
-**布局边界（Layout boundary）**：
-尺寸不依赖其内容的节点，其子树的重排不会向外传播。
+**Layout boundary**:
+A node whose size does not depend on its content, preventing layout changes in its subtree from propagating outward.
 _Avoid_: relayout boundary
 
-**重绘边界（Repaint boundary）**：
-拥有独立合成图层的节点，其子树的重绘不影响图层之外的内容。
-_Avoid_: layer（未明确时）
+**Repaint boundary**:
+A node with an independent compositing layer, so repainting its subtree does not affect content outside the layer.
+_Avoid_: layer (without qualification)
 
-## 样式与布局
+## Styling and layout
 
-**设计 Token（Design token）**：
-主题中命名的基础视觉值，如颜色、间距、圆角、字号。
-_Avoid_: 变量、主题色
+**Design token**:
+A named basic visual value in a theme, such as a color, spacing, corner radius, or font size.
+_Avoid_: variable, theme color
 
-**主题（Theme）**：
-一组 Token 加上主题规则，决定控件的默认外观。
-_Avoid_: 皮肤、样式表
+**Theme**:
+A set of tokens and theme rules that determines the default appearance of widgets.
+_Avoid_: skin, stylesheet
 
-**主题规则（Theme rule）**：
-按“控件类型”或“控件类型 + 状态”为控件设定默认样式的条目，不支持任意选择器与层叠。
-_Avoid_: 选择器、CSS 规则
+**Theme rule**:
+An entry setting default styles by widget type or widget type plus state. It does not support arbitrary selectors or cascading.
+_Avoid_: selector, CSS rule
 
-**状态变体（State variant）**：
-节点在 hover、pressed、focused、disabled 等交互状态下附加的样式覆盖。
-_Avoid_: 伪类
+**State variant**:
+An additional style override for a node's interaction state, such as hover, pressed, focused, or disabled.
+_Avoid_: pseudo-class
 
-**布局协议（Layout protocol）**：
-框架定义的节点测量与定位接口，具体布局算法作为它的实现插入。
-_Avoid_: 布局引擎（专指某个实现时才用）
+**Layout protocol**:
+The framework-defined interface for node measurement and positioning, implemented by specific layout algorithms.
+_Avoid_: layout engine (reserved for a specific implementation)
 
-## 文本与输入
+## Text and input
 
-**字形图集（Glyph atlas）**：
-存放已栅格化小字号字形的 GPU 纹理缓存。
-_Avoid_: 字体纹理、glyph cache
+**Glyph atlas**:
+A GPU texture cache of rasterized glyphs at small font sizes.
+_Avoid_: font texture, glyph cache
 
-**编辑核心（Editing core）**：
-框架提供的可编辑文本模型，负责光标、选区、IME 组合态与撤销，所有输入类控件都建在它上面。
-_Avoid_: 文本框、TextInput（那是控件）
+**Editing core**:
+The framework's editable text model, responsible for cursors, selections, IME composition, and undo. All input widgets build on it.
+_Avoid_: text box, TextInput (these are widgets)
 
-**预编辑（Preedit）**：
-IME 尚未提交的组合中文本，内联显示在光标处。
-_Avoid_: composition、候选文字
+**Preedit**:
+Uncommitted IME composition text displayed inline at the cursor.
+_Avoid_: composition, candidate text
 
-**Action**：
-命名的、与按键无关的用户命令，可由快捷键、菜单或代码触发。
-_Avoid_: Command（避免与平台 Cmd 键混淆）、快捷键
+**Action**:
+A named user command independent of keys, triggered by shortcuts, menus, or code.
+_Avoid_: Command (to avoid confusion with the platform Cmd key), shortcut
 
-**Keymap**：
-按焦点上下文分层，把按键序列映射到 Action 的配置。
-_Avoid_: 快捷键表、keybinding
+**Keymap**:
+A configuration mapping key sequences to Actions, layered by focus context.
+_Avoid_: shortcut table, keybinding
 
-## 渲染与合成
+## Rendering and compositing
 
-**Scene**：
-一帧的绘制指令集合，是节点树与渲染后端之间唯一的接口。
-_Avoid_: Display List、渲染命令
+**Scene**:
+The set of painting instructions for one frame, serving as the sole interface between the node tree and rendering backends.
+_Avoid_: Display List, rendering commands
 
-**SDF 快路径（SDF fast path）**：
-在着色器中解析绘制圆角矩形、边框、阴影等常见 UI 图元的专用渲染路径。
+**SDF fast path**:
+A dedicated rendering path that analytically draws common UI primitives, such as rounded rectangles, borders, and shadows, in shaders.
 
-**合成图层（Compositing layer）**：
-可独立更新、再与其他图层合成的绘制单元，外部纹理内容也以图层形式接入。
-_Avoid_: Layer（未明确时）、surface
+**Compositing layer**:
+A painting unit that can update independently and then compose with other layers. External textures also enter as layers.
+_Avoid_: Layer (without qualification), surface
 
-**原生子窗口（Native child view）**：
-嵌入框架窗口中的系统原生视图，始终位于自绘内容之上。
-_Avoid_: 原生控件、overlay
+**Native child view**:
+A native system view embedded in a framework window, always above self-drawn content.
+_Avoid_: native widget, overlay
 
-## 工程
+## Engineering
 
-**无头平台后端（Headless platform backend）**：
-不连接真实窗口系统、模拟窗口与输入的平台实现，是平台接口的第二个实现，用于测试与事件回放。
-_Avoid_: mock 平台、假后端
+**Headless platform backend**:
+A platform implementation that simulates windows and input without connecting to a real window system. It is the platform interface's second implementation, used for testing and event replay.
+_Avoid_: mock platform, fake backend
 
-**里程碑（Milestone）**：
-路线图中交付一个可运行演示、测试和指标的阶段，编号为 M-1 至 M15。
-_Avoid_: 阶段、版本
+**Milestone**:
+A roadmap stage delivering a runnable demo, tests, and metrics, numbered M-1 through M15.
+_Avoid_: phase, version
 
-**组装根（Composition root）**：
-唯一能同时看到所有端口与具体适配器、并负责把它们接起来的 crate（`oxiview-app`）。
-_Avoid_: runtime、main crate
+**Composition root**:
+The only crate (`oxiview-app`) that can access all ports and concrete adapters and is responsible for wiring them together.
+_Avoid_: runtime, main crate

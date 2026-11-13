@@ -1,10 +1,10 @@
-//! 统一检查抽象与子进程执行。
+//! Common check abstraction and subprocess execution.
 
 use std::{path::Path, process::Command, time::Instant};
 
 use crate::report::{CheckResult, Status};
 
-/// 新检查实现此接口，由统一执行器计时、记录日志并分类错误。
+/// Checks implement this interface; the shared executor records timing, logs, and error categories.
 pub(crate) trait Check {
     fn name(&self) -> &str;
     fn run(&self, root: &Path) -> (Status, String);
@@ -35,7 +35,7 @@ impl Check for CommandCheck {
             Err(error) => {
                 return (
                     Status::Error,
-                    format!("无法执行 {}：{error}\n{}", self.program, self.remedy),
+                    format!("Cannot execute {}: {error}\n{}", self.program, self.remedy),
                 );
             }
         };
@@ -46,13 +46,13 @@ impl Check for CommandCheck {
         {
             Status::Pass
         } else if self.environment || output.status.code().is_none() {
-            log.push_str(&format!("\n环境检查失败：{}\n", self.remedy));
+            log.push_str(&format!("\nEnvironment check failed: {}\n", self.remedy));
             Status::Error
         } else {
             Status::Fail
         };
         if status != Status::Pass {
-            log.push_str(&format!("\n进程状态：{}\n", output.status));
+            log.push_str(&format!("\nProcess status: {}\n", output.status));
         }
         (status, log)
     }
@@ -74,7 +74,7 @@ pub(crate) fn execute(check: &dyn Check, root: &Path) -> CheckResult {
     let start = Instant::now();
     let (mut status, mut log) = check.run(root);
     if check.name() == "test" && status != Status::Pass && crate::snapshot::has_pending(root) {
-        log.push_str("\n有待处理像素快照，请运行 cargo xtask snapshot --review。\n");
+        log.push_str("\nPending pixel snapshots; run cargo xtask snapshot --review.\n");
     }
     let path = format!("target/xtask/{}.log", check.name());
     let mut artifacts = Vec::new();
@@ -82,7 +82,7 @@ pub(crate) fn execute(check: &dyn Check, root: &Path) -> CheckResult {
         Ok(()) => artifacts.push(path),
         Err(error) => {
             status = Status::Error;
-            log.push_str(&format!("\n无法写入日志：{error}"));
+            log.push_str(&format!("\nCannot write log: {error}"));
         }
     }
     if check.name() == "bench" {

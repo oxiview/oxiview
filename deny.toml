@@ -1,14 +1,14 @@
-# 默认检查所有目标平台与 feature 的依赖。
+# Check dependencies for all target platforms and features by default.
 [graph]
 all-features = true
 
 [advisories]
-# 仓库内缓存避免依赖用户目录写权限；target 已忽略。
+# Cache inside the repository to avoid requiring writable user directories; target is ignored.
 db-path = "target/xtask/advisory-dbs"
 db-urls = ["https://github.com/RustSec/advisory-db"]
 
 [licenses]
-# 未列出的许可证（包括 copyleft）默认拒绝；双许可证可选择宽松分支。
+# Reject unlisted licenses, including copyleft; dual licenses may select a permissive branch.
 allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
 
 [bans]

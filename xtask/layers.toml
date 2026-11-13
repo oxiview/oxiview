@@ -1,93 +1,93 @@
-# 依赖方向规则的唯一事实来源；允许列表适用于 normal / build / dev。
-# dev-only 依赖例外允许任意受检查 crate 在测试中使用测试工具。
-# 尚未创建的 crate 自动跳过；新增 workspace 成员必须登记。
+# Single source of truth for dependency direction; allowlists apply to normal / build / dev.
+# The dev-only exception lets any checked crate use test tools in tests.
+# Skip crates not yet created; new workspace members must be registered.
 exempt = ["xtask"]
 forbidden = ["xtask"]
 dev-only = ["oxiview-testing"]
 
 [crates.oxiview]
-context = "入口"
+context = "facade"
 role = "facade"
 allow = ["oxiview-app", "oxiview-widgets", "oxiview-macros"]
 
 [crates.oxiview-base]
-context = "共享基础"
+context = "shared-foundation"
 role = "foundation"
 allow = []
 
 [crates.oxiview-reactive]
-context = "响应式"
+context = "reactivity"
 role = "context"
 allow = ["oxiview-base"]
 
 [crates.oxiview-scene]
-context = "渲染"
+context = "rendering"
 role = "port"
 allow = ["oxiview-base"]
 
 [crates.oxiview-text]
-context = "文本"
+context = "text"
 role = "port"
 allow = ["oxiview-base"]
 
 [crates.oxiview-layout]
-context = "布局"
+context = "layout"
 role = "port"
 allow = ["oxiview-base"]
 
 [crates.oxiview-platform]
-context = "平台"
+context = "platform"
 role = "port"
 allow = ["oxiview-base"]
 
 [crates.oxiview-style]
-context = "样式"
+context = "styling"
 role = "port"
-# scene 仅用于颜色/几何类型；类型使用边界仍需代码审查。
+# Use scene only for color/geometry types; type boundaries still require code review.
 allow = ["oxiview-base", "oxiview-scene"]
 
 [crates.oxiview-render-cpu]
-context = "渲染"
+context = "rendering"
 role = "adapter"
 allow = ["oxiview-base", "oxiview-scene"]
 
 [crates.oxiview-render-wgpu]
-context = "渲染"
+context = "rendering"
 role = "adapter"
 allow = ["oxiview-base", "oxiview-scene"]
 
 [crates.oxiview-platform-macos]
-context = "平台"
+context = "platform"
 role = "adapter"
 allow = ["oxiview-base", "oxiview-platform"]
 
 [crates.oxiview-platform-headless]
-context = "平台"
+context = "platform"
 role = "adapter"
 allow = ["oxiview-base", "oxiview-platform"]
 
 [crates.oxiview-core]
-context = "UI 核心"
+context = "ui-core"
 role = "context"
 allow = ["oxiview-base", "oxiview-reactive", "oxiview-scene", "oxiview-text", "oxiview-layout", "oxiview-platform", "oxiview-style"]
 
 [crates.oxiview-widgets]
-context = "控件"
+context = "widgets"
 role = "context"
 allow = ["oxiview-base", "oxiview-reactive", "oxiview-scene", "oxiview-text", "oxiview-layout", "oxiview-platform", "oxiview-style", "oxiview-core"]
 
 [crates.oxiview-app]
-context = "应用组装"
+context = "application-composition"
 role = "composition-root"
 allow = ["oxiview-base", "oxiview-reactive", "oxiview-scene", "oxiview-text", "oxiview-layout", "oxiview-platform", "oxiview-style", "oxiview-core", "oxiview-render-cpu", "oxiview-render-wgpu", "oxiview-platform-macos", "oxiview-platform-headless"]
 
 [crates.oxiview-macros]
-context = "过程宏"
+context = "procedural-macros"
 role = "tooling"
 allow = []
 
 [crates.oxiview-testing]
-context = "测试"
+context = "testing"
 role = "tooling"
 allow = ["oxiview-base", "oxiview-scene"]
 

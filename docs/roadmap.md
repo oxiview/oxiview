@@ -1,34 +1,34 @@
-# 里程碑路线图
+# Milestone roadmap
 
-按从小到大的路径推进。每个里程碑都交付可运行的演示、测试和进入验证闭环的指标，不跨里程碑遗留半成品。详细计划按里程碑逐个展开，存放在 `docs/plans/`。
+Progress from small to large. Every milestone delivers a runnable demo, tests, and metrics integrated into verification, without carrying unfinished work across milestones. Detailed plans are developed one milestone at a time in `docs/plans/`.
 
-## 贯穿原则
+## Guiding principles
 
-1. **每个里程碑都可运行**：演示应用 + 测试 + 指标。
-2. **抽象要等第二个实现才定型**：Scene（CPU / wgpu）、平台（macOS / 无头，ADR-0018）、布局（Taffy / 测试替身）。只有一个实现的接口一律标为不稳定。
-3. **crate 分层与依赖方向从 M-1 起就固定**，由 `cargo xtask` 检查（ADR-0021）。
-6. **只有本地验证**：凡写到“进入 CI”的地方，都理解为“进入 `cargo xtask verify`”（ADR-0019）。
-4. **鲁棒性地基先行**：时钟、调度、随机数可注入；渲染路径不允许 panic；全链路 tracing；文本和输入代码做 fuzz；GPU 设备丢失时能恢复。
-5. **预留口不留空**：无障碍语义字段、持续渲染策略、共享线程模式等推迟实现的能力，从一开始就在类型上留出位置，并有测试守住。
+1. **Every milestone is runnable**: demo application + tests + metrics.
+2. **Finalize abstractions only after a second implementation**: Scene (CPU / wgpu), platform (macOS / headless, ADR-0018), layout (Taffy / test double). Every interface with only one implementation is marked unstable.
+3. **Crate layering and dependency direction are fixed from M-1**, enforced by `cargo xtask` (ADR-0021).
+4. **Local verification only**: interpret every reference to integration into CI as integration into `cargo xtask verify` (ADR-0019).
+5. **Build robustness first**: injectable clocks, scheduling, and randomness; no panics in rendering paths; end-to-end tracing; fuzz text and input code; recover from GPU device loss.
+6. **Reserve concrete extension points**: deferred capabilities such as accessibility semantics, continuous frame policies, and shared-thread mode have space in the types from the start, protected by tests.
 
-## 里程碑
+## Milestones
 
-| # | 名称 | 内容要点 | 相关 ADR |
+| # | Name | Key scope | Related ADRs |
 |---|---|---|---|
-| M-1 | [工程规范](plans/m-1-engineering-baseline.md) ✅ | **选型**：技术选型、设计选型、构建系统、目录结构约束（ADR 0019–0023）；**公约**：AGENTS.md（unsafe/panic/错误处理、API 稳定性与版本、依赖管理、提交与分支）；**技能包**：ADR 与术语表维护、脚手架（crate/控件/能力）、代码审查清单、验证；**测试 harness**：快照、基准、性能；**agent harness**：`cargo xtask` 自动验证闭环；workspace 骨架 + 依赖方向规则与检查 | 0001, 0019–0023 |
-| M0 | 地基 | workspace；Scene 抽象 + CPU 后端；无头渲染与快照测试；可注入的时钟、调度、随机数；tracing | 0012, 0016 |
-| M1 | 第一个窗口 | 平台接口；macOS 后端 + 无头平台后端；主线程/窗口线程分离；wgpu surface；按需帧调度与 vsync；SDF 快路径 | 0002, 0003, 0004, 0018 |
-| M2 | 节点树与布局 | arena 节点树；三级脏标记；布局协议 + Taffy；类型化样式；命中测试与指针事件 | 0007, 0008, 0009 |
-| M3 | 响应式与组件 | 信号、作用域、Show/For；Builder API；函数组件；本地执行器 + 后台线程池 | 0005, 0006 |
-| M4 | 静态文本 | Parley 文本栈；字形图集 + 矢量混合；富文本；DPI | 0010 |
-| M5 | 焦点、键盘与主题 | 焦点与 Tab 顺序；Action/Keymap；状态变体；token 与主题热更新；系统偏好信号 | 0008, 0011 |
-| M6 | 文本编辑 | 编辑核心；IME 预编辑；选区；撤销；fuzz | 0010, 0011 |
-| M7 | 基础控件与滚动 | 基础控件；滚动与惯性；虚拟列表和表格 | 0001 |
-| M8 | 动画 | 弹簧/缓动；可中断；合成层快路径；时间线编排 | 0015 |
-| M9 | 多窗口与系统集成 | 多窗口与共享线程模式；菜单、对话框、剪贴板、拖放；标题栏与材质 | 0003, 0017 |
-| M10 | 合成与外部内容 | 合成图层；窗口级/图层级持续渲染；3D 纹理；原生子窗口 | 0004, 0013 |
-| M11 | 开发工具 | Inspector；信号依赖图；代码热补丁；事件录制/回放 | 0016 |
-| M12 | 无障碍 | AccessKit 与 macOS 适配器 | 0014 |
-| M13 | 分发 | 打包、签名、自动更新；应用生命周期 | 0017 |
-| M14 | Windows 移植 | Win32 + D3D12；resize 模态循环；DPI；TSF；补齐无障碍与分发 | 0002, 0018 |
-| M15 | Linux 移植 | Wayland 优先、X11 兼容；补齐无障碍与分发；完整平台矩阵 | 0002, 0018 |
+| M-1 | [Engineering baseline](plans/m-1-engineering-baseline.md) ✅ | **Choices**: technology, design, build system, directory constraints (ADRs 0019–0023); **conventions**: AGENTS.md (unsafe/panic/errors, API stability and versions, dependencies, commits and branches); **skills**: ADR and glossary maintenance, scaffolding (crates/widgets/capabilities), review checklist, verification; **test harness**: snapshots, benchmarks, performance; **agent harness**: automated `cargo xtask` verification; workspace skeleton + dependency rules and checks | 0001, 0019–0023 |
+| M0 | Foundation | Workspace; Scene abstraction + CPU backend; headless rendering and snapshot tests; injectable clocks, scheduling, and randomness; tracing | 0012, 0016 |
+| M1 | First window | Platform interface; macOS + headless platform backends; main/window thread separation; wgpu surface; on-demand frame scheduling and vsync; SDF fast path | 0002, 0003, 0004, 0018 |
+| M2 | Node tree and layout | Arena node tree; three levels of dirty flags; layout protocol + Taffy; typed styles; hit testing and pointer events | 0007, 0008, 0009 |
+| M3 | Reactivity and components | Signals, scopes, Show/For; Builder API; function components; local executor + background thread pool | 0005, 0006 |
+| M4 | Static text | Parley text stack; hybrid glyph atlas and vectors; rich text; DPI | 0010 |
+| M5 | Focus, keyboard, and themes | Focus and Tab order; Action/Keymap; state variants; tokens and theme hot reload; system preference signals | 0008, 0011 |
+| M6 | Text editing | Editing core; IME preedit; selection; undo; fuzzing | 0010, 0011 |
+| M7 | Basic widgets and scrolling | Basic widgets; scrolling and inertia; virtual lists and tables | 0001 |
+| M8 | Animation | Springs/easing; interruption; compositing fast path; timeline orchestration | 0015 |
+| M9 | Multiple windows and system integration | Multiple windows and shared-thread mode; menus, dialogs, clipboard, drag and drop; title bars and materials | 0003, 0017 |
+| M10 | Compositing and external content | Compositing layers; continuous rendering at window/layer level; 3D textures; native child views | 0004, 0013 |
+| M11 | Developer tools | Inspector; signal dependency graph; code hot patching; event recording/replay | 0016 |
+| M12 | Accessibility | AccessKit and macOS adapter | 0014 |
+| M13 | Distribution | Packaging, signing, automatic updates; application lifecycle | 0017 |
+| M14 | Windows port | Win32 + D3D12; modal resize loop; DPI; TSF; complete accessibility and distribution | 0002, 0018 |
+| M15 | Linux port | Wayland first, X11 compatibility; complete accessibility and distribution; full platform matrix | 0002, 0018 |

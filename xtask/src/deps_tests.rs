@@ -1,4 +1,4 @@
-//! 独立临时 workspace 验证真实 Cargo 元数据，不访问网络。
+//! Isolated temporary workspaces verify real Cargo metadata without network access.
 
 use super::*;
 use std::{
@@ -14,13 +14,13 @@ impl Fixture {
     fn new(crates: &[(&str, &str)]) -> Self {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("仓库根");
+            .expect("repository root");
         let directory = root.join("target/xtask").join(format!(
             "deps-fixture-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&directory).expect("创建临时目录");
+        fs::create_dir_all(&directory).expect("create temporary directory");
         let fixture = Self(directory);
         let members: Vec<_> = crates.iter().map(|(name, _)| *name).collect();
         fs::write(
@@ -29,7 +29,7 @@ impl Fixture {
                 "[workspace]\nresolver = \"3\"\nmembers = {members:?}\nexclude = [\"external\"]\n"
             ),
         )
-        .expect("写入独立 workspace");
+        .expect("write isolated workspace");
         for (name, dependencies) in crates {
             fixture.package(name, name, dependencies);
         }
@@ -38,19 +38,23 @@ impl Fixture {
 
     fn package(&self, path: &str, name: &str, dependencies: &str) {
         let directory = self.0.join(path);
-        fs::create_dir_all(directory.join("src")).expect("创建 fixture crate");
-        fs::write(directory.join("src/lib.rs"), "//! 测试占位。\n").expect("写入 fixture 源码");
-        fs::write(directory.join("Cargo.toml"), format!("[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n{dependencies}\n")).expect("写入 fixture manifest");
+        fs::create_dir_all(directory.join("src")).expect("create fixture crate");
+        fs::write(directory.join("src/lib.rs"), "//! Test placeholder.\n")
+            .expect("write fixture source");
+        fs::write(directory.join("Cargo.toml"), format!("[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n{dependencies}\n")).expect("write fixture manifest");
     }
 
     fn errors(&self) -> Vec<String> {
         let rules = read_rules(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
-                .expect("仓库根"),
+                .expect("repository root"),
         )
-        .expect("读取规则");
-        violations(&metadata(&self.0).expect("读取真实 Cargo 元数据"), &rules)
+        .expect("read rules");
+        violations(
+            &metadata(&self.0).expect("read real Cargo metadata"),
+            &rules,
+        )
     }
 }
 
@@ -95,7 +99,7 @@ fn lower_layer_cannot_depend_on_upper_layer() {
     ]);
     let errors = fixture.errors();
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].contains("oxiview-base -> oxiview-core（normal"));
+    assert!(errors[0].contains("oxiview-base -> oxiview-core (normal"));
     assert!(errors[0].contains("allow"));
 }
 
@@ -110,7 +114,7 @@ fn adapter_cannot_depend_on_another_adapter() {
     ]);
     let errors = fixture.errors();
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].contains("oxiview-render-cpu -> oxiview-render-wgpu（build"));
+    assert!(errors[0].contains("oxiview-render-cpu -> oxiview-render-wgpu (build"));
 }
 
 #[test]
@@ -133,7 +137,7 @@ fn objc2_is_restricted_even_when_renamed_and_target_specific() {
 #[test]
 fn unregistered_workspace_member_is_rejected() {
     let fixture = Fixture::new(&[("oxiview-unknown", "")]);
-    assert!(fixture.errors()[0].contains("未在 layers.toml 登记"));
+    assert!(fixture.errors()[0].contains("not registered in layers.toml"));
 }
 
 #[test]
@@ -159,7 +163,7 @@ fn dev_dependencies_still_obey_direction() {
         ),
         ("oxiview-platform-headless", ""),
     ]);
-    assert!(fixture.errors()[0].contains("（dev"));
+    assert!(fixture.errors()[0].contains("(dev"));
 }
 
 #[test]

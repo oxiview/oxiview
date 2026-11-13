@@ -1,33 +1,33 @@
 ---
 name: scaffold
-description: 创建 oxiview crate 或规划控件、平台能力脚手架时使用，核对已登记上下文并调用 new-crate。
+description: Use when creating an oxiview crate or planning widget or platform capability scaffolding; check registered contexts and invoke new-crate.
 ---
 
-# 脚手架
+# Scaffolding
 
-## 新建 crate
+## Create a crate
 
-1. 确认本次里程碑已授权创建；阅读[架构](../../../docs/architecture.md)与 [layers.toml](../../../xtask/layers.toml) 中的 context、role、allow。
-2. crate 必须已登记；未登记先讨论限界上下文与依赖规则，不随意登记。名称为 `oxiview-*` 或对外入口 `oxiview`。
-3. 从仓库根运行 `cargo xtask new-crate <name> --context '<context>'`，context 使用规则中的精确值。未登记、context 不符、目录已存在均退出 2；命令不修改规则表、不覆盖目录。
-4. 核对仅生成 `crates/<name>/Cargo.toml` 和 `src/lib.rs`：继承 workspace package 字段（含 publish）和 lints，crate 级中文文档引用上下文与角色。通配 members 自动收录。
-5. 按当前任务需要添加依赖，遵循[依赖公约](../../../docs/conventions/dependencies.md)，版本统一在根 workspace.dependencies，各 crate 继承，不预填未来依赖或功能。
-6. 运行 `cargo xtask verify`，审查文件与 Cargo.lock。确需 unsafe 时遵循[安全边界](../../../docs/conventions/unsafe-panic-errors.md)，不预先放开 lint。
+1. Confirm creation is authorized for the current milestone. Read the [architecture](../../../docs/architecture.md) and the context, role, and allow fields in [layers.toml](../../../xtask/layers.toml).
+2. The crate must already be registered. If it is not, discuss bounded contexts and dependency rules before registering it. Use `oxiview-*` or the public facade name `oxiview`.
+3. Run `cargo xtask new-crate <name> --context '<context>'` from the repository root, using the exact context value from the rules. An unregistered name, mismatched context, or existing directory exits with 2. The command neither edits the rules nor overwrites directories.
+4. Check that only `crates/<name>/Cargo.toml` and `src/lib.rs` were generated: inherited workspace package fields (including publish) and lints, with English crate-level documentation naming the context and role. Wildcard members include the crate automatically.
+5. Add only dependencies needed for the current task, following the [dependency conventions](../../../docs/conventions/dependencies.md). Define versions in root workspace.dependencies and inherit them in crates; do not prefill future dependencies or functionality.
+6. Run `cargo xtask verify` and review files and Cargo.lock. If unsafe is necessary, follow the [safety boundaries](../../../docs/conventions/unsafe-panic-errors.md); do not relax lints in advance.
 
-## 控件检查清单
+## Widget checklist
 
-此处只规划，代码模板在 M7 补充，当前不生成控件实现。
+Planning only: code templates arrive in M7; do not generate widget implementations now.
 
-- 确认所属 crate 与依赖边界。
-- 预留节点语义字段与无障碍扩展点。
-- 列出 hover、pressed、focused、disabled 等适用状态变体。
-- 规划正常与边界状态的像素快照测试，遵循[快照公约](../../../docs/conventions/testing-snapshots.md)。
+- Confirm the owning crate and dependency boundaries.
+- Reserve node semantics fields and accessibility extension points.
+- List applicable state variants such as hover, pressed, focused, and disabled.
+- Plan pixel snapshot tests for normal and boundary states under the [snapshot conventions](../../../docs/conventions/testing-snapshots.md).
 
-## 平台能力检查清单
+## Platform capability checklist
 
-此处只规划，代码模板在 M9 补充，当前不生成能力实现。
+Planning only: code templates arrive in M9; do not generate capability implementations now.
 
-- 明确能力 trait 的自有类型边界与错误语义。
-- 规划 `capabilities()` 查询及不支持时的行为；这是后续接口要求，当前尚无实现。
-- 规划无头平台后端实现及测试。
-- 列出 macOS / Windows / Linux / 无头平台后端支持矩阵，区分支持、不支持与待实现。
+- Define the capability trait's owned-type boundaries and error semantics.
+- Plan `capabilities()` queries and behavior when unsupported; these are future interface requirements, not existing implementations.
+- Plan a headless platform backend implementation and tests.
+- List a macOS / Windows / Linux / headless platform backend support matrix, distinguishing supported, unsupported, and pending implementation.

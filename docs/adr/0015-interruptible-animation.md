@@ -2,11 +2,11 @@
 status: accepted
 ---
 
-# 动画：可中断的弹簧与缓动属性动画，transform / opacity 走合成层快路径
+# Animation: interruptible springs and easing, with a compositing fast path for transform / opacity
 
-任何样式属性都可以用**弹簧**或**缓动曲线**过渡。动画**可以随时中断**：新目标值到来时，从当前值和当前速度继续，不会跳变。只修改 transform / opacity 的动画走**合成层快路径**，不触发样式重算和重排，只更新图层参数。框架还提供时间线编排（并行、串行、错峰）和手势驱动（拖拽跟手，松手后以速度交给弹簧）。动画按 ADR-0004 的预测呈现时间戳采样，并遵循系统的“减少动画”偏好（ADR-0017）。
+Any style property can transition through **springs** or **easing curves**. Animations are **interruptible at any time**: new targets continue from the current value and velocity without jumps. Animations changing only transform / opacity use a **compositing fast path**, updating layer parameters without style recalculation or layout. The framework also provides timeline orchestration (parallel, sequential, staggered) and gesture-driven motion (tracking drags and handing release velocity to springs). Sample animations at ADR-0004's predicted presentation timestamp and respect the system reduced-motion preference (ADR-0017).
 
 ## Consequences
 
-- 状态变体切换（ADR-0008）默认带过渡动画，可以全局关闭。
-- 只要有动画在运行，窗口就处于“有活跃帧需求”状态，动画结束后必须及时回到空闲零帧，CI 中的空闲 CPU 指标要覆盖这一点。
+- State-variant transitions (ADR-0008) animate by default, with a global opt-out.
+- A running animation keeps the window in an active frame-demand state. Return promptly to zero idle frames when it ends; the idle CPU metric in CI must cover this.

@@ -1,4 +1,4 @@
-//! 快照待处理记录的审阅与显式接受，不加入 verify。
+//! Review and explicitly accept pending snapshots; not included in verify.
 
 use crate::{check::Check, report::Status};
 use serde::Deserialize;
@@ -57,17 +57,22 @@ fn directories(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(result)
 }
 
-// 拒绝符号链接目录，避免记录将 accept 重定向到调用方根目录之外。
+// Reject symlink directories so records cannot redirect acceptance outside the caller's root.
 fn validate_destination(root: &Path, relative: &Path) -> Result<PathBuf, String> {
     let mut path = root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(part) = component else {
-            return Err("快照路径必须是 workspace 内的普通相对路径".into());
+            return Err(
+                "Snapshot paths must be ordinary relative paths inside the workspace".into(),
+            );
         };
         path.push(part);
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(format!("快照路径不允许符号链接：{}", path.display()));
+                return Err(format!(
+                    "Snapshot paths must not contain symlinks: {}",
+                    path.display()
+                ));
             }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -88,18 +93,21 @@ fn pending_entries(root: &Path) -> Result<Vec<Entry>, String> {
                 Err(e) => return Err(e.to_string()),
             };
             let pending: Pending = serde_json::from_slice(&source)
-                .map_err(|e| format!("{}：{e}", directory.display()))?;
+                .map_err(|e| format!("{}: {e}", directory.display()))?;
             if !valid_name(&pending.name)
                 || !valid_name(&pending.crate_name)
                 || directory.file_name() != Some(pending.name.as_ref())
                 || crate_dir.file_name() != Some(pending.crate_name.as_ref())
             {
-                return Err(format!("快照名称与产物路径不一致：{}", directory.display()));
+                return Err(format!(
+                    "Snapshot name does not match artifact path: {}",
+                    directory.display()
+                ));
             }
             let crate_root = validate_destination(root, &pending.crate_root)?;
             if !crate_root.join("Cargo.toml").is_file() {
                 return Err(format!(
-                    "快照调用方缺少 Cargo.toml：{}",
+                    "Snapshot caller is missing Cargo.toml: {}",
                     crate_root.display()
                 ));
             }
@@ -138,17 +146,22 @@ fn process(root: &Path, accept: Option<&str>) -> Result<String, String> {
         .collect();
     if let Some(name) = accept {
         if selected.is_empty() {
-            return Err(format!("没有待处理快照：{name}"));
+            return Err(format!("No pending snapshot: {name}"));
         }
         if name != "all" && selected.len() > 1 {
-            return Err(format!("快照名称重复：{name}；请使用 <crate>/<name> 选择"));
+            return Err(format!(
+                "Duplicate snapshot name: {name}; select with <crate>/<name>"
+            ));
         }
-        // 写入前检查全部源文件，避免明显的损坏记录导致部分接受。
+        // Check all source files before writing to avoid partial acceptance from obviously corrupted records.
         for entry in &selected {
             let actual = entry.directory.join("actual.png");
             let meta = fs::symlink_metadata(&actual).map_err(|e| e.to_string())?;
             if !meta.file_type().is_file() {
-                return Err(format!("actual 必须是普通文件：{}", actual.display()));
+                return Err(format!(
+                    "actual must be a regular file: {}",
+                    actual.display()
+                ));
             }
         }
     }
@@ -156,12 +169,12 @@ fn process(root: &Path, accept: Option<&str>) -> Result<String, String> {
     for entry in selected {
         let item = &entry.pending;
         log.push_str(&format!(
-            "{}/{}：{}\n",
+            "{}/{}: {}\n",
             item.crate_name, item.name, item.reason
         ));
         if let Some(metrics) = &item.comparison {
             log.push_str(&format!(
-                "  通过={}，尺寸一致={}，差异像素={}，差异比例={:.6}，最大通道差={}\n",
+                "  passed={}, dimensions_equal={}, different_pixels={}, difference_ratio={:.6}, max_channel_difference={}\n",
                 metrics.passed,
                 metrics.dimensions_match,
                 metrics.diff_pixels,
@@ -169,10 +182,10 @@ fn process(root: &Path, accept: Option<&str>) -> Result<String, String> {
                 metrics.max_channel_diff
             ));
         } else {
-            log.push_str("  差异指标：无基准，无法比较\n");
+            log.push_str("  Difference metrics: no baseline available for comparison\n");
         }
         log.push_str(&format!(
-            "  基准：{}\n  actual：{}\n  diff：{}\n  pending：{}\n",
+            "  baseline: {}\n  actual: {}\n  diff: {}\n  pending: {}\n",
             entry.baseline.display(),
             entry.directory.join("actual.png").display(),
             entry.directory.join("diff.png").display(),
@@ -180,21 +193,26 @@ fn process(root: &Path, accept: Option<&str>) -> Result<String, String> {
         ));
         if accept.is_some() {
             let existed = entry.baseline.exists();
-            fs::create_dir_all(entry.baseline.parent().ok_or("基准路径无父目录")?)
-                .map_err(|e| format!("{log}快照接受失败：{e}"))?;
+            fs::create_dir_all(
+                entry
+                    .baseline
+                    .parent()
+                    .ok_or("Baseline path has no parent directory")?,
+            )
+            .map_err(|e| format!("{log}Snapshot acceptance failed: {e}"))?;
             fs::copy(entry.directory.join("actual.png"), &entry.baseline)
-                .map_err(|e| format!("{log}快照接受失败：{e}"))?;
+                .map_err(|e| format!("{log}Snapshot acceptance failed: {e}"))?;
             log.push_str(&format!(
-                "  {}基准文件：{}\n",
-                if existed { "已覆盖" } else { "已创建" },
+                "  {} baseline file: {}\n",
+                if existed { "Overwritten" } else { "Created" },
                 entry.baseline.display()
             ));
             fs::remove_file(entry.directory.join("pending.json"))
-                .map_err(|e| format!("{log}快照接受失败：{e}"))?;
+                .map_err(|e| format!("{log}Snapshot acceptance failed: {e}"))?;
         }
     }
     if log.is_empty() {
-        log.push_str("没有待处理快照。\n");
+        log.push_str("No pending snapshots.\n");
     }
     Ok(log)
 }

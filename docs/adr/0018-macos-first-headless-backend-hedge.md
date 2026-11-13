@@ -2,18 +2,18 @@
 status: accepted
 ---
 
-# 平台顺序：macOS 先行，Windows / Linux 最后移植，以无头平台后端对冲
+# Platform order: macOS first, Windows / Linux later, with a headless platform backend as a safeguard
 
-第一个平台后端是 macOS（AppKit + Metal）。在 macOS 上把功能做到完整（含多窗口、合成、开发工具、无障碍、分发）之后，再统一移植 Windows 和 Linux。这样上层功能能连续推进，不会被三端并行拖慢。
+The first platform backend is macOS (AppKit + Metal). Complete functionality on macOS, including multiple windows, compositing, developer tools, accessibility, and distribution, before porting to Windows and Linux. This keeps upper-layer progress continuous without the cost of parallel work on three platforms.
 
-单平台先行的风险是平台抽象被 macOS 的语义污染。对冲手段是从 M1 起同时维护一个**无头平台后端**，作为平台接口的第二个实现：它模拟窗口、输入事件、DPI 变化和 vsync，同时用于 CI 和事件回放（ADR-0016）。规则：平台接口的每个方法都必须能在无头后端上实现并被测试覆盖，否则视为接口带有平台偏见，需要修改。
+The risk is contaminating platform abstractions with macOS semantics. Mitigate it by maintaining a **headless platform backend** from M1 as the interface's second implementation. It simulates windows, input, DPI changes, and vsync, and supports CI and event replay (ADR-0016). Every platform-interface method must be implementable and tested on the headless backend; otherwise, treat it as platform-biased and revise it.
 
 ## Considered Options
 
-- **M1 同时做两个平台**：抽象定型最早，但上层功能推迟。
-- **第二个平台放在文本编辑之前**：能提前验证 IME 差异，但会打断连续的功能推进。
+- **Two platforms in M1**: validates abstractions earliest, but delays upper-layer features.
+- **A second platform before text editing**: validates IME differences earlier, but interrupts continuous feature development.
 
 ## Consequences
 
-- Windows（TSF 输入法、resize 模态循环、分数 DPI）和 Linux（Wayland 输入法协议、各合成器差异）的问题会集中在后期暴露，移植阶段要预留接口返工的空间。
-- 无障碍与分发在 M12/M13 只覆盖 macOS，三端适配并入移植里程碑。
+- Windows issues (TSF IME, modal resize loops, fractional DPI) and Linux issues (Wayland input protocols, compositor differences) emerge later. Reserve room for interface rework during ports.
+- Accessibility and distribution in M12/M13 cover only macOS; other platform adapters belong to the porting milestones.

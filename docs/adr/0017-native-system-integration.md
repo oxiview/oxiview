@@ -2,16 +2,16 @@
 status: accepted
 ---
 
-# 原生系统集成：标题栏/材质、系统偏好、应用生命周期、打包分发均由框架提供
+# Native integration: framework-provided title bars/materials, preferences, lifecycle, and distribution
 
-以下系统集成由框架以**能力**形式提供（ADR-0002 的 `capabilities()`），应用不必自己对接各平台：
+The framework exposes these integrations as **capabilities** through ADR-0002's `capabilities()`, avoiding per-platform work in applications:
 
-- **自绘标题栏与窗口材质**：自绘标题栏时向系统上报非客户区命中测试，保留 Windows 11 Snap Layouts、macOS 红绿灯按钮与全屏动画等行为；支持 Mica / Acrylic / vibrancy 等材质，渲染表面需支持透明。
-- **系统偏好信号**：暗色模式、强调色、高对比度、减少动画、文本缩放等，作为信号推送给主题与动画系统。
-- **应用生命周期**：文件关联、URL scheme、单实例、系统通知、登录自启。
-- **打包、签名与自动更新**：官方工具负责生成 .app / MSI·MSIX / AppImage·Flatpak，处理代码签名与 macOS 公证，并提供自动更新通道。
+- **Custom title bars and window materials**: report non-client hit testing for custom title bars, retaining Windows 11 Snap Layouts, macOS traffic-light buttons, full-screen animations, and similar behavior. Support Mica / Acrylic / vibrancy materials; rendering surfaces must support transparency.
+- **System preference signals**: dark mode, accent colors, high contrast, reduced motion, text scaling, and others feed the theme and animation systems as signals.
+- **Application lifecycle**: file associations, URL schemes, single-instance behavior, system notifications, and launch at login.
+- **Packaging, signing, and automatic updates**: official tools generate .app / MSI·MSIX / AppImage·Flatpak packages, handle code signing and macOS notarization, and provide update channels.
 
 ## Consequences
 
-- 这些能力扩大了框架的维护面，每一项都要有三端（Linux 再分 Wayland/X11）的测试与文档；某平台不支持的能力必须能被查询到，而不是静默失效。
-- 打包、签名与更新工具以独立 CLI 交付，不进入运行时依赖。
+- These capabilities expand maintenance scope. Each needs tests and documentation for all three platforms, with Wayland/X11 distinctions on Linux. Unsupported capabilities must be queryable instead of failing silently.
+- Packaging, signing, and update tools ship as independent CLIs, outside runtime dependencies.

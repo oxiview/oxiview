@@ -2,11 +2,11 @@
 status: accepted
 ---
 
-# 布局：自有布局协议 trait，Taffy 作为默认实现
+# Layout: an owned layout protocol trait with Taffy as the default implementation
 
-框架定义自己的**布局协议**：一个 trait，包含尺寸约束的输入、测量、定位，以及缓存和失效接口。默认实现基于 Taffy，提供 Flex、Grid、Block 布局；文本通过 measure 回调参与布局。框架在协议之上补充 Stack、绝对定位、虚拟列表和虚拟表格，并允许自定义布局。用协议隔离 Taffy，是为了在性能或语义不满足时（例如单遍约束布局、超大虚拟化场景）能整体或局部替换为自研实现，而不必改动控件代码。
+The framework defines its own **layout protocol**: a trait covering size constraints, measurement, positioning, caching, and invalidation. The default implementation uses Taffy for Flex, Grid, and Block layout, with text participating through measure callbacks. Above the protocol, the framework adds Stack, absolute positioning, virtual lists, and virtual tables, and permits custom layouts. Isolating Taffy allows full or partial replacement when performance or semantics are insufficient, such as single-pass constraint layout or very large virtualization, without changing widget code.
 
 ## Consequences
 
-- 控件只依赖布局协议，不能直接引用 Taffy 的类型。
-- 布局缓存与 ADR-0007 的 layout 脏标记、布局边界对接，协议必须暴露“这个节点的尺寸是否与内容无关”。
+- Widgets depend only on the layout protocol and cannot reference Taffy types directly.
+- Layout caching integrates with ADR-0007's layout dirty flags and boundaries; the protocol must expose whether a node's size is independent of its content.

@@ -2,22 +2,22 @@
 status: accepted
 ---
 
-# 文本：纯 Rust 文本栈（Parley 系），混合栅格化，自研编辑核心
+# Text: a pure Rust Parley-based stack, hybrid rasterization, and an owned editing core
 
-**文本栈**全部用 Rust 实现：fontique 负责字体发现与回退，harfrust 负责整形，Parley 负责段落布局与富文本，skrifa/swash 负责字形轮廓与栅格化，ICU4X 负责断行、字素与双向文本。三端的整形、断行和度量完全一致，出了问题可以自己修。这里有意不走 GPUI 那样各平台使用原生文本栈（CoreText / DirectWrite / FreeType）的路线。
+The **text stack** is entirely Rust: fontique for font discovery and fallback, harfrust for shaping, Parley for paragraph layout and rich text, skrifa/swash for glyph outlines and rasterization, and ICU4X for line breaking, graphemes, and bidirectional text. Shaping, line breaks, and metrics remain identical across platforms, and issues can be fixed within the stack. This deliberately avoids GPUI's platform-native text-stack approach (CoreText / DirectWrite / FreeType).
 
-**字形栅格化用混合策略**：按字形的**最终显示尺寸**（逻辑字号 × 缩放 × DPI）选择路径。小字号走 CPU 栅格化后放进 GPU **字形图集**，支持 hinting 和亚像素定位，保证正文清晰。超过阈值的大字号，以及带旋转、透视等复杂变换的文字，走**矢量路径**。这样任意缩放都不会出现马赛克，也不会让图集无限增长。缩放动画期间可以在两条路径之间平滑切换，阈值可配置，图集用 LRU 淘汰。彩色 emoji（COLRv1 / 位图）单独处理。
+Use **hybrid glyph rasterization**, choosing a path by each glyph's **final display size** (logical font size × scale × DPI). Small text is rasterized on the CPU into a GPU **glyph atlas**, with hinting and subpixel positioning for readable body text. Large text above a threshold, and text with complex transforms such as rotation or perspective, uses **vector paths**. This avoids pixelation at arbitrary scales and unbounded atlas growth. Scale animations can transition smoothly between paths; the threshold is configurable and the atlas uses LRU eviction. Handle color emoji (COLRv1 / bitmap) separately.
 
-**可编辑文本**由框架自研**编辑核心**提供：字素级光标、选区、双向文本光标、IME 组合态、撤销合并，并通过编辑器协议暴露给控件。单行和多行输入框都建在它上面；大文档场景（代码编辑器）可以替换文本存储，例如换成 rope。
+The framework's own **editing core** provides **editable text**: grapheme-level cursors, selection, bidirectional cursors, IME composition, and undo coalescing, exposed to widgets through an editor protocol. Single-line and multiline inputs build on it. Large-document use cases such as code editors can replace text storage, for example with a rope.
 
 ## Considered Options
 
-- **各平台原生文本栈**：渲染效果更接近系统，但三端在度量、断行和回退上各不相同，问题难以统一修复。
-- **cosmic-text**：更简单，但富文本和布局能力弱于 Parley。
-- **全部矢量绘制**：缩放完美，但小字号的清晰度和性能不达标。
+- **Platform-native text stacks**: closer to system rendering, but metrics, line breaks, and fallback vary across platforms and are harder to fix consistently.
+- **cosmic-text**: simpler, but weaker rich-text and layout capabilities than Parley.
+- **All-vector rendering**: ideal scaling, but inadequate clarity and performance for small text.
 
 ## Consequences
 
-- 必须自行查询系统字体目录和用户字体配置，让字体回退链与系统行为接近。
-- Parley 等上游 crate 还在演进，需要锁定版本并维护补丁队列。
-- 编辑核心是整个框架工作量最大、风险最高的部分之一，原型路线中要提前到布局之后、复杂控件之前去验证。
+- Query system font directories and user font settings directly so fallback chains approximate system behavior.
+- Upstream crates such as Parley are evolving; pin versions and maintain a patch queue.
+- The editing core is among the largest and riskiest parts of the framework. Validate it early in prototyping, after layout and before complex widgets.

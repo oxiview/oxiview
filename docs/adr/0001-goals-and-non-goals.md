@@ -2,25 +2,25 @@
 status: accepted
 ---
 
-# 目标与非目标：全场景覆盖、按里程碑演进、自有风格、性能硬指标进 CI
+# Goals and non-goals: broad application coverage, milestone progression, house style, and hard performance targets in CI
 
-本框架是只面向原生桌面（macOS / Windows / Linux）的 Rust 自绘 UI 框架，全程不使用任何 Web 技术（WebView、HTML/CSS、WASM、浏览器目标）。目标应用不预设单一类型：生产力工具、通用桌面应用、可视化与创意类应用都要覆盖。能力按里程碑从简单到复杂演进，依次是文本、布局、边框/背景、基础组件、复杂组件，最后是 3D 与外部内容合成。外观上形成一套三端一致的自有风格，同时保留完整的主题与自定义能力，交互遵循各平台惯例。性能用可量化的硬指标约束，并纳入 CI 回归。
+This is a self-drawn Rust UI framework exclusively for native desktop platforms (macOS / Windows / Linux), using no Web technologies at any stage (WebView, HTML/CSS, WASM, or browser targets). It does not target a single application category: productivity tools, general desktop applications, visualization, and creative applications are all in scope. Capabilities progress from simple to complex by milestone: text, layout, borders/backgrounds, basic components, complex components, then 3D and external-content compositing. A consistent house style spans all three platforms, with full theming and customization; interactions follow platform conventions. Quantifiable hard performance targets become CI regression checks.
 
-## 性能硬指标（初版，进入 CI）
+## Hard performance targets (initial version, enforced in CI)
 
-- 输入到像素延迟 ≤ 1 帧（120Hz 下约 8ms）
-- 空闲时零重绘，CPU 占用约 0%
-- 10 万行虚拟列表滚动不掉帧
+- Input-to-pixel latency ≤ 1 frame (about 8 ms at 120 Hz)
+- Zero repaints while idle, with CPU usage around 0%
+- No dropped frames while scrolling a 100,000-row virtual list
 
-## 非目标
+## Non-goals
 
-- **不包装系统原生控件**：所有控件都自绘，不封装 NSButton、Win32 控件等。
-- **不做 GUI 设计器**：不提供拖拽式可视化 UI 编辑器。
-- **不做多语言绑定**：只提供 Rust API，不提供 C / C++ / Python 等绑定。
+- **Wrapping native system widgets**: all widgets are self-drawn; no wrappers around NSButton, Win32 controls, or equivalents.
+- **A GUI designer**: no drag-and-drop visual UI editor.
+- **Multi-language bindings**: Rust API only, without C / C++ / Python bindings.
 
-“作为游戏引擎内的 UI 层嵌入使用”没有列为非目标，这个场景保持开放。
+Embedding the framework as a UI layer inside a game engine is not a non-goal; that use case remains open.
 
 ## Consequences
 
-- 全场景覆盖意味着架构不能为某一类应用特化，例如不能像 GPUI 那样只服务编辑器。每一层的设计都要能扩展到 3D 与外部内容合成。
-- 性能指标从第一天就进 CI，所以基准测试和延迟测量基础设施必须在 M0–M1 阶段建好。
+- Broad coverage means the architecture cannot specialize in one application category, such as GPUI's editor focus. Every layer must be extensible to 3D and external-content compositing.
+- Performance targets enter CI from day one, so benchmark and latency-measurement infrastructure must be built during M0–M1.

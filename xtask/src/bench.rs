@@ -1,4 +1,4 @@
-//! 本机性能基线与 Divan 中位数判定。
+//! Local performance baselines and Divan median comparisons.
 
 use crate::{check::Check, report::Status};
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,7 @@ fn command(program: &str, args: &[&str]) -> Result<String> {
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(format!(
-            "{program} 失败：{}",
+            "{program} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
@@ -63,12 +63,12 @@ fn command(program: &str, args: &[&str]) -> Result<String> {
         .trim()
         .to_owned();
     if text.is_empty() {
-        return Err(format!("{program} 返回空机器信息"));
+        return Err(format!("{program} returned empty machine information"));
     }
     Ok(text)
 }
 
-// mini 模式排除序列号与 UUID；只提取与 sysctl 等价的硬件字段。
+// mini excludes serial numbers and UUIDs; extract only hardware fields equivalent to sysctl.
 fn macos_hardware_fallback() -> Result<(String, String, String)> {
     let text = command(
         "system_profiler",
@@ -80,26 +80,26 @@ fn macos_hardware_fallback() -> Result<(String, String, String)> {
         hardware[name]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| format!("缺少硬件字段：{name}"))
+            .ok_or_else(|| format!("Missing hardware field: {name}"))
     };
     let model = field("machine_model")?;
     let cpu = field("chip_type").or_else(|_| field("cpu_type"))?;
     let memory = field("physical_memory")?;
     let words: Vec<_> = memory.split_whitespace().collect();
     if words.len() != 2 {
-        return Err("无法解析物理内存".into());
+        return Err("Cannot parse physical memory".into());
     }
     let scale = match words[1] {
         "GB" => 1_u64 << 30,
         "MB" => 1_u64 << 20,
         "TB" => 1_u64 << 40,
-        _ => return Err("未知内存单位".into()),
+        _ => return Err("Unknown memory unit".into()),
     };
     let bytes = words[0]
         .parse::<u64>()
         .map_err(|e| e.to_string())?
         .checked_mul(scale)
-        .ok_or("内存数值溢出")?;
+        .ok_or("Memory value overflow")?;
     Ok((model, cpu, bytes.to_string()))
 }
 
@@ -126,7 +126,7 @@ fn machine() -> Result<Machine> {
             .lines()
             .find_map(|l| l.strip_prefix("MemTotal:"))
             .and_then(|v| v.split_whitespace().next())
-            .ok_or("缺少内存信息")?
+            .ok_or("Missing memory information")?
             .parse::<u64>()
             .map_err(|e| e.to_string())?;
         (
@@ -140,7 +140,7 @@ fn machine() -> Result<Machine> {
                         .and_then(|v| v.split_once(':'))
                         .map(|(_, v)| v.trim().to_owned())
                 })
-                .ok_or("缺少 CPU 型号")?,
+                .ok_or("Missing CPU model")?,
             (kb * 1024).to_string(),
             command("uname", &["-sr"])?,
         )
@@ -158,7 +158,7 @@ fn machine() -> Result<Machine> {
             ps("(Get-CimInstance Win32_OperatingSystem).Version")?,
         )
     } else {
-        return Err("只支持 macOS / Windows / Linux 原生平台".into());
+        return Err("Only native macOS / Windows / Linux platforms are supported".into());
     };
     Ok(Machine {
         model,
@@ -170,7 +170,7 @@ fn machine() -> Result<Machine> {
 }
 
 fn machine_id(machine: &Machine) -> String {
-    // 固定 FNV-1a，避免标准库哈希算法或随机种子变化；不采集序列号。
+    // Use fixed FNV-1a to avoid standard-library hash or seed changes; do not collect serial numbers.
     let hardware = format!(
         "{}\n{}\n{}\n{}",
         std::env::consts::ARCH,
@@ -187,7 +187,7 @@ fn machine_id(machine: &Machine) -> String {
 fn duration_ns(text: &str) -> Result<f64> {
     let words: Vec<_> = text.split_whitespace().collect();
     if words.len() != 2 {
-        return Err(format!("无效时间：{text}"));
+        return Err(format!("Invalid duration: {text}"));
     }
     let scale = match words[1] {
         "ps" => 0.001,
@@ -195,11 +195,11 @@ fn duration_ns(text: &str) -> Result<f64> {
         "µs" | "μs" | "us" => 1_000.0,
         "ms" => 1_000_000.0,
         "s" => 1_000_000_000.0,
-        _ => return Err(format!("未知时间单位：{text}")),
+        _ => return Err(format!("Unknown duration unit: {text}")),
     };
     let value = words[0].parse::<f64>().map_err(|e| e.to_string())? * scale;
     if !value.is_finite() || value <= 0.0 {
-        return Err(format!("无效测量：{text}"));
+        return Err(format!("Invalid measurement: {text}"));
     }
     Ok(value)
 }
@@ -214,13 +214,13 @@ fn parse_divan(text: &str) -> Result<BTreeMap<String, f64>> {
         let columns: Vec<_> = content.split('│').collect();
         if line.contains("fastest") && line.contains("median") {
             if columns.len() != 6 || columns[2].trim() != "median" {
-                return Err("Divan 表头发生变化".into());
+                return Err("Divan table header changed".into());
             }
             parents.clear();
             let name = columns[0]
                 .split_whitespace()
                 .next()
-                .ok_or("缺少基准 target")?;
+                .ok_or("Missing benchmark target")?;
             parents.push((0, name.into()));
             header = true;
             continue;
@@ -229,9 +229,12 @@ fn parse_divan(text: &str) -> Result<BTreeMap<String, f64>> {
             continue;
         }
         if columns.len() != 6 {
-            return Err(format!("Divan 行格式发生变化：{line}"));
+            return Err(format!("Divan row format changed: {line}"));
         }
-        let name = columns[0].split_whitespace().next().ok_or("空基准名称")?;
+        let name = columns[0]
+            .split_whitespace()
+            .next()
+            .ok_or("Empty benchmark name")?;
         while parents.last().is_some_and(|(depth, _)| *depth >= prefix) {
             parents.pop();
         }
@@ -243,32 +246,34 @@ fn parse_divan(text: &str) -> Result<BTreeMap<String, f64>> {
                 .skip(1)
                 .any(|column| !column.trim().is_empty())
             {
-                return Err("Divan 统计列不完整".into());
+                return Err("Incomplete Divan statistics columns".into());
             }
             parents.push((prefix, name.into()));
             continue;
         }
         let first: Vec<_> = columns[0].split_whitespace().collect();
         if first.len() != 3 {
-            return Err("基准名称必须不含空白且具有 fastest 统计量".into());
+            return Err(
+                "Benchmark names must contain no whitespace and include fastest statistics".into(),
+            );
         }
         duration_ns(&first[1..].join(" "))?;
-        // 每个叶子都必须有完整统计量，禁止静默跳过解析失败的指标。
+        // Every leaf must have complete statistics; never silently skip metrics that fail to parse.
         duration_ns(columns[1])?;
         let value = duration_ns(columns[2])?;
         duration_ns(columns[3])?;
         for count in &columns[4..] {
             if count.trim().parse::<u64>().map_err(|e| e.to_string())? == 0 {
-                return Err("空采样".into());
+                return Err("Empty samples".into());
             }
         }
         let key = path.join("/");
         if values.insert(key.clone(), value).is_some() {
-            return Err(format!("重复指标：{key}"));
+            return Err(format!("Duplicate metric: {key}"));
         }
     }
     if values.is_empty() {
-        return Err("没有解析到 Divan 指标".into());
+        return Err("No Divan metrics parsed".into());
     }
     Ok(values)
 }
@@ -297,14 +302,14 @@ fn pending() -> BTreeMap<String, Metric> {
 
 fn validate(baseline: &Baseline) -> Result<()> {
     if baseline.schema_version != 1 || baseline.machine_id != machine_id(&baseline.machine) {
-        return Err("基线版本或机器标识无效".into());
+        return Err("Invalid baseline version or machine identifier".into());
     }
     for (name, metric) in &baseline.metrics {
         if !metric.regression_percent.is_finite()
             || !(0.0..=100.0).contains(&metric.regression_percent)
             || metric.value.is_some_and(|v| !v.is_finite() || v < 0.0)
         {
-            return Err(format!("基线指标无效：{name}"));
+            return Err(format!("Invalid baseline metric: {name}"));
         }
         if let Some(reserved) = pending().get(name) {
             if metric.value.is_some()
@@ -312,20 +317,24 @@ fn validate(baseline: &Baseline) -> Result<()> {
                 || metric.unit != reserved.unit
                 || metric.direction != reserved.direction
             {
-                return Err(format!("硬指标在接入真实测量前必须 pending：{name}"));
+                return Err(format!(
+                    "Hard-target metrics must remain pending until real measurements are integrated: {name}"
+                ));
             }
         } else if metric.value.is_none()
             || metric.unit != "ns"
             || metric.direction != Direction::Lower
         {
-            return Err(format!("微基准指标元数据不兼容：{name}"));
+            return Err(format!(
+                "Incompatible microbenchmark metric metadata: {name}"
+            ));
         }
     }
     if pending()
         .keys()
         .any(|key| !baseline.metrics.contains_key(key))
     {
-        return Err("基线缺少硬指标预留项".into());
+        return Err("Baseline is missing reserved hard-target metrics".into());
     }
     Ok(())
 }
@@ -358,7 +367,7 @@ impl BenchCheck {
         }
         let machine = machine()?;
         let id = machine_id(&machine);
-        log.push_str(&format!("当前机器：{id}，{machine:?}\n"));
+        log.push_str(&format!("Current machine: {id}, {machine:?}\n"));
         let directory = root.join("perf/baselines");
         let path = directory.join(format!("{id}.json"));
         let previous: Option<Baseline> = match fs::read(&path) {
@@ -366,7 +375,7 @@ impl BenchCheck {
                 let baseline = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
                 validate(&baseline)?;
                 if baseline.machine_id != id {
-                    return Err("基线文件名与当前机器不匹配".into());
+                    return Err("Baseline filename does not match the current machine".into());
                 }
                 Some(baseline)
             }
@@ -383,7 +392,7 @@ impl BenchCheck {
             for other in paths {
                 if other != path && other.extension().is_some_and(|e| e == "json") {
                     log.push_str(&format!(
-                        "其他机器（仅显示，不判定）{}：\n{}\n",
+                        "Other machine (informational only) {}:\n{}\n",
                         other.display(),
                         fs::read_to_string(&other).map_err(|e| e.to_string())?
                     ));
@@ -410,7 +419,7 @@ impl BenchCheck {
                 .map_err(|e| e.to_string())?;
             if !output.status.success() {
                 log.push_str(&format!(
-                    "基准进程失败：{}，见 bench-{round}.log\n",
+                    "Benchmark process failed: {}; see bench-{round}.log\n",
                     output.status
                 ));
                 return Ok(if output.status.code().is_some() {
@@ -426,7 +435,7 @@ impl BenchCheck {
             .skip(1)
             .any(|r| !r.keys().eq(rounds[0].keys()))
         {
-            return Err("三轮指标集合不一致".into());
+            return Err("Metric sets differ across the three runs".into());
         }
         let mut metrics = pending();
         for name in rounds[0].keys() {
@@ -471,7 +480,7 @@ impl BenchCheck {
                 status = Status::Fail;
             }
             log.push_str(&format!(
-                "{name}：{state}，当前 {:?} {}，基线 {old:?}，目标 {:?}，允许回归 {}%\n",
+                "{name}: {state}, current {:?} {}, baseline {old:?}, target {:?}, allowed regression {}%\n",
                 metric.value, metric.unit, metric.target, metric.regression_percent
             ));
             results.push(serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old}));
@@ -480,13 +489,15 @@ impl BenchCheck {
             for (name, metric) in &old.metrics {
                 if !metrics.contains_key(name) {
                     status = Status::Fail;
-                    log.push_str(&format!("缺失已记录指标：{name}；禁止静默删除\n"));
+                    log.push_str(&format!(
+                        "Missing recorded metric: {name}; silent removal is prohibited\n"
+                    ));
                     results.push(serde_json::json!({"name":name,"status":"missing_measurement","baseline_value":metric.value}));
                 }
             }
         }
         if previous.is_none() && !self.record {
-            log.push_str("缺少本机基线；请人工确认后运行 cargo xtask bench --record。\n");
+            log.push_str("No baseline for this machine; run cargo xtask bench --record after human confirmation.\n");
         }
         fs::write(
             root.join("target/xtask/bench-results.json"),
@@ -512,7 +523,7 @@ impl BenchCheck {
             )
             .map_err(|e| e.to_string())?;
             log.push_str(&format!(
-                "已创建或覆盖仓库基线文件：{}；请审查并提交。\n",
+                "Created or overwritten repository baseline: {}; review and commit it.\n",
                 path.display()
             ));
         }
@@ -546,7 +557,7 @@ mod tests {
     #[test]
     fn parser_requires_complete_statistics() {
         let text = "compare fastest │ slowest │ median │ mean │ samples │ iters\n╰─ image_compare │ │ │ │ │\n   ├─ 256 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 1000\n   ╰─ 1024 1 ms │ 3 ms │ 2 ms │ 2 ms │ 100 │ 1000";
-        let result = parse_divan(text).expect("合法输出");
+        let result = parse_divan(text).expect("valid output");
         assert_eq!(result["compare/image_compare/256"], 2000.0);
         assert_eq!(result["compare/image_compare/1024"], 2_000_000.0);
         for invalid in [
@@ -561,7 +572,7 @@ mod tests {
     #[test]
     fn parser_handles_nested_branches_and_duplicate_metrics() {
         let text = "bench fastest │ slowest │ median │ mean │ samples │ iters\n├─ first │ │ │ │ │\n│  ╰─ 1 1 ns │ 3 ns │ 2 ns │ 2 ns │ 10 │ 10\n╰─ second 1 ns │ 4 ns │ 3 ns │ 3 ns │ 10 │ 10";
-        let values = parse_divan(text).expect("嵌套输出");
+        let values = parse_divan(text).expect("nested output");
         assert_eq!(values["bench/first/1"], 2.0);
         assert_eq!(values["bench/second"], 3.0);
         assert!(parse_divan(&format!("{text}\n{text}")).is_err());
@@ -587,19 +598,19 @@ mod tests {
         baseline
             .metrics
             .get_mut("idle_cpu_percent")
-            .expect("硬指标")
+            .expect("hard-target metric")
             .value = Some(0.0);
         assert!(validate(&baseline).is_err());
         baseline.metrics = pending();
         baseline
             .metrics
             .get_mut("idle_cpu_percent")
-            .expect("硬指标")
+            .expect("hard-target metric")
             .regression_percent = -1.0;
         assert!(validate(&baseline).is_err());
         let metric: Metric =
             serde_json::from_str(r#"{"value":1.0,"unit":"ns","direction":"lower","target":null}"#)
-                .expect("默认阈值");
+                .expect("default threshold");
         assert_eq!(metric.regression_percent, 10.0);
     }
 
