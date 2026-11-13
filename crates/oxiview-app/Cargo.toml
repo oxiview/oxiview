@@ -17,3 +17,6 @@ oxiview-platform-headless.workspace = true
 oxiview-scene.workspace = true
 oxiview-render-cpu.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+oxiview-render-wgpu.workspace = true

@@ -14,3 +14,4 @@ oxiview-base.workspace = true
 oxiview-scene.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
+tracing.workspace = true

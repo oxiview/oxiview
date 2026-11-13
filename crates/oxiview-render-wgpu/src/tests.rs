@@ -7,16 +7,6 @@ const SIZE: PixelSize = PixelSize {
     width: 65,
     height: 64,
 }; // Exercises padded rows and partial workgroups.
-fn context() -> Result<Option<RenderContext>, Error> {
-    match RenderContext::new() {
-        Ok(context) => Ok(Some(context)),
-        Err(Error::NoAdapter(reason)) => {
-            eprintln!("Skipping GPU test: no adapter available ({reason})");
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
-}
 fn fill(rect: Rect, color: Color) -> NodeKind {
     NodeKind::Draw(Primitive::Fill(
         rect,
@@ -37,9 +27,7 @@ fn pixel(image: &RgbaImage, x: usize, y: usize) -> &[u8] {
 #[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn offscreen_readback_and_process_wide_recovery() -> TestResult {
-    let Some(first) = context()? else {
-        return Ok(());
-    };
+    let first = RenderContext::new()?;
     let second = RenderContext::new()?;
     let clone = first.clone();
     assert!(Arc::ptr_eq(&first.process, &second.process));
@@ -62,9 +50,7 @@ fn offscreen_readback_and_process_wide_recovery() -> TestResult {
 #[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn isolated_nested_opacity_order_and_straight_alpha() -> TestResult {
-    let Some(context) = context()? else {
-        return Ok(());
-    };
+    let context = RenderContext::new()?;
     let mut scene = Scene::new();
     let root = scene.insert(None, 0, NodeKind::Opacity(0.5))?;
     let group = scene.insert(Some(root), 0, NodeKind::Opacity(0.5))?;
@@ -85,9 +71,7 @@ fn isolated_nested_opacity_order_and_straight_alpha() -> TestResult {
 #[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn transformed_intersecting_clips_and_state_restoration() -> TestResult {
-    let Some(context) = context()? else {
-        return Ok(());
-    };
+    let context = RenderContext::new()?;
     let mut scene = Scene::new();
     let root = scene.insert(None, 0, NodeKind::Transform(Affine::IDENTITY))?;
     // Shear and translation apply to geometry and both clips.
@@ -126,9 +110,7 @@ fn transformed_intersecting_clips_and_state_restoration() -> TestResult {
 #[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn rounded_stroke_and_reused_subtrees() -> TestResult {
-    let Some(context) = context()? else {
-        return Ok(());
-    };
+    let context = RenderContext::new()?;
     let mut scene = Scene::new();
     let shape = scene.insert(
         None,
@@ -158,9 +140,7 @@ fn rounded_stroke_and_reused_subtrees() -> TestResult {
 #[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn gradient_linear_light_and_hard_stops() -> TestResult {
-    let Some(context) = context()? else {
-        return Ok(());
-    };
+    let context = RenderContext::new()?;
     let mut scene = Scene::new();
     let gradient = Brush::LinearGradient(
         Point::new(0.0, 0.0),
@@ -221,9 +201,7 @@ fn gradient_linear_light_and_hard_stops() -> TestResult {
 #[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn rejects_invalid_sizes_and_roots() -> TestResult {
-    let Some(context) = context()? else {
-        return Ok(());
-    };
+    let context = RenderContext::new()?;
     let mut scene = Scene::new();
     let root = scene.insert(None, 0, fill(Rect::new(0.0, 0.0, 4.0, 4.0), red()))?;
     for (width, height) in [(0, 1), (1, 0), (u32::MAX, u32::MAX), (u32::MAX, 1)] {
@@ -272,5 +250,140 @@ fn encoding_rejects_nonfinite_geometry_without_a_device() -> TestResult {
         encoding::Commands::new(&scene.encode(root)?, SIZE),
         Err(Error::SceneEncoding(_))
     ));
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::panic)] // No native pointer is fabricated to exercise rejection.
+fn surface_kind_and_configuration_validation() -> TestResult {
+    use oxiview_base::NativeSurfaceKind;
+    assert!(matches!(
+        surface::validate_kind(NativeSurfaceKind::MacosMetalLayer, false),
+        Err(Error::UnsupportedSurface)
+    ));
+    surface::validate_kind(NativeSurfaceKind::MacosMetalLayer, true)?;
+    for (width, height) in [(0, 0), (0, 64), (64, 0)] {
+        assert!(!surface::validate_size(PixelSize { width, height }, 4096)?);
+    }
+    assert!(surface::validate_size(SIZE, 4096)?);
+    assert!(
+        surface::validate_size(
+            PixelSize {
+                width: 4097,
+                height: 1
+            },
+            4096
+        )
+        .is_err()
+    );
+    assert!(
+        surface::validate_size(
+            PixelSize {
+                width: 1,
+                height: u32::MAX
+            },
+            4096
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::panic)] // Inspect the actual encoded shape tags, not only the predicate.
+fn sdf_and_polygon_path_selection() -> TestResult {
+    for (affine, expected) in [
+        (Affine::IDENTITY, true),
+        (Affine::new([0.0, 2.0, -2.0, 0.0, 32.0, 4.0]), true),
+        (Affine::new([-1.0, 0.0, 0.0, 1.0, 32.0, 0.0]), true),
+        (Affine::new([1.0, 0.0, 0.25, 1.0, 0.0, 0.0]), false),
+        (Affine::new([2.0, 0.0, 0.0, 1.0, 0.0, 0.0]), false),
+    ] {
+        let mut scene = Scene::new();
+        let root = scene.insert(None, 0, NodeKind::Transform(affine))?;
+        let clip = scene.insert(
+            Some(root),
+            0,
+            NodeKind::Clip(Clip::RoundedRect(
+                Rect::new(0.0, 0.0, 32.0, 32.0),
+                CornerRadii::uniform(4.0),
+            )),
+        )?;
+        scene.insert(Some(clip), 0, fill(Rect::new(4.0, 4.0, 28.0, 28.0), red()))?;
+        let bytes = encoding::Commands::new(&scene.encode(root)?, SIZE)?.bytes();
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        assert_eq!(words[words[6] as usize] == u32::MAX, expected);
+        assert_eq!(words[words[10] as usize] == u32::MAX, expected);
+    }
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::panic)] // Compare real GPU bytes from the presentation copy path.
+fn surface_copy_matches_offscreen_and_recovers() -> TestResult {
+    let context = RenderContext::new()?;
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Opacity(0.7))?;
+    scene.insert(
+        Some(root),
+        0,
+        NodeKind::Draw(Primitive::Fill(
+            Rect::new(4.0, 4.0, 60.0, 60.0),
+            CornerRadii::uniform(9.0),
+            Brush::LinearGradient(
+                Point::new(4.0, 4.0),
+                Point::new(60.0, 60.0),
+                vec![
+                    ColorStop {
+                        position: 0.0,
+                        color: Color::from_rgba8(23, 150, 240, 255),
+                    },
+                    ColorStop {
+                        position: 1.0,
+                        color: Color::from_rgba8(231, 60, 19, 128),
+                    },
+                ],
+            ),
+        )),
+    )?;
+    let commands = encoding::Commands::new(&scene.encode(root)?, SIZE)?;
+    // Hold the process lock across each diagnostic cycle so other tests cannot
+    // destroy this device between direct internal operations.
+    let mut process = context.process.lock().map_err(|e| e.to_string())?;
+    for _ in 0..2 {
+        process.ensure_device()?;
+        let gpu = process.gpu.as_ref().ok_or("missing GPU")?;
+        let expected = gpu
+            .render(&commands, SIZE, None, true)?
+            .ok_or("missing pixels")?;
+        for format in [
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Bgra8Unorm,
+        ] {
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("surface-like target"),
+                size: wgpu::Extent3d {
+                    width: SIZE.width,
+                    height: SIZE.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let actual = gpu
+                .render(&commands, SIZE, Some(&target), true)?
+                .ok_or("missing copied pixels")?;
+            assert_eq!(actual, expected, "copy format {format:?}");
+        }
+        process.lose_device();
+    }
     Ok(())
 }

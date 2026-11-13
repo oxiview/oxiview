@@ -10,35 +10,7 @@ use oxiview_base::{Color, CornerRadii, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, NodeId, Primitive, Scene};
 use vello_cpu::{Pixmap, RenderContext, Resources, color, kurbo, peniko};
 
-/// Integer output dimensions in physical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PixelSize {
-    /// Width in pixels; must be in 1..=65535.
-    pub width: u32,
-    /// Height in pixels; must be in 1..=65535.
-    pub height: u32,
-}
-
-/// Owned row-major, straight (non-premultiplied) sRGB RGBA8 pixels.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RgbaImage {
-    size: PixelSize,
-    pixels: Vec<u8>,
-}
-impl RgbaImage {
-    /// Output width in pixels.
-    pub fn width(&self) -> u32 {
-        self.size.width
-    }
-    /// Output height in pixels.
-    pub fn height(&self) -> u32 {
-        self.size.height
-    }
-    /// Straight RGBA8 bytes, with transparent pixels normalized to zero RGB.
-    pub fn pixels(&self) -> &[u8] {
-        &self.pixels
-    }
-}
+pub use oxiview_scene::{PixelSize, RgbaImage};
 
 /// Scene encoding or rasterizer size rejection.
 #[derive(Debug, thiserror::Error)]
@@ -75,11 +47,13 @@ impl Renderer for CpuRenderer {
             .data_as_u8_slice()
             .chunks_exact(4)
             .flat_map(|pixel| {
-                let [r, g, b, a] = [pixel[0], pixel[1], pixel[2], pixel[3]];
+                let [r, g, b, a] = *pixel else {
+                    return [0; 4];
+                };
                 [straight(r, a), straight(g, a), straight(b, a), a]
             })
             .collect();
-        Ok(RgbaImage { size, pixels })
+        RgbaImage::new(size, pixels).map_err(|e| Error::SceneEncoding(e.to_string()))
     }
 }
 

@@ -11,6 +11,9 @@
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod image;
+pub use image::{PixelSize, RgbaImage};
+
 mod encoding;
 pub use encoding::{EncodedNode, EncodedScene, ResolvedClip};
 
@@ -74,6 +77,9 @@ pub enum NodeKind {
 /// A rejected scene edit or lookup.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// Pixel byte length does not match its dimensions.
+    #[error("invalid RGBA8 image length")]
+    InvalidImage,
     /// The identity does not exist in this scene.
     #[error("scene node does not exist: {0:?}")]
     MissingNode(NodeId),

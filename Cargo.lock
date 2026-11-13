@@ -809,6 +809,7 @@ dependencies = [
  "oxiview-platform",
  "oxiview-platform-headless",
  "oxiview-render-cpu",
+ "oxiview-render-wgpu",
  "oxiview-scene",
  "thiserror",
 ]
@@ -880,6 +881,7 @@ dependencies = [
  "oxiview-base",
  "oxiview-scene",
  "thiserror",
+ "tracing",
  "wgpu",
 ]
 

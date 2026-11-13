@@ -103,10 +103,11 @@ Snapshots catch silent output drift. Bumping the version requires re-reviewing
 and re-accepting baselines, including changes to transitive rasterizer packages.
 The exact pin alone does not freeze the transitive graph; retain Cargo.lock.
 
-S3 uses its own straight-RGBA8 image type and converts to the testing image in
-snapshot tests. This deliberately revises the M0 plan's image-type wording:
-`oxiview-testing` is dev-only and cannot appear in the production API. The
-rasterizer has its own external allowlist entry; the GPU entry is unchanged.
+Since M1 S4, both adapters use the owned straight-RGBA8 image and physical
+pixel size defined in `oxiview-scene`. Existing adapter imports remain available
+through compatibility re-exports. Snapshot tests still convert to the separate
+`oxiview-testing` image: that crate is dev-only and is not a production API.
+The rasterizer has its own external allowlist entry; the GPU entry is unchanged.
 
 The exact cached crate sources were inspected for path, paint, transform, clip,
 opacity-layer, and pixmap APIs. Live registry fetching failed DNS resolution;
@@ -124,7 +125,10 @@ are disabled; `std`, `metal`, `vulkan`, `dx12`, and `wgsl` are enabled together.
 `webgpu` is disabled. No direct geometry, executor, or additional rendering
 library dependency is added. A small safe standard-library executor waits for
 native adapter/device requests. Geometry uses the existing foundation API and
-is flattened to polygons for GPU coverage testing, not an SDF fast path.
+now takes the SDF fast path for rounded rectangles under similarity transforms;
+other transforms retain polygon coverage. Both execute in the compute interpreter.
+M1 S4 uses the existing wgpu render-pass API to copy intermediate pixels to
+surface attachments, without requesting storage usage on surface textures.
 
 Offline resolution added 78 lockfile packages, including target-specific and
 optional resolution packages. The observed macOS build graph includes
@@ -142,17 +146,21 @@ Transitive native bindings do not widen the direct-consumer external allowlist.
 All three backend **features** compile together in the macOS build. Upstream
 wgpu target gates exclude Vulkan and DX12 backend implementations on this Mac;
 this is not evidence of compiling or running their Windows/Linux implementations.
-Runtime verification is restricted to macOS through Metal, with no claim of a
-byte-for-byte match with the CPU renderer. In the current execution environment,
-Metal exposes no adapter, so GPU tests print their reason and skip. Shader
-parsing/validation runs without a device. Actual pixel readback and simulated
-loss/recovery still need a Mac execution environment that exposes an adapter.
+Runtime verification is restricted to macOS through Metal. GPU tests require an
+adapter and fail when none is available; they do not silently skip. Shader
+validation also runs without a device. Cross-adapter CPU/GPU comparisons live in
+`oxiview-app` integration tests with a dev-only GPU adapter dependency, preserving
+the prohibition on dependencies between rendering adapters. They share the CPU
+snapshot scene definitions and compare premultiplied RGBA with documented bounds;
+straight-RGBA metrics are reported too. This is not a byte-for-byte CPU promise.
 
-This adapter owns a straight-RGBA8 image with the CPU image's public shape.
-Unifying those types is deferred because the adapter dependency boundary forbids
-an `oxiview-render-cpu` dependency. Process-wide device state is shared by both
-clones and independent contexts; real loss callbacks and simulated destruction
-invalidate the same state for replacement on next use.
+The image definition now belongs to `oxiview-scene`. Process-wide device state
+is shared by both clones and independent contexts; real loss callbacks and
+simulated destruction invalidate the same state for replacement on next use.
+Per-window surfaces track the device identity and reconfigure after replacement.
+Surface warnings reuse the existing workspace `tracing` pin; no new third-party
+package is introduced. Native creation is confined to the rendering adapter's
+unsafe boundary under ADR-0025.
 
 Live documentation fetching was unavailable. `cargo xtask deps` passed dependency
 direction checks but could not refresh RustSec because `github.com` failed DNS

@@ -1,53 +1,42 @@
-//! Offscreen GPU adapter for the rendering context.
+//! GPU rendering adapter with offscreen readback and per-window surfaces.
 //!
 //! The instance, adapter, and device are process-wide and shared by every context.
 //! Device loss discards the old device and rebuilds it for every context on next
-//! use. No window is needed. Geometry is flattened to polygons and rasterized on
-//! the GPU with four coverage samples per pixel; this is not an SDF fast path.
+//! use. Offscreen rendering needs no window. The SDF fast path evaluates rounded
+//! rectangle fills, strokes and clips through the inverse affine for similarities:
+//! finite nonzero equal-length orthogonal columns (relative tolerance 1e-12).
+//! Translation, uniform scale, rotation and reflection qualify; other transforms
+//! retain polygon coverage using a fixed sixteen-sample inside-test pattern.
+//! SDF coverage evaluates distance once at the pixel center, converts it to physical
+//! pixels, and applies the one-pixel ramp `clamp(0.5 - distance_px, 0, 1)`.
+//! The ordered interpreter runs once per pixel with clip and opacity stacks,
+//! composing coverage-weighted paint and evaluating gradients at the pixel center.
+//! Shared antialiased edges can exhibit coverage conflation between operations.
 //! Output is straight sRGB RGBA8, without a byte-for-byte CPU equivalence promise.
 
+// Native surface creation is the adapter's only unsafe boundary.
+#![allow(unsafe_code)]
+
+mod copy;
 mod device;
+mod surface;
+pub use surface::{FrameOutcome, WindowSurface};
 mod encoding;
 
 use oxiview_scene::{NodeId, Scene};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Integer output dimensions in physical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PixelSize {
-    /// Nonzero width, limited by the device's texture and buffer limits.
-    pub width: u32,
-    /// Nonzero height, limited by the device's texture and buffer limits.
-    pub height: u32,
-}
-
-/// Owned row-major, straight (non-premultiplied) sRGB RGBA8 pixels.
-///
-/// This has the CPU renderer's image shape. A shared image type is deferred
-/// because rendering adapters cannot depend on each other.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RgbaImage {
-    size: PixelSize,
-    pixels: Vec<u8>,
-}
-impl RgbaImage {
-    /// Output width in pixels.
-    pub fn width(&self) -> u32 {
-        self.size.width
-    }
-    /// Output height in pixels.
-    pub fn height(&self) -> u32 {
-        self.size.height
-    }
-    /// Straight RGBA8 bytes; transparent pixels have zero RGB.
-    pub fn pixels(&self) -> &[u8] {
-        &self.pixels
-    }
-}
+pub use oxiview_scene::{PixelSize, RgbaImage};
 
 /// Failures at the scene, resource, or device boundary. No GPU types escape.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The handle kind is unsupported on this platform.
+    #[error("unsupported native surface kind")]
+    UnsupportedSurface,
+    /// Surface creation, compatibility, configuration, or acquisition failed.
+    #[error("surface operation failed: {0}")]
+    Surface(String),
     /// No suitable native adapter is available (a supported configuration).
     #[error("no GPU adapter available: {0}")]
     NoAdapter(String),
@@ -87,6 +76,15 @@ impl RenderContext {
             .map_err(|e| Error::DeviceLost(e.to_string()))?
             .ensure_device()?;
         Ok(Self { process })
+    }
+
+    /// Creates a per-window surface on the window thread, initially suspended.
+    /// The producing adapter's handle contract supplies native lifetime guarantees.
+    pub fn create_surface(
+        &self,
+        handle: oxiview_base::NativeSurfaceHandle,
+    ) -> Result<WindowSurface, Error> {
+        WindowSurface::new(self.clone(), handle)
     }
 
     /// Encodes and renders `root` on transparent pixels, then reads straight RGBA8.

@@ -263,3 +263,27 @@ fn builds_five_thousand_nodes_under_half_a_second() -> Result<(), Error> {
     assert_eq!(scene.children(Some(root))?.len(), 5_000);
     Ok(())
 }
+
+#[test]
+#[allow(clippy::panic)] // Image invariants at the shared rendering port.
+fn rgba_image_validates_length_and_clears_transparent_rgb() -> Result<(), Error> {
+    let size = PixelSize {
+        width: 2,
+        height: 1,
+    };
+    let image = RgbaImage::new(size, vec![1, 2, 3, 0, 4, 5, 6, 7])?;
+    assert_eq!(image.pixels(), &[0, 0, 0, 0, 4, 5, 6, 7]);
+    assert_eq!((image.width(), image.height()), (2, 1));
+    assert!(RgbaImage::new(size, vec![0; 7]).is_err());
+    assert!(
+        RgbaImage::new(
+            PixelSize {
+                width: u32::MAX,
+                height: u32::MAX
+            },
+            vec![]
+        )
+        .is_err()
+    );
+    Ok(())
+}

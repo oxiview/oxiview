@@ -5,7 +5,8 @@
 use oxiview_core::{Application, PaintedScene, Presenter};
 use oxiview_platform::{EventLoopContext, PhysicalSize, Platform, WindowAttributes, WindowId};
 use oxiview_platform_headless::HeadlessPlatform;
-use oxiview_render_cpu::{CpuRenderer, PixelSize, Renderer, RgbaImage};
+use oxiview_render_cpu::{CpuRenderer, Renderer};
+use oxiview_scene::{PixelSize, RgbaImage};
 use std::{
     sync::{Arc, Mutex},
     thread,

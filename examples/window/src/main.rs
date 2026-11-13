@@ -66,7 +66,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         let image = CpuRenderer.render(
             &scene,
             root,
-            oxiview_render_cpu::PixelSize {
+            oxiview_scene::PixelSize {
                 width: WIDTH,
                 height: HEIGHT,
             },
@@ -87,7 +87,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         let image = oxiview_render_wgpu::RenderContext::new()?.render(
             &scene,
             root,
-            oxiview_render_wgpu::PixelSize {
+            oxiview_scene::PixelSize {
                 width: WIDTH,
                 height: HEIGHT,
             },

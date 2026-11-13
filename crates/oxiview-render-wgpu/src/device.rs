@@ -10,15 +10,15 @@ use std::{
 use wgpu::util::DeviceExt;
 
 pub(crate) struct Process {
-    instance: wgpu::Instance,
-    gpu: Option<Gpu>,
+    pub(crate) instance: wgpu::Instance,
+    pub(crate) gpu: Option<Gpu>,
 }
-struct Gpu {
-    _adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+pub(crate) struct Gpu {
+    pub(crate) adapter: wgpu::Adapter,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
-    lost: Arc<AtomicBool>,
+    pub(crate) lost: Arc<AtomicBool>,
 }
 impl Process {
     pub(crate) fn new() -> Self {
@@ -57,7 +57,7 @@ impl Process {
         let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("oxiview polygon rasterizer"),
+            label: Some("oxiview SDF and polygon rasterizer"),
             source: wgpu::ShaderSource::Wgsl(include_str!("raster.wgsl").into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -77,7 +77,7 @@ impl Process {
             return Err(Error::DeviceRequest(error.to_string()));
         }
         self.gpu = Some(Gpu {
-            _adapter: adapter,
+            adapter,
             device,
             queue,
             pipeline,
@@ -102,7 +102,9 @@ impl Process {
             .gpu
             .as_ref()
             .ok_or_else(|| Error::DeviceLost("device unavailable".into()))?;
-        let result = gpu.render(commands, size);
+        let result = gpu
+            .render(commands, size, None, true)
+            .and_then(|image| image.ok_or_else(|| Error::DeviceLost("missing readback".into())));
         if matches!(result, Err(Error::DeviceLost(_))) {
             self.lose_device();
         }
@@ -110,7 +112,13 @@ impl Process {
     }
 }
 impl Gpu {
-    fn render(&self, commands: &Commands, size: PixelSize) -> Result<RgbaImage, Error> {
+    pub(crate) fn render(
+        &self,
+        commands: &Commands,
+        size: PixelSize,
+        target: Option<&wgpu::Texture>,
+        read: bool,
+    ) -> Result<Option<RgbaImage>, Error> {
         let limits = self.device.limits();
         if size.width == 0
             || size.height == 0
@@ -145,7 +153,15 @@ impl Gpu {
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let result = self.submit(&data, stack_size, padded_row as u32, readback_size, size);
+        let result = self.submit(
+            &data,
+            stack_size,
+            padded_row as u32,
+            readback_size,
+            size,
+            target,
+            read,
+        );
         // Always pop scopes, including readback failures.
         let errors = [
             block_on(internal.pop()),
@@ -160,6 +176,7 @@ impl Gpu {
         }
         result
     }
+    #[allow(clippy::too_many_arguments)] // Validated submission dimensions and optional presentation target.
     fn submit(
         &self,
         data: &[u8],
@@ -167,7 +184,9 @@ impl Gpu {
         padded_row: u32,
         readback_size: u64,
         size: PixelSize,
-    ) -> Result<RgbaImage, Error> {
+        target: Option<&wgpu::Texture>,
+        read: bool,
+    ) -> Result<Option<RgbaImage>, Error> {
         let commands = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -193,16 +212,12 @@ impl Gpu {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pixel readback"),
-            size: readback_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("offscreen inputs"),
             layout: &self.pipeline.get_bind_group_layout(0),
@@ -230,8 +245,22 @@ impl Gpu {
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(size.width.div_ceil(8), size.height.div_ceil(8), 1);
         }
+        if let Some(target) = target {
+            crate::copy::encode(&self.device, &mut encoder, &view, target);
+        }
+        if !read {
+            self.queue.submit([encoder.finish()]);
+            return Ok(None);
+        }
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pixel readback"),
+            size: readback_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let output = target.unwrap_or(&texture);
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            output.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &readback,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -266,19 +295,31 @@ impl Gpu {
         let mut pixels = Vec::with_capacity(size.width as usize * size.height as usize * 4);
         for row in mapped.chunks_exact(padded_row as usize) {
             for pixel in row.chunks_exact(4).take(size.width as usize) {
-                let [r, g, b, a] = [pixel[0], pixel[1], pixel[2], pixel[3]];
+                let [r, g, b, a] = *pixel else {
+                    continue;
+                };
+                let (r, b) = if matches!(
+                    output.format(),
+                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                ) {
+                    (b, r)
+                } else {
+                    (r, b)
+                };
                 pixels.extend([straight(r, a), straight(g, a), straight(b, a), a]);
             }
         }
         drop(mapped);
         readback.unmap();
-        Ok(RgbaImage { size, pixels })
+        RgbaImage::new(size, pixels)
+            .map(Some)
+            .map_err(|e| Error::SceneEncoding(e.to_string()))
     }
 }
 
 // Native adapter/device requests and error scopes need an executor, not a runtime.
-// Wake uses the standard library, keeping this adapter entirely safe Rust.
-fn block_on<F: Future>(future: F) -> F::Output {
+// Wake uses the standard library and requires no unsafe executor code.
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     struct ThreadWake(std::thread::Thread);
     impl Wake for ThreadWake {
         fn wake(self: Arc<Self>) {

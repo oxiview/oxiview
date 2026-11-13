@@ -1,5 +1,6 @@
-// Polygon coverage and ordered compositing. Each invocation owns one pixel and
-// its opacity stack; four subpixel samples share no state with other pixels.
+// Coverage-weighted ordered compositing runs once at each pixel center.
+// Each invocation owns one pixel and its opacity stack. Only polygon coverage
+// uses sixteen subpixel inside tests; paint and compositing are not supersampled.
 @group(0) @binding(0) var<storage, read> words: array<u32>;
 @group(0) @binding(1) var<storage, read_write> layers: array<vec4<f32>>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
@@ -19,6 +20,33 @@ fn inside(offset: u32, p: vec2<f32>) -> bool {
         a = b;
     }
     return hit;
+}
+// SDF draws and rounded-rectangle clips evaluate distance once at the pixel
+// center, convert local distance to physical pixels with the similarity scale,
+// and apply a one-pixel linear ramp: clamp(0.5 - distance_px, 0, 1).
+fn coverage(offset: u32, p: vec2<f32>) -> f32 {
+    if words[offset] != 0xffffffffu {
+        var hits = 0.0;
+        // Fixed 4x4 pattern relative to the pixel center, confined to this shape.
+        for (var sample = 0u; sample < 16u; sample++) {
+            let delta = vec2(-0.375 + 0.25*f32(sample%4u), -0.375 + 0.25*f32(sample/4u));
+            hits += select(0.0, 1.0, inside(offset, p + delta));
+        }
+        return hits * 0.0625;
+    }
+    let i = offset + 1u;
+    let local = vec2(scalar(i)*p.x + scalar(i+2u)*p.y + scalar(i+4u),
+                     scalar(i+1u)*p.x + scalar(i+3u)*p.y + scalar(i+5u));
+    let lo = point(i+6u);
+    let hi = point(i+8u);
+    let center = (lo+hi)*0.5;
+    var radius = scalar(i+10u);
+    if local.x > center.x {
+        radius = select(scalar(i+11u), scalar(i+12u), local.y > center.y);
+    } else if local.y > center.y { radius = scalar(i+13u); }
+    let q = abs(local-center) - (hi-lo)*0.5 + vec2(radius);
+    let distance_px = (length(max(q, vec2(0.0))) + min(max(q.x,q.y),0.0) - radius)*scalar(i+14u);
+    return clamp(0.5 - distance_px, 0.0, 1.0);
 }
 fn srgb(v: vec3<f32>) -> vec3<f32> {
     let c = max(v, vec3(0.0));
@@ -54,35 +82,31 @@ fn paint(offset: u32, p: vec2<f32>) -> vec4<f32> {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= words[0] || id.y >= words[1] { return; }
     let base = (id.y * words[0] + id.x) * words[2];
-    var total = vec4(0.0);
-    for (var sample = 0u; sample < 4u; sample++) {
-        let p = vec2<f32>(id.xy) + vec2(0.25 + 0.5*f32(sample%2u), 0.25 + 0.5*f32(sample/2u));
-        var accumulated = vec4(0.0);
-        var depth = 0u;
-        var command = 4u;
-        while command < words[3] {
-            let op = words[command];
-            if op == 1u {
-                layers[base+depth] = accumulated;
-                depth++;
-                accumulated = vec4(0.0);
-            } else if op == 2u {
-                depth--;
-                accumulated *= scalar(command+2u);
-                accumulated += layers[base+depth] * (1.0-accumulated.a);
-            } else {
-                var covered = inside(words[command+2u], p) && !inside(words[command+3u], p);
-                for (var clip = 0u; clip < words[command+4u] && covered; clip++) {
-                    covered = inside(words[command+6u+clip], p);
-                }
-                if covered {
-                    let source = paint(words[command+5u], p);
-                    accumulated = source + accumulated*(1.0-source.a);
-                }
+    let p = vec2<f32>(id.xy) + vec2(0.5);
+    var accumulated = vec4(0.0);
+    var depth = 0u;
+    var command = 4u;
+    while command < words[3] {
+        let op = words[command];
+        if op == 1u {
+            layers[base+depth] = accumulated;
+            depth++;
+            accumulated = vec4(0.0);
+        } else if op == 2u {
+            depth--;
+            accumulated *= scalar(command+2u);
+            accumulated += layers[base+depth] * (1.0-accumulated.a);
+        } else {
+            var covered = max(coverage(words[command+2u], p) - coverage(words[command+3u], p), 0.0);
+            for (var clip = 0u; clip < words[command+4u] && covered > 0.0; clip++) {
+                covered = min(covered, coverage(words[command+6u+clip], p));
             }
-            command = words[command+1u];
+            if covered > 0.0 {
+                let source = paint(words[command+5u], p) * covered;
+                accumulated = source + accumulated*(1.0-source.a);
+            }
         }
-        total += accumulated;
+        command = words[command+1u];
     }
-    textureStore(output, id.xy, total * 0.25);
+    textureStore(output, id.xy, accumulated);
 }

@@ -4,7 +4,8 @@ use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, Primitive};
 
 // Word-addressed private protocol, mirrored in raster.wgsl. Header: width,
 // height, stack stride, end offset. Each operation starts with opcode and next.
-// Draw: outer polygon, inner polygon, clip count, brush, then clip offsets.
+// Draw: outer shape, inner shape, clip count, brush, then clip offsets.
+// SDF shape: MAX tag, inverse affine, bounds, TL/TR/BR/BL radii, scale.
 // Polygon: vertex count then xy pairs. Brush: inverse affine, gradient endpoints,
 // stop count, then (position, premultiplied linear RGBA) stops.
 pub(crate) struct Commands {
@@ -48,31 +49,34 @@ impl Commands {
                             (*rect, *radii, Some(*width), brush)
                         }
                     };
+                    if width == Some(0.0) {
+                        continue;
+                    }
                     result.words.extend([0, 0, 0, 0, count(clips.len())?, 0]);
                     let clip_start = result.words.len();
                     result.words.resize(clip_start + clips.len(), 0);
-                    let outer = result.polygon(
+                    let outer = result.shape(
                         rect,
                         radii,
                         width.map_or(0.0, |width| width / 2.0),
                         *transform,
                     )?;
-                    result.words[start + 2] = outer;
+                    result.set(start + 2, outer)?;
                     let inner = if let Some(width) = width {
-                        result.polygon(rect, radii, -width / 2.0, *transform)?
+                        result.shape(rect, radii, -width / 2.0, *transform)?
                     } else {
                         result.empty_polygon()?
                     };
-                    result.words[start + 3] = inner;
+                    result.set(start + 3, inner)?;
                     for (index, clip) in clips.iter().enumerate() {
                         let (rect, radii) = match clip.shape {
                             Clip::Rect(rect) => (rect, CornerRadii::default()),
                             Clip::RoundedRect(rect, radii) => (rect, radii),
                         };
-                        let offset = result.polygon(rect, radii, 0.0, clip.transform)?;
-                        result.words[clip_start + index] = offset;
+                        let offset = result.shape(rect, radii, 0.0, clip.transform)?;
+                        result.set(clip_start + index, offset)?;
                     }
-                    result.words[start + 5] = count(result.words.len())?;
+                    result.set(start + 5, count(result.words.len())?)?;
                     for value in inverse.coefficients() {
                         result.float(value)?;
                     }
@@ -97,10 +101,10 @@ impl Commands {
                     }
                 }
             }
-            result.words[start + 1] = count(result.words.len())?;
+            result.set(start + 1, count(result.words.len())?)?;
         }
-        result.words[2] = result.depth;
-        result.words[3] = count(result.words.len())?;
+        result.set(2, result.depth)?;
+        result.set(3, count(result.words.len())?)?;
         Ok(result)
     }
     pub(crate) fn bytes(&self) -> Vec<u8> {
@@ -128,6 +132,61 @@ impl Commands {
     fn empty_polygon(&mut self) -> Result<u32, Error> {
         let offset = count(self.words.len())?;
         self.words.push(0);
+        Ok(offset)
+    }
+    fn set(&mut self, index: usize, value: u32) -> Result<(), Error> {
+        *self
+            .words
+            .get_mut(index)
+            .ok_or_else(|| invalid("invalid command offset"))? = value;
+        Ok(())
+    }
+
+    // A tagged shape record lets draws and clips independently choose the SDF
+    // fast path. Polygon records retain their vertex count as the first word.
+    fn shape(
+        &mut self,
+        rect: Rect,
+        radii: CornerRadii,
+        outset: f64,
+        transform: Affine,
+    ) -> Result<u32, Error> {
+        let Some(scale) = sdf_scale(transform) else {
+            return self.polygon(rect, radii, outset, transform);
+        };
+        let [a, b, c, d] = rect.edges();
+        if !rect
+            .edges()
+            .iter()
+            .chain(radii.values().iter())
+            .all(|x| x.is_finite())
+        {
+            return Err(invalid("non-finite geometry"));
+        }
+        let (l, t, r, b) = (a.min(c), b.min(d), a.max(c), b.max(d));
+        let limit = (r - l).min(b - t) * 0.5;
+        let radii = radii.values().map(|r| {
+            let r = r.abs().min(limit);
+            if r == 0.0 { 0.0 } else { (r + outset).max(0.0) }
+        });
+        let (l, t, r, b) = (l - outset, t - outset, r + outset, b + outset);
+        if l >= r || t >= b {
+            return self.empty_polygon();
+        }
+        let inverse = transform
+            .inverse()
+            .map_err(|_| invalid("singular SDF transform"))?;
+        let offset = count(self.words.len())?;
+        self.words.push(u32::MAX);
+        for value in inverse
+            .coefficients()
+            .into_iter()
+            .chain([l, t, r, b])
+            .chain(radii)
+            .chain([scale])
+        {
+            self.float(value)?;
+        }
         Ok(offset)
     }
     fn polygon(
@@ -190,7 +249,7 @@ impl Commands {
                 vertices += 1;
             }
         }
-        self.words[offset as usize] = vertices;
+        self.set(offset as usize, vertices)?;
         Ok(offset)
     }
 }
@@ -199,4 +258,28 @@ fn count(value: usize) -> Result<u32, Error> {
 }
 fn invalid(message: &str) -> Error {
     Error::SceneEncoding(message.into())
+}
+
+// Similarities only: finite nonzero columns, equal squared lengths and zero dot
+// product within 1e-12 relative error. Translation, rotation, uniform scale and
+// reflection preserve circular corners and distance. Shear/nonuniform scale fall
+// back to polygons. The tolerance admits floating-point rotation composition.
+pub(crate) fn sdf_scale(transform: Affine) -> Option<f64> {
+    let [a, b, c, d, e, f] = transform.coefficients();
+    if ![a, b, c, d, e, f].iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let x = a * a + b * b;
+    let y = c * c + d * d;
+    let tolerance = x.max(y) * 1e-12;
+    if x > 0.0
+        && x.is_finite()
+        && y.is_finite()
+        && (x - y).abs() <= tolerance
+        && (a * c + b * d).abs() <= tolerance
+    {
+        Some(x.sqrt())
+    } else {
+        None
+    }
 }
