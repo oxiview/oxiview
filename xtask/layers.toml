@@ -1,7 +1,8 @@
 # Single source of truth for dependency direction; allowlists apply to normal / build / dev.
 # The dev-only exception lets any checked crate use test tools in tests.
 # Skip crates not yet created; new workspace members must be registered.
-exempt = ["xtask"]
+# Examples are applications, so they are exempt; the xtask ban still applies to them.
+exempt = ["xtask", "window"]
 forbidden = ["xtask"]
 dev-only = ["oxiview-testing"]
 
@@ -92,6 +93,10 @@ role = "tooling"
 allow = ["oxiview-base", "oxiview-scene"]
 
 [[external]]
+packages = ["kurbo", "peniko"]
+allow = ["oxiview-base"]
+
+[[external]]
 packages = ["objc2", "objc2-*"]
 allow = ["oxiview-platform-macos"]
 
@@ -106,4 +111,8 @@ allow = ["oxiview-text"]
 [[external]]
 packages = ["vello", "wgpu"]
 allow = ["oxiview-render-wgpu", "oxiview-app"]
+
+[[external]]
+packages = ["vello_cpu"]
+allow = ["oxiview-render-cpu"]
 

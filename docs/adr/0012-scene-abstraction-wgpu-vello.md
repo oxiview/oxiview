@@ -17,3 +17,7 @@ Color: blend internally in **linear space**, support Display P3 wide gamut, and 
 
 - The owned platform layer (ADR-0002) must hand native surfaces (CAMetalLayer, HWND/DXGI, wl_surface) to wgpu directly.
 - Theme and style colors carry color-space semantics, defaulting to sRGB.
+
+## Notes
+
+- 2026-11-13 (M0): The CPU path adopted `vello_cpu` (pinned `=0.4.0`, confined to `oxiview-render-cpu`) and is locked by pixel snapshots. An offscreen wgpu renderer with a process-wide device arrived ahead of M1; it rasterizes the shared Scene encoding with its own compute shader, and Vello itself is deferred to M1 alongside the SDF fast path. GPU pixels are not required to match the CPU path byte for byte. Presentation blits pixels into the window until M1 introduces a `wgpu::Surface`.

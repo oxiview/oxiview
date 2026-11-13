@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
+members = ["crates/*", "examples/*", "xtask"]
 
 [workspace.package]
 edition = "2024"
@@ -10,6 +10,21 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+oxiview-platform = { version = "0.0.0", path = "crates/oxiview-platform" }
+oxiview-platform-macos = { version = "0.0.0", path = "crates/oxiview-platform-macos" }
+oxiview-render-cpu = { version = "0.0.0", path = "crates/oxiview-render-cpu" }
+oxiview-render-wgpu = { version = "0.0.0", path = "crates/oxiview-render-wgpu" }
+objc2 = "=0.6.5"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSNotification", "NSString", "NSGeometry"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSView", "NSControl", "NSImageView", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics"] }
+wgpu = { version = "=30.0.2", default-features = false, features = ["std", "metal", "vulkan", "dx12", "wgsl"] }
+oxiview-scene = { version = "0.0.0", path = "crates/oxiview-scene" }
+vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline"] }
+oxiview-base = { version = "0.0.0", path = "crates/oxiview-base" }
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
+kurbo = "=0.13.1"
+peniko = "=0.6.1"
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 divan = "=0.1.21"
 png = "0.18.1"
 thiserror = "2.0.21"
