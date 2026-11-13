@@ -820,6 +820,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxiview-platform-headless"
+version = "0.0.0"
+dependencies = [
+ "oxiview-base",
+ "oxiview-platform",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "oxiview-platform-macos"
 version = "0.0.0"
 dependencies = [

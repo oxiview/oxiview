@@ -196,7 +196,8 @@ pub enum WindowEvent {
     Destroyed,
 }
 
-/// Main-thread entry point. Implementations enforce process-main-thread placement.
+/// Main-thread entry point. Native backends enforce the process main thread;
+/// the headless backend treats the thread that created it as the main thread.
 /// No `Send` bound: native event-loop state may be thread-affine.
 pub trait Platform {
     /// Runs and pumps system events on the calling main thread until exit.
