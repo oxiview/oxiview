@@ -10,15 +10,17 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+oxiview-app = { version = "0.0.0", path = "crates/oxiview-app" }
 oxiview-core = { version = "0.0.0", path = "crates/oxiview-core" }
 oxiview-platform-headless = { version = "0.0.0", path = "crates/oxiview-platform-headless" }
 oxiview-platform = { version = "0.0.0", path = "crates/oxiview-platform" }
 oxiview-platform-macos = { version = "0.0.0", path = "crates/oxiview-platform-macos" }
 oxiview-render-cpu = { version = "0.0.0", path = "crates/oxiview-render-cpu" }
+objc2-quartz-core = { version = "=0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CADisplayLink", "CATransaction", "objc2-core-foundation"] }
 oxiview-render-wgpu = { version = "0.0.0", path = "crates/oxiview-render-wgpu" }
 objc2 = "=0.6.5"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSNotification", "NSString", "NSGeometry"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSView", "NSControl", "NSImageView", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSGeometry", "NSRunLoop"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSView", "NSEvent", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation", "objc2-quartz-core"] }
 wgpu = { version = "=30.0.2", default-features = false, features = ["std", "metal", "vulkan", "dx12", "wgsl"] }
 oxiview-scene = { version = "0.0.0", path = "crates/oxiview-scene" }
 vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline"] }

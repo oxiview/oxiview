@@ -1,8 +1,7 @@
-//! Unstable application-composition root for the M1 S3 headless path.
-//! The CPU image is retained for deterministic integration tests. Native window
-//! wiring and public application APIs are deferred to later milestone steps.
+//! Unstable composition root for headless CPU and native macOS GPU windows.
+//! Application and presenter state are initialized on each window thread.
 
-use oxiview_core::{Application, PaintedScene, Presenter};
+use oxiview_core::{Application, PaintedScene, PresentationOutcome, Presenter};
 use oxiview_platform::{EventLoopContext, PhysicalSize, Platform, WindowAttributes, WindowId};
 use oxiview_platform_headless::HeadlessPlatform;
 use oxiview_render_cpu::{CpuRenderer, Renderer};
@@ -59,7 +58,10 @@ impl Presenter for CpuPresenter {
         self.size = size;
         Ok(())
     }
-    fn present(&mut self, scene: &PaintedScene) -> Result<(), oxiview_core::Error> {
+    fn present(
+        &mut self,
+        scene: &PaintedScene,
+    ) -> Result<PresentationOutcome, oxiview_core::Error> {
         let image = self
             .renderer
             .render(
@@ -81,7 +83,7 @@ impl Presenter for CpuPresenter {
             .checked_add(1)
             .ok_or_else(|| oxiview_core::Error::Present("present counter exhausted".into()))?;
         output.image = Some(image);
-        Ok(())
+        Ok(PresentationOutcome::Presented)
     }
 }
 /// Creates one window and runs its core loop on a new window thread.
@@ -110,7 +112,7 @@ pub fn run_headless<A: Application>(
             thread::Builder::new()
                 .name("oxiview-window".into())
                 .spawn(move || {
-                    oxiview_core::run_window(window.endpoint, move || {
+                    oxiview_core::run_window(window.endpoint, move |_| {
                         Ok((
                             application()?,
                             CpuPresenter {
@@ -127,6 +129,73 @@ pub fn run_headless<A: Application>(
                 .map_err(|error| oxiview_platform::Error::OperationFailed(error.to_string()))?,
         );
         ready(context, id, observed)
+    });
+    let joined = match worker {
+        Some(worker) => worker
+            .join()
+            .map_err(|_| Error::Operation("window thread unwind escaped boundary".into()))?
+            .map_err(Error::Core),
+        None => Ok(()),
+    };
+    result?;
+    joined
+}
+
+#[cfg(target_os = "macos")]
+struct SurfacePresenter(oxiview_render_wgpu::WindowSurface);
+#[cfg(target_os = "macos")]
+impl Presenter for SurfacePresenter {
+    fn configure(&mut self, size: PhysicalSize, _: f64) -> Result<(), oxiview_core::Error> {
+        self.0
+            .configure(PixelSize {
+                width: size.width,
+                height: size.height,
+            })
+            .map_err(|e| oxiview_core::Error::Present(e.to_string()))
+    }
+    fn present(
+        &mut self,
+        scene: &PaintedScene,
+    ) -> Result<PresentationOutcome, oxiview_core::Error> {
+        use oxiview_render_wgpu::FrameOutcome;
+        match self
+            .0
+            .render(&scene.scene, scene.root)
+            .map_err(|e| oxiview_core::Error::Present(e.to_string()))?
+        {
+            FrameOutcome::Presented => Ok(PresentationOutcome::Presented),
+            FrameOutcome::Skipped | FrameOutcome::Suspended => Ok(PresentationOutcome::Skipped),
+        }
+    }
+}
+/// Runs one native macOS window. Call on the process main thread.
+/// The application factory and GPU surface initialization run on the window thread.
+#[cfg(target_os = "macos")]
+pub fn run_macos<A: Application>(
+    platform: oxiview_platform_macos::MacOsPlatform,
+    attributes: WindowAttributes,
+    application: impl FnOnce() -> Result<A, oxiview_core::Error> + Send + 'static,
+) -> Result<(), Error> {
+    let mut worker = None;
+    let result = platform.run(|context| {
+        let window = context.create_window(attributes)?;
+        worker = Some(
+            thread::Builder::new()
+                .name("oxiview-window".into())
+                .spawn(move || {
+                    oxiview_core::run_window(window.endpoint, |endpoint| {
+                        let handle = endpoint.native_surface_handle()?.ok_or_else(|| {
+                            oxiview_core::Error::Present("native surface unavailable".into())
+                        })?;
+                        let surface = oxiview_render_wgpu::RenderContext::new()
+                            .and_then(|context| context.create_surface(handle))
+                            .map_err(|error| oxiview_core::Error::Present(error.to_string()))?;
+                        Ok((application()?, SurfacePresenter(surface)))
+                    })
+                })
+                .map_err(|e| oxiview_platform::Error::OperationFailed(e.to_string()))?,
+        );
+        Ok(())
     });
     let joined = match worker {
         Some(worker) => worker

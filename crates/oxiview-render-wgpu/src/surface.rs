@@ -20,9 +20,13 @@ pub enum FrameOutcome {
 /// A per-window surface sharing the process-wide instance, adapter, and device.
 ///
 /// Create, configure, render and drop on the window thread. The platform adapter
-/// sets the layer's presentsWithTransaction; this adapter never changes it.
-/// wgpu-hal 30.0.2's metal/surface.rs reads that property when acquiring each
-/// drawable, so S5 must set it before acquisition and synchronize layer mutations.
+/// keeps presentsWithTransaction off in steady state and enables it only during
+/// the main-thread resize transaction, resetting it before commit. This adapter
+/// never changes it. wgpu-hal 30.0.2's metal/surface.rs acquire_texture snapshots
+/// the property after nextDrawable; main-thread Resized/display-link Frame event
+/// publication orders the flag update before window-thread acquisition. A resize
+/// timeout can leave a transaction-enabled drawable presenting late; the platform
+/// traces this exception.
 pub struct WindowSurface {
     context: RenderContext,
     handle: NativeSurfaceHandle,

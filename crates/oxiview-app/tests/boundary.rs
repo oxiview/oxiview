@@ -52,13 +52,13 @@ impl Presenter for GatedPresenter {
     fn configure(&mut self, _: PhysicalSize, _: f64) -> Result<(), oxiview_core::Error> {
         Ok(())
     }
-    fn present(&mut self, _: &PaintedScene) -> Result<(), oxiview_core::Error> {
+    fn present(&mut self, _: &PaintedScene) -> Result<PresentationOutcome, oxiview_core::Error> {
         self.entered.send(()).unwrap();
         self.release.recv().unwrap();
         if self.fail {
             Err(oxiview_core::Error::Present("test failure".into()))
         } else {
-            Ok(())
+            Ok(PresentationOutcome::Presented)
         }
     }
 }
@@ -104,7 +104,7 @@ fn exercise(panic: bool, fail: bool) {
                     }
                 });
                 worker = Some(scope.spawn(move || {
-                    run_window(window.endpoint, || {
+                    run_window(window.endpoint, |_| {
                         Ok((
                             App {
                                 panic,

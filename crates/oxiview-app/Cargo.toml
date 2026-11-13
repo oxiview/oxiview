@@ -20,3 +20,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 oxiview-render-wgpu.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+oxiview-platform-macos.workspace = true
+oxiview-render-wgpu.workspace = true

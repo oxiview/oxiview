@@ -1,7 +1,7 @@
 //! Unstable UI-core scheduling and window-thread orchestration (M1 S3).
 //! Scenes use physical pixel coordinates. No renderer or clock is selected here.
 
-use oxiview_platform::{PhysicalSize, WindowEndpoint, WindowEvent, WindowWaker};
+use oxiview_platform::{PhysicalSize, ResizeToken, WindowEndpoint, WindowEvent, WindowWaker};
 use oxiview_scene::{NodeId, Scene};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -167,21 +167,30 @@ pub trait Application {
     /// Receives per-frame latency data after successful presentation.
     fn presented(&mut self, _record: Option<LatencyRecord>) {}
 }
+/// Result of a presentation attempt, independent of the renderer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentationOutcome {
+    /// The frame was submitted for presentation.
+    Presented,
+    /// No frame was presented; retain pending work and retry at the next vsync.
+    Skipped,
+}
 /// Renderer-independent presentation boundary, used only on the window thread.
 pub trait Presenter {
     /// Reconfigures or suspends for zero size before painting a resize.
     fn configure(&mut self, size: PhysicalSize, scale_factor: f64) -> Result<(), Error>;
     /// Presents the complete selected scene and maps failures into core errors.
-    fn present(&mut self, scene: &PaintedScene) -> Result<(), Error>;
+    fn present(&mut self, scene: &PaintedScene) -> Result<PresentationOutcome, Error>;
 }
 
 /// Runs a window thread to destruction, releasing the presenter before the endpoint.
 /// The factory constructs thread-local application/presenter state inside the panic
-/// boundary. Unexpected unwinds terminate the loop; no captured state is reused.
+/// boundary, with endpoint access for native surface initialization. Unexpected
+/// unwinds terminate the loop; no captured state is reused.
 /// As with all unwind boundaries, aborts and double panics cannot be recovered.
 pub fn run_window<A: Application, P: Presenter>(
     endpoint: Box<dyn WindowEndpoint>,
-    initialize: impl FnOnce() -> Result<(A, P), Error>,
+    initialize: impl FnOnce(&mut dyn WindowEndpoint) -> Result<(A, P), Error>,
 ) -> Result<(), Error> {
     // This boundary takes exclusive ownership of the endpoint and factory. The
     // assertion permits trait objects without UnwindSafe; it does not promise
@@ -189,7 +198,7 @@ pub fn run_window<A: Application, P: Presenter>(
     // presenter before endpoint, and no state is accessed after an unwind.
     let result = catch_unwind(AssertUnwindSafe(move || {
         let mut endpoint = endpoint;
-        let (mut application, mut presenter) = initialize()?;
+        let (mut application, mut presenter) = initialize(&mut *endpoint)?;
         window_loop(&mut *endpoint, &mut application, &mut presenter)
     }));
     match result {
@@ -217,6 +226,7 @@ fn window_loop(
         height: 0,
     };
     let mut scale = 1.0;
+    let mut pending_resize = None;
     scheduler.resize(size);
     let waker = endpoint.waker();
     loop {
@@ -263,7 +273,8 @@ fn window_loop(
                 size = physical_size;
                 scale = scale_factor;
                 presenter.configure(size, scale)?;
-                if scheduler.resize(size) {
+                pending_resize = Some(token);
+                let presented = if scheduler.resize(size) {
                     produce(
                         application,
                         presenter,
@@ -275,15 +286,12 @@ fn window_loop(
                         },
                         size,
                         scale,
-                    )?;
-                }
-                match endpoint.acknowledge_resize(token) {
-                    // Expired/superseded sizes remain valid, but their token cannot
-                    // be acknowledged. Continue to the newest queued transaction.
-                    Err(oxiview_platform::Error::InvalidResizeToken) => {
-                        tracing::warn!(?token, "resize token expired before acknowledgement")
-                    }
-                    result => result?,
+                    )? == PresentationOutcome::Presented
+                } else {
+                    true // Zero size suspends without requiring a drawable.
+                };
+                if presented {
+                    acknowledge_pending(endpoint, &mut pending_resize)?;
                 }
             }
             WindowEvent::Frame {
@@ -291,7 +299,7 @@ fn window_loop(
                 refresh_interval,
             } => {
                 if scheduler.frame() {
-                    produce(
+                    let outcome = produce(
                         application,
                         presenter,
                         &mut scheduler,
@@ -303,6 +311,9 @@ fn window_loop(
                         size,
                         scale,
                     )?;
+                    if outcome == PresentationOutcome::Presented {
+                        acknowledge_pending(endpoint, &mut pending_resize)?;
+                    }
                 }
             }
             WindowEvent::CloseRequested if application.should_close() => {
@@ -312,6 +323,20 @@ fn window_loop(
         }
     }
 }
+fn acknowledge_pending(
+    endpoint: &mut dyn WindowEndpoint,
+    pending: &mut Option<ResizeToken>,
+) -> Result<(), Error> {
+    if let Some(token) = pending.take() {
+        match endpoint.acknowledge_resize(token) {
+            Err(oxiview_platform::Error::InvalidResizeToken) => {
+                tracing::warn!(?token, "resize token expired before acknowledgement");
+            }
+            result => result?,
+        }
+    }
+    Ok(())
+}
 fn produce(
     application: &mut impl Application,
     presenter: &mut impl Presenter,
@@ -319,15 +344,17 @@ fn produce(
     timing: FrameTiming,
     size: PhysicalSize,
     scale: f64,
-) -> Result<(), Error> {
+) -> Result<PresentationOutcome, Error> {
     let _frame = tracing::info_span!("frame", ?timing).entered();
     let scene = application.paint(timing, size, scale)?;
-    {
+    let outcome = {
         let _present = tracing::info_span!("present").entered();
-        presenter.present(&scene)?;
+        presenter.present(&scene)?
+    };
+    if outcome == PresentationOutcome::Presented {
+        application.presented(scheduler.produced(timing));
     }
-    application.presented(scheduler.produced(timing));
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]

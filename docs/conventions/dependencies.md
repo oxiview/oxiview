@@ -167,50 +167,68 @@ direction checks but could not refresh RustSec because `github.com` failed DNS
 resolution. Fresh advisories and the complete cargo-deny review are therefore
 unverified; offline compilation is not an advisory pass.
 
-## One-image AppKit viewer (M0 S5)
+## Native AppKit window backend (M1 S5)
 
 | Dependency | Assessment and scope |
 | --- | --- |
 | `objc2 =0.6.5` | MIT. Objective-C runtime bindings, restricted as a direct dependency to `oxiview-platform-macos`. Reuses the version already resolved by the Metal renderer. |
-| `objc2-foundation =0.3.2` | MIT. Foundation bindings for main-thread markers, NSObject, notifications, strings, and geometry. Restricted to the same adapter. |
-| `objc2-app-kit =0.3.2` | Zlib OR Apache-2.0 OR MIT; the MIT branch is compatible with workspace distribution. AppKit bindings for one window and one bitmap image view. Restricted to the same adapter. |
+| `objc2-foundation =0.3.2` | MIT. Main-thread markers, NSObject, strings, geometry, and run-loop bindings. Restricted to the same adapter. |
+| `objc2-app-kit =0.3.2` | Zlib OR Apache-2.0 OR MIT; select MIT. Native application, window, custom content view, input events, and view display links. Restricted to the same adapter. |
+| `objc2-quartz-core =0.3.2` | MIT. CALayer, CAMetalLayer, and CADisplayLink bindings, already resolved transitively by wgpu. Now a direct dependency of the macOS adapter only, under the existing `objc2-*` allowlist. |
 
-Exact versions are defined in the root workspace and inherited by the adapter
-only on macOS. The [upstream project](https://github.com/madsmtm/objc2) and
-[published AppKit metadata](https://docs.rs/crate/objc2-app-kit/0.3.2) identify
-the maintained bindings project; exact cached sources and its runnable window
-example were inspected for ownership, feature gates, and callback signatures.
-Recent issue-response and commit activity were not independently confirmed.
-These are native system bindings, not pure Rust implementations: compilation
-requires the Apple SDK/linker, and presentation requires macOS AppKit,
-Foundation, the Objective-C runtime, and a display session. No separate native
-library is bundled or downloaded by this change.
+Exact versions live in workspace dependencies; the adapter inherits them only
+on macOS. These are the maintained [objc2 project](https://github.com/madsmtm/objc2)
+bindings. The cached release sources were inspected for feature gates, ownership,
+callback signatures, and display-link operations. No network research was used
+in S5. Native operation requires the Apple SDK/linker and a macOS display session.
+The backend requires **macOS 14 or later**, checked before application startup,
+for NSView's CADisplayLink. No system library is bundled or downloaded.
 
-AppKit defaults are disabled. Enabled features are `std`, `NSApplication`,
-`NSRunningApplication` (activation policy), `NSResponder`, `NSWindow`,
-`NSView`, `NSControl` (image-view superclass), `NSImageView`, `NSImage`,
-`NSImageRep`, `NSBitmapImageRep`, and `NSGraphics` (bitmap color-space name).
-Foundation defaults are disabled; explicit features are `std`, `NSObject`,
-`NSNotification`, `NSString`, and `NSGeometry`. Their feature dependencies
-also enable the Foundation support needed by these AppKit declarations.
+Defaults are disabled. AppKit enables `std`, `NSApplication`,
+`NSRunningApplication`, `NSResponder`, `NSWindow`, `NSView`, `NSEvent`,
+`NSGraphics` (backing-store type), `NSGraphicsContext` (event constructors),
+`objc2-core-foundation` (backing scale), and `objc2-quartz-core` (view layers and
+display links). The M0 image-view, image, image-representation, bitmap, and control
+features are removed. Foundation enables `std`, `NSObject`,
+`NSString`, `NSGeometry`, and `NSRunLoop`. QuartzCore enables `std`, `CALayer`,
+`CAMetalLayer`, `CADisplayLink`, `CATransaction`, and `objc2-core-foundation`.
+Feature dependencies also enable the declarations needed by those APIs.
+No new package or dispatch dependency is required. Core Foundation run-loop
+source calls use a small private FFI boundary with the system framework.
 
-The observed adapter tree reuses `objc2-encode`, `bitflags`,
-`objc2-core-foundation`, and the existing `thiserror` proc-macro graph.
-It has no duplicate versions; only `objc2-app-kit` was newly added to the
-root lockfile. Disabling unused framework features avoids the default broad
-AppKit binding surface. Neither std nor the existing framework crates provide
-a native window. All Objective-C objects stay private to the adapter.
+The custom flipped content view hosts a CAMetalLayer. It uses top-left content
+placement and redraw-during-resize policy, with explicit hosting-layer geometry
+and disabled implicit animations inside the resize transaction.
+One intentional native layer retain per window lasts for the process lifetime,
+as ADR-0025 requires for copied handles; M9 must revisit ownership before
+reclamation. Windows and views stay attached until endpoint teardown confirms
+surface release. Run-loop sources use shared ownership and are invalidated and
+released after their last endpoint/control owner disappears.
 
-The port uses the existing `thiserror` dependency for its required top-level
-error enum and has no renderer or Objective-C dependency. The example is a
-workspace member under `examples/` that inherits the existing PNG encoder; it is
-exempt from layer rules as an application, but the xtask ban still applies.
+The main thread pumps AppKit; the window thread owns application state, scene
+painting, surface configuration, and presentation. A CFRunLoopSource services
+commands in common modes and in a dedicated resize-wait mode. That mode also
+services display links, so skipped resize frames can retry before the bounded
+wait expires. The display link is paused unless a frame is armed, and pauses
+again when delivering its one coalesced opportunity. The layer permanently uses
+`presentsWithTransaction`, avoiding a race between acquisition and flag changes;
+wgpu-hal 30.0.2 reads the flag during acquisition and waits for command scheduling
+before directly presenting the drawable. Live-resize visual quality still needs
+human confirmation.
 
-The window exists solely to show one frame and is replaced when M1 designs the
-real platform trait. Straight RGBA8 bytes are copied into an AppKit-owned
-non-premultiplied bitmap, retained by an NSImage in an NSImageView. There is no
-GPU surface, Metal layer, or rendering dependency in the platform crates.
+All timestamps use mach absolute uptime in seconds: `CACurrentMediaTime`,
+`NSEvent.timestamp`, and CADisplayLink's `targetTimestamp`, converted to Duration.
+Input uses capture time. Resize prediction uses a future display-link target if
+available, otherwise current uptime plus the last known refresh interval
+(initially 1/60 second).
 
-Dependency-direction checks passed. Fresh RustSec review remains blocked:
-`cargo xtask deps` could not resolve `github.com` while refreshing the advisory
-database and returned exit code 2. This is not a cargo-deny or advisory pass.
+The composition root adds target-gated native adapter and GPU renderer wiring.
+No Objective-C or renderer-specific type enters the platform or core APIs.
+Core's presentation outcome preserves dirty state and input attribution on a
+skipped presentation and defers resize acknowledgement until success.
+
+Native acceptance uses `window --idle-check 5`. Debug builds additionally support
+`OXIVIEW_WINDOW_INPUT_CHECK=1 cargo run -p window`, which posts two native mouse
+motion events through AppKit, checks that each produces a frame, and invokes
+native close intent. These checks are explicit commands, never window-opening
+unit tests. They are S5 functional checks, not S6 latency or CPU benchmarks.
