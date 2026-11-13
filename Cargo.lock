@@ -815,6 +815,7 @@ dependencies = [
 name = "oxiview-platform"
 version = "0.0.0"
 dependencies = [
+ "oxiview-base",
  "thiserror",
 ]
 

@@ -8,7 +8,7 @@ oxiview is a self-drawn Rust UI framework exclusively for native macOS / Windows
 - Use Rust stable 1.97 and edition 2024; framework builds must not use nightly or unstable features.
 - `cargo xtask verify` must pass before committing. Run verification locally only ([ADR-0019](docs/adr/0019-local-only-verification.md)).
 - Library code must not use unwrap/expect/panic. See the [error conventions](docs/conventions/unsafe-panic-errors.md) for limited exceptions in tests, xtask, examples, and compile-time assertions.
-- Restrict unsafe to platform and rendering adapters. Every unsafe block needs `// SAFETY:` and every unsafe function needs `# Safety`; see [safety boundaries](docs/conventions/unsafe-panic-errors.md).
+- Restrict unsafe to platform and rendering adapters, except the single native surface handle constructor declaration in `oxiview-base` ([ADR-0025](docs/adr/0025-owned-native-surface-handle.md)). Every unsafe block needs `// SAFETY:` and every unsafe function needs `# Safety`; see [safety boundaries](docs/conventions/unsafe-panic-errors.md).
 - Follow [xtask/layers.toml](xtask/layers.toml) for dependency direction. Convert third-party types through an anti-corruption layer instead of exposing them in public APIs.
 - Internal crates use `oxiview-*`, version `0.0.0`, and `publish = false`; the existing `xtask` engineering tool and public `oxiview` facade follow the ADR naming decisions.
 - Define dependency versions in the root `[workspace.dependencies]`; crates inherit them with `xxx.workspace = true`. Follow the [dependency conventions](docs/conventions/dependencies.md) when adding dependencies.

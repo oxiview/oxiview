@@ -5,6 +5,7 @@
 mod color;
 mod geometry;
 mod services;
+mod surface;
 #[cfg(test)]
 mod system;
 #[cfg(test)]
@@ -13,6 +14,7 @@ mod tests;
 pub use color::Color;
 pub use geometry::{Affine, CornerRadii, Point, Rect, Size};
 pub use services::{Clock, ManualClock, ManualRng, ManualScheduler, Rng, Scheduler};
+pub use surface::{NativeSurfaceHandle, NativeSurfaceKind};
 
 /// Recoverable foundation failures, independent of implementation libraries.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

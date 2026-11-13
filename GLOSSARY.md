@@ -26,6 +26,12 @@ _Avoid_: UI thread
 A thread running state, layout, painting, and presentation for one or more windows. The default is one thread per window.
 _Avoid_: render thread, UI thread
 
+**Window endpoint**:
+The transferable, per-window receiver and command interface used exclusively on its assigned window thread.
+
+**Resize token**:
+An identity correlating a window resize transaction with acknowledgement of presentation at its new physical size.
+
 **Shared-thread mode**:
 A configuration in which multiple windows run on the same window thread and can share state directly.
 
@@ -42,6 +48,9 @@ _Avoid_: rendering mode, refresh mode
 **On-demand rendering**:
 Producing frames only for invalidated state, animation, or system requests, with no frame loop while idle.
 _Avoid_: lazy rendering, passive rendering
+
+**Predicted presentation timestamp**:
+The backend clock time at which a requested frame is expected to become visible on the display.
 
 **Signal**:
 A reactive value whose dependencies can be tracked. Changes directly notify dependent computations and node properties.
@@ -132,6 +141,9 @@ A dedicated rendering path that analytically draws common UI primitives, such as
 **Compositing layer**:
 A painting unit that can update independently and then compose with other layers. External textures also enter as layers.
 _Avoid_: Layer (without qualification), surface
+
+**Native surface handle**:
+An owned framework description of a native presentation object passed from a platform adapter to a rendering adapter. It owns the representation, not the native object's storage.
 
 **Native child view**:
 A native system view embedded in a framework window, always above self-drawn content.

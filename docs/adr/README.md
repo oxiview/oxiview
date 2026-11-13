@@ -28,3 +28,4 @@ Language: **English**
 | [0022](0022-foundation-libraries.md) | Foundation library choices | Engineering |
 | [0023](0023-agent-conventions-dual-harness.md) | Agent conventions: one canonical source for Claude Code and Codex | Engineering |
 | [0024](0024-project-name-oxiview.md) | Project name: oxiview | Engineering |
+| [0025](0025-owned-native-surface-handle.md) | Owned native surface handle and one unsafe constructor declaration in oxiview-base | 2 Platform abstraction |
