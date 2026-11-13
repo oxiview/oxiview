@@ -10,6 +10,8 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+oxiview-core = { version = "0.0.0", path = "crates/oxiview-core" }
+oxiview-platform-headless = { version = "0.0.0", path = "crates/oxiview-platform-headless" }
 oxiview-platform = { version = "0.0.0", path = "crates/oxiview-platform" }
 oxiview-platform-macos = { version = "0.0.0", path = "crates/oxiview-platform-macos" }
 oxiview-render-cpu = { version = "0.0.0", path = "crates/oxiview-render-cpu" }

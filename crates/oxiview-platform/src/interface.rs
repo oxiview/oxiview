@@ -173,6 +173,11 @@ pub enum WindowEvent {
         physical_size: PhysicalSize,
         /// Finite positive physical pixels per logical unit.
         scale_factor: f64,
+        /// Backend prediction for when a frame presented for this resize becomes visible,
+        /// using the same monotonic backend clock as every other timestamp.
+        predicted_presentation_timestamp: Duration,
+        /// Positive display refresh interval for this resize prediction.
+        refresh_interval: Duration,
         /// Acknowledgement identity for this transaction.
         token: ResizeToken,
     },

@@ -9,6 +9,8 @@
 //! Vsync boundaries are positive multiples of the configured refresh interval.
 //! An armed request produces one event at the first boundary strictly after the
 //! request, with predicted presentation equal to that boundary (zero latency).
+//! Resize predictions, including the initial resize, use the first boundary
+//! strictly after resize virtual time and the configured refresh interval.
 //! Advancing over several boundaries never produces unsolicited frames.
 //!
 //! The creating thread is the simulated main thread. Safe portable std cannot
@@ -156,7 +158,15 @@ fn destroy(w: &mut Window) {
         }
     }
 }
-fn resize(w: &mut Window, now: Duration) -> Result<ResizeToken> {
+fn next_vsync(now: Duration, interval: Duration) -> Result<Duration> {
+    let delta = interval.as_nanos() - now.as_nanos() % interval.as_nanos();
+    let seconds =
+        u64::try_from(delta / 1_000_000_000).map_err(|_| DriverError::Invalid("vsync overflow"))?;
+    now.checked_add(Duration::new(seconds, (delta % 1_000_000_000) as u32))
+        .ok_or(DriverError::Invalid("vsync overflow"))
+}
+fn resize(w: &mut Window, now: Duration, interval: Duration) -> Result<ResizeToken> {
+    let prediction = next_vsync(now, interval)?;
     let deadline = now
         .checked_add(w.timeout)
         .ok_or(DriverError::Invalid("resize deadline overflow"))?;
@@ -176,6 +186,8 @@ fn resize(w: &mut Window, now: Duration) -> Result<ResizeToken> {
         outcome: None,
     });
     w.events.push_back(WindowEvent::Resized {
+        predicted_presentation_timestamp: prediction,
+        refresh_interval: interval,
         physical_size: w.size,
         scale_factor: w.scale,
         token,
@@ -239,9 +251,10 @@ impl Platform for HeadlessPlatform {
         let mut state = self.shared.lock()?;
         state.initialized = true;
         let now = state.clock.now();
+        let interval = state.interval;
         for w in &mut state.windows {
             if w.alive
-                && let Err(error) = resize(w, now)
+                && let Err(error) = resize(w, now, interval)
             {
                 initialized = Err(error.into());
                 break;
@@ -454,15 +467,7 @@ impl WindowEndpoint for Endpoint {
         let w = window(&mut state, self.id)?;
         live(w)?;
         if w.frame.is_none() {
-            let remainder = now.as_nanos() % interval.as_nanos();
-            let delta = interval.as_nanos() - remainder;
-            let seconds = u64::try_from(delta / 1_000_000_000)
-                .map_err(|_| DriverError::Invalid("vsync overflow"))?;
-            let offset = Duration::new(seconds, (delta % 1_000_000_000) as u32);
-            w.frame = Some(
-                now.checked_add(offset)
-                    .ok_or(DriverError::Invalid("vsync overflow"))?,
-            );
+            w.frame = Some(next_vsync(now, interval)?);
         }
         Ok(())
     }
@@ -630,6 +635,8 @@ impl Driver {
             return Err(DriverError::Invalid("initialization has not returned"));
         }
         let now = state.clock.now();
+        let interval = state.interval;
+        next_vsync(now, interval)?;
         let w = window(&mut state, id)?;
         live(w)?;
         now.checked_add(w.timeout)
@@ -641,7 +648,7 @@ impl Driver {
         }
         w.size = size;
         w.scale = scale;
-        let token = resize(w, now)?;
+        let token = resize(w, now, interval)?;
         self.shared.changed.notify_all();
         Ok(token)
     }

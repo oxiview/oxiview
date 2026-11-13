@@ -30,7 +30,9 @@ fn run(test: impl FnOnce(Box<dyn WindowEndpoint>, Driver) + Send) {
                 assert_eq!(created.endpoint.poll_event()?, None);
                 scope.spawn(move || {
                     let mut endpoint = created.endpoint;
-                    let initial = token(endpoint.wait_event().unwrap());
+                    let initial_event = endpoint.wait_event().unwrap();
+                    assert!(matches!(initial_event, WindowEvent::Resized { predicted_presentation_timestamp, refresh_interval, .. } if predicted_presentation_timestamp == ms(10) && refresh_interval == ms(10)));
+                    let initial = token(initial_event);
                     endpoint.acknowledge_resize(initial).unwrap();
                     test(endpoint, driver);
                 });
@@ -185,6 +187,8 @@ fn resize_ack_supersession_zero_size_and_main_thread_wait() {
                         WindowEvent::Resized {
                             physical_size: size,
                             scale_factor: 2.0,
+                            predicted_presentation_timestamp: ms(20),
+                            refresh_interval: ms(10),
                             token: first
                         }
                     );
@@ -536,4 +540,27 @@ fn dropping_main_alone_keeps_window_alive_and_drop_endpoint_closes_loop() {
         rx.recv().unwrap().wake(),
         Err(Error::WindowDestroyed)
     ));
+}
+
+#[test]
+fn resize_prediction_between_and_on_boundaries() {
+    run(|mut e, d| {
+        for (now, prediction) in [(ms(3), ms(10)), (ms(10), ms(20))] {
+            d.advance_to(now).unwrap();
+            let token = d
+                .resize(
+                    e.id(),
+                    PhysicalSize {
+                        width: 12,
+                        height: 8,
+                    },
+                    1.0,
+                )
+                .unwrap();
+            assert!(
+                matches!(e.wait_event().unwrap(), WindowEvent::Resized { predicted_presentation_timestamp, refresh_interval, .. } if predicted_presentation_timestamp == prediction && refresh_interval == ms(10))
+            );
+            e.acknowledge_resize(token).unwrap();
+        }
+    });
 }

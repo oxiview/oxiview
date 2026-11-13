@@ -801,12 +801,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxiview-app"
+version = "0.0.0"
+dependencies = [
+ "oxiview-base",
+ "oxiview-core",
+ "oxiview-platform",
+ "oxiview-platform-headless",
+ "oxiview-render-cpu",
+ "oxiview-scene",
+ "thiserror",
+]
+
+[[package]]
 name = "oxiview-base"
 version = "0.0.0"
 dependencies = [
  "kurbo",
  "peniko",
  "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "oxiview-core"
+version = "0.0.0"
+dependencies = [
+ "oxiview-platform",
+ "oxiview-scene",
  "thiserror",
  "tracing",
 ]

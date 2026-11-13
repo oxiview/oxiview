@@ -51,6 +51,11 @@ presentation timestamp is the boundary itself: presentation latency is zero.
 Additional elapsed boundaries do not generate frames without another request.
 Counters count enqueued Frame events. Destruction may discard queued events.
 
+Every Resized event, including the initial resize after initialization, carries
+the first virtual vsync boundary strictly after its publication time as its
+predicted presentation timestamp, plus the configured refresh interval.
+The immediate resize presentation does not arm or consume a Frame event.
+
 Resize deadlines are measured from publication using the window's resize_timeout.
 Advancement expires pending tokens at or beyond the deadline, counts each timeout
 once, and traces its window, token, and timeout. A blocked wait never advances
