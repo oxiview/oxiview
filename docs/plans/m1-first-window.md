@@ -14,7 +14,7 @@ Confirmed before execution:
 | Question | Decision |
 | --- | --- |
 | Vello | Deferred to M4, when text and arbitrary paths need it. M1 adds SDF for rounded rectangles; the M0 polygon compute path stays as the fallback for everything else. ADR-0012's M0 note is corrected accordingly. |
-| Native surface handle | An owned handle type in `oxiview-base` (for example a `CAMetalLayer` pointer variant), with an `unsafe` validity contract. `oxiview-platform-macos` produces it, `oxiview-render-wgpu` converts it to wgpu's surface target internally, `oxiview-app` wires the two. No third-party handle type in any public API. Recorded in a new ADR. |
+| Native surface handle | An owned handle type in `oxiview-base` (for example a `CAMetalLayer` pointer variant). Its only constructor is an `unsafe fn` whose contract the producing platform adapter upholds, following the raw-window-handle model. `oxiview-base` thereby gains one narrow unsafe exception: declaring that constructor, with no unsafe blocks or unsafe impls. `oxiview-render-wgpu` consumes the handle and converts it to wgpu's surface target internally; `oxiview-app` wires the two without unsafe. No third-party handle type in any public API. Recorded in a new ADR, with AGENTS.md and the unsafe conventions updated. |
 | Hard targets | Both levels. Ordinary `verify` runs deterministic headless tests: zero frames while idle, and input-to-frame latency counted in virtual vsync intervals. `bench` (`verify --full`) opens a real macOS window and measures `input_to_pixel_ms` and `idle_cpu_percent`. |
 | Live resize | Flicker-free on macOS in M1. During live resize the main thread waits, bounded by a timeout, for the window thread to commit a frame at the new size, presented with the Core Animation transaction. The main/window-thread synchronization protocol is fixed in M1 and must also be implementable on the headless backend. |
 | Minimum macOS | macOS 14, for `CADisplayLink` on views and screens. `CVDisplayLink` is deprecated and not used. |
@@ -52,7 +52,8 @@ Each step passes `cargo xtask verify` on its own and is committed on its own.
 
 - Replace M0's one-image port. Define the event loop entry, window creation, window identity, raw pointer and keyboard events, scale factor and its changes, the vsync clock source, resize with the synchronization protocol above, and the main-to-window-thread channel.
 - Frame policy enum with on-demand implemented and both continuous variants reserved, returning an unsupported error.
-- Owned native surface handle type in `oxiview-base` with its safety contract. Write the ADR for it and update the ADR index.
+- Owned native surface handle type in `oxiview-base` with its safety contract. Write the ADR for it, update the ADR index, and amend AGENTS.md and the unsafe conventions for the `oxiview-base` exception.
+- M0's one-image port stays alongside the new interface, marked for removal, so the M0 window keeps building until S5 replaces it.
 - Capability query per ADR-0002, with no capability yet beyond what the window needs.
 
 Acceptance: the interface compiles with no platform dependency. Every method has a doc comment stating its threading requirement.
@@ -77,7 +78,6 @@ Acceptance: on the headless backend, an idle window produces zero frames across 
 - A per-window surface created from the owned handle, sharing the process-wide device. Surface loss and device loss both recover.
 - SDF shader for filled and stroked rounded rectangles with solid and linear-gradient brushes. Everything else keeps the polygon path.
 - Unify the two RGBA8 image types into one owned type.
-- Delete M0's blit presentation path.
 
 Acceptance: offscreen SDF output is compared with the CPU renderer within a stated tolerance, with no byte-for-byte requirement. Device-loss recovery still passes. CPU snapshots are unchanged.
 
@@ -86,6 +86,7 @@ Acceptance: offscreen SDF output is compared with the CPU renderer within a stat
 - AppKit event loop on the main thread, one window thread, a `CAMetalLayer`-backed view, `CADisplayLink` vsync, backing scale factor and its changes.
 - Flicker-free live resize using the S1 protocol.
 - `oxiview-app` wires the platform backend, renderer, and scheduler.
+- Delete M0's one-image port and blit presentation path, and replace the M0 window example with the M1 demo.
 
 Acceptance: `cargo run -p` the demo opens a window, and dragging its edge shows neither stretching nor flicker, confirmed by a human. An idle window presents no frames, verified by trace counters.
 
