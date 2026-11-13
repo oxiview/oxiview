@@ -17,10 +17,10 @@ Progress from small to large. Every milestone delivers a runnable demo, tests, a
 |---|---|---|---|
 | M-1 | [Engineering baseline](plans/m-1-engineering-baseline.md) ✅ | **Choices**: technology, design, build system, directory constraints (ADRs 0019–0023); **conventions**: AGENTS.md (unsafe/panic/errors, API stability and versions, dependencies, commits and branches); **skills**: ADR and glossary maintenance, scaffolding (crates/widgets/capabilities), review checklist, verification; **test harness**: snapshots, benchmarks, performance; **agent harness**: automated `cargo xtask` verification; workspace skeleton + dependency rules and checks | 0001, 0019–0023 |
 | M0 | [Foundation](plans/m0-foundation.md) ✅ | Retained Scene; CPU renderer (vello_cpu) with pixel snapshots; offscreen wgpu renderer with a process-wide device; injectable clocks, scheduling, and randomness; tracing; one macOS window presenting by blit | 0012, 0016 |
-| M1 | First window | Platform interface; macOS + headless platform backends; main/window thread separation; wgpu surface; on-demand frame scheduling and vsync; SDF fast path | 0002, 0003, 0004, 0018 |
+| M1 | [First window](plans/m1-first-window.md) | Platform interface; macOS + headless platform backends; main/window thread separation; wgpu surface; on-demand frame scheduling and vsync; SDF fast path | 0002, 0003, 0004, 0018 |
 | M2 | Node tree and layout | Arena node tree; three levels of dirty flags; layout protocol + Taffy; typed styles; hit testing and pointer events | 0007, 0008, 0009 |
 | M3 | Reactivity and components | Signals, scopes, Show/For; Builder API; function components; local executor + background thread pool | 0005, 0006 |
-| M4 | Static text | Parley text stack; hybrid glyph atlas and vectors; rich text; DPI | 0010 |
+| M4 | Static text | Parley text stack; Vello GPU path; hybrid glyph atlas and vectors; rich text; DPI | 0010 |
 | M5 | Focus, keyboard, and themes | Focus and Tab order; Action/Keymap; state variants; tokens and theme hot reload; system preference signals | 0008, 0011 |
 | M6 | Text editing | Editing core; IME preedit; selection; undo; fuzzing | 0010, 0011 |
 | M7 | Basic widgets and scrolling | Basic widgets; scrolling and inertia; virtual lists and tables | 0001 |
