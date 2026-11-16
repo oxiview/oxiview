@@ -15,3 +15,11 @@ oxiview-scene.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name = "render"
+path = "../../benches/render.rs"
+harness = false

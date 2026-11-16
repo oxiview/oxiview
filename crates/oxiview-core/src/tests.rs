@@ -15,7 +15,10 @@ fn idle_invalidation_redraw_and_coalescing() {
     s.redraw();
     assert!(!s.schedule().request_frame);
     assert!(s.frame());
-    assert_eq!(s.produced(timing(FrameKind::Vsync)), None);
+    assert_eq!(
+        s.produced(timing(FrameKind::Vsync), Duration::from_millis(10)),
+        None
+    );
     assert_eq!(s.schedule(), Schedule::default());
     assert!(!s.frame());
     s.redraw();
@@ -49,7 +52,7 @@ fn resize_consumes_input_without_duplicate_vsync_and_zero_suspends() {
         width: 8,
         height: 8
     }));
-    let record = s.produced(timing(FrameKind::Resize));
+    let record = s.produced(timing(FrameKind::Resize), Duration::from_millis(10));
     assert_eq!(
         record.map(|r| r.latency()),
         Some(Some(Duration::from_millis(17)))
@@ -67,8 +70,14 @@ fn resize_consumes_input_without_duplicate_vsync_and_zero_suspends() {
         width: 8,
         height: 8
     }));
-    assert!(s.produced(timing(FrameKind::Resize)).is_some());
-    assert!(s.produced(timing(FrameKind::Vsync)).is_none());
+    assert!(
+        s.produced(timing(FrameKind::Resize), Duration::from_millis(10))
+            .is_some()
+    );
+    assert!(
+        s.produced(timing(FrameKind::Vsync), Duration::from_millis(10))
+            .is_none()
+    );
 }
 #[test]
 fn input_that_does_not_invalidate_is_not_attributed() {
@@ -76,7 +85,7 @@ fn input_that_does_not_invalidate_is_not_attributed() {
     s.input(Duration::from_millis(1));
     s.invalidate();
     s.input(Duration::from_millis(5));
-    let record = s.produced(timing(FrameKind::Vsync));
+    let record = s.produced(timing(FrameKind::Vsync), Duration::from_millis(10));
     assert_eq!(
         record.map(|r| r.input_capture_timestamp),
         Some(Duration::from_millis(5))
@@ -116,7 +125,7 @@ fn skipped_frame_retains_input_and_rearms_until_presented() {
     }
     struct Skipper(bool);
     impl Presenter for Skipper {
-        fn configure(&mut self, _: PhysicalSize, _: f64) -> Result<(), Error> {
+        fn configure(&mut self, _: PhysicalSize, _: f64, _: bool) -> Result<(), Error> {
             Ok(())
         }
         fn present(&mut self, _: &PaintedScene) -> Result<PresentationOutcome, Error> {
@@ -145,6 +154,7 @@ fn skipped_frame_retains_input_and_rearms_until_presented() {
         let mut presenter = Skipper(true);
         assert_eq!(
             produce(
+                || Duration::from_millis(10),
                 &mut app,
                 &mut presenter,
                 &mut scheduler,
@@ -160,6 +170,7 @@ fn skipped_frame_retains_input_and_rearms_until_presented() {
         assert!(scheduler.frame());
         assert_eq!(
             produce(
+                || Duration::from_millis(10),
                 &mut app,
                 &mut presenter,
                 &mut scheduler,
@@ -292,7 +303,7 @@ fn resize_token_waits_for_a_presented_retry() {
     }
     struct Skipper(Arc<Mutex<Observed>>);
     impl Presenter for Skipper {
-        fn configure(&mut self, _: PhysicalSize, _: f64) -> Result<(), Error> {
+        fn configure(&mut self, _: PhysicalSize, _: f64, _: bool) -> Result<(), Error> {
             Ok(())
         }
         fn present(&mut self, _: &PaintedScene) -> Result<PresentationOutcome, Error> {
@@ -312,6 +323,7 @@ fn resize_token_waits_for_a_presented_retry() {
         observed: observed.clone(),
         events: VecDeque::from([
             WindowEvent::Resized {
+                display_sync: false,
                 physical_size: PhysicalSize {
                     width: 10,
                     height: 10,

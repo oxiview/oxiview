@@ -146,6 +146,38 @@ fn idle_has_zero_additional_frames_and_presents() {
     });
 }
 #[test]
+fn deterministic_input_phases_meet_one_interval_and_then_remain_idle() {
+    run(false, true, |d, id, output, rx, _| {
+        // Includes the full-interval boundary and a point immediately before vsync.
+        let interval = ms(10);
+        for (cycle, phase) in [0, 1, 3, 5, 7, 9].into_iter().enumerate() {
+            let start = interval * cycle as u32;
+            let capture = start + ms(phase);
+            d.advance_to(capture).unwrap();
+            d.pointer_moved(id, Point::new(cycle as f64, 2.0), None)
+                .unwrap();
+            assert!(matches!(event(rx).0, WindowEvent::PointerMoved { .. }));
+            d.wait_until_blocked(id, WaitKind::Event).unwrap();
+            d.advance_to(start + interval).unwrap();
+            assert!(matches!(event(rx).0, WindowEvent::Frame { .. }));
+            let record = presented(rx).unwrap();
+            assert_eq!(record.input_capture_timestamp, capture);
+            assert_eq!(record.timing.refresh_interval, interval);
+            assert!(record.submit_latency().unwrap() <= interval);
+            assert_eq!(record.submission_timestamp, start + interval);
+            d.wait_until_blocked(id, WaitKind::Event).unwrap();
+        }
+        let initial = output.snapshot().unwrap().presents;
+        let events = d.counters(id).unwrap().frames;
+        for _ in 0..1000 {
+            d.advance_by(interval).unwrap();
+        }
+        assert_eq!(output.snapshot().unwrap().presents, initial);
+        assert_eq!(d.counters(id).unwrap().frames, events);
+    });
+}
+
+#[test]
 fn pointer_produces_one_next_vsync_frame_with_latency() {
     run(false, true, |d, id, output, rx, _| {
         d.advance_to(ms(3)).unwrap();

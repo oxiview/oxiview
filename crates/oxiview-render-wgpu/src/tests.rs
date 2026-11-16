@@ -25,6 +25,83 @@ fn pixel(image: &RgbaImage, x: usize, y: usize) -> &[u8] {
 }
 
 #[test]
+fn tiled_render_matches_unculled_scene_at_edges_and_nested_groups() -> TestResult {
+    let context = RenderContext::new()?;
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Opacity(0.7))?;
+    scene.insert(Some(root), 0, NodeKind::Opacity(0.3))?; // Empty scope.
+    for i in 0..40 {
+        let transform = match i % 4 {
+            0 => Affine::IDENTITY,
+            1 => Affine::new([0.0, 1.5, -1.5, 0.0, 64.25, -8.5]),
+            2 => Affine::new([-1.0, 0.0, 0.0, 1.0, 65.0, 0.0]),
+            _ => Affine::new([1.2, 0.25, 0.3, 0.8, -4.0, 0.25]),
+        };
+        let group = scene.insert(Some(root), i + 1, NodeKind::Opacity(0.6))?;
+        let transformed = scene.insert(Some(group), 0, NodeKind::Transform(transform))?;
+        let clip = scene.insert(
+            Some(transformed),
+            0,
+            NodeKind::Clip(Clip::RoundedRect(
+                Rect::new(15.8, -8.0, 63.8, 66.0),
+                CornerRadii::uniform(3.0),
+            )),
+        )?;
+        let x = (i % 8) as f64 * 16.0 - 16.2;
+        let y = (i / 8) as f64 * 16.0 - 0.2;
+        let rect = Rect::new(x, y, x + 16.0, y + 17.0);
+        let brush = Brush::Solid(Color::from_rgba8((i * 5) as u8, 180, 100, 190));
+        let primitive = if i % 2 == 0 {
+            Primitive::Stroke(rect, CornerRadii::uniform(4.0), 3.5, brush)
+        } else {
+            Primitive::Fill(rect, CornerRadii::uniform(4.0), brush)
+        };
+        scene.insert(Some(clip), 0, NodeKind::Draw(primitive))?;
+    }
+    let tiled = context.render(&scene, root, SIZE)?;
+    let commands = encoding::Commands::unbinned(&scene.encode(root)?, SIZE)?;
+    let unculled = context
+        .process
+        .lock()
+        .map_err(|e| e.to_string())?
+        .render(&commands, SIZE)?;
+    assert_eq!(tiled.pixels(), unculled.pixels());
+    assert!(tiled.pixels().iter().any(|b| *b != 0));
+    Ok(())
+}
+
+#[test]
+fn sparse_thousand_primitive_scene_keeps_tile_work_local() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Opacity(0.5))?;
+    for i in 0..1000 {
+        let x = (i % 40) as f64 * 32.0 + 2.0;
+        let y = (i / 40) as f64 * 32.0 + 2.0;
+        scene.insert(
+            Some(root),
+            i,
+            fill(Rect::new(x, y, x + 24.0, y + 24.0), red()),
+        )?;
+    }
+    let size = PixelSize {
+        width: 1280,
+        height: 840,
+    };
+    let data = encoding::Commands::new(&scene.encode(root)?, size)?.bytes();
+    let words: Vec<_> = data
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let table = words[3] as usize;
+    let tiles = size.width.div_ceil(16) * size.height.div_ceil(16);
+    for tile in 0..tiles as usize {
+        // At most one primitive plus its opacity begin/end, never all 1,000.
+        assert!(words[table + tile * 2 + 1] <= 3);
+    }
+    Ok(())
+}
+
+#[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn offscreen_readback_and_process_wide_recovery() -> TestResult {
     let first = RenderContext::new()?;

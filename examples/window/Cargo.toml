@@ -16,5 +16,7 @@ oxiview-render-cpu.workspace = true
 oxiview-app.workspace = true
 oxiview-core.workspace = true
 oxiview-platform.workspace = true
-oxiview-platform-macos.workspace = true
+oxiview-platform-macos = { workspace = true, features = ["diagnostics"] }
+serde_json.workspace = true
+serde.workspace = true
 png.workspace = true

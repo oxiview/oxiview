@@ -10,6 +10,9 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+block2 = "=0.6.2"
+objc2-metal = { version = "=0.3.2", default-features = false, features = ["std", "MTLDrawable", "block2", "objc2-core-foundation"] }
+libc = "=0.2.191"
 oxiview-app = { version = "0.0.0", path = "crates/oxiview-app" }
 oxiview-core = { version = "0.0.0", path = "crates/oxiview-core" }
 oxiview-platform-headless = { version = "0.0.0", path = "crates/oxiview-platform-headless" }

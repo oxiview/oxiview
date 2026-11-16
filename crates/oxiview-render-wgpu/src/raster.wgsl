@@ -85,8 +85,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = vec2<f32>(id.xy) + vec2(0.5);
     var accumulated = vec4(0.0);
     var depth = 0u;
-    var command = 4u;
-    while command < words[3] {
+    let tile = (id.y / 16u) * ((words[0] + 15u) / 16u) + id.x / 16u;
+    let list = words[words[3] + tile * 2u];
+    let count = words[words[3] + tile * 2u + 1u];
+    for (var index = 0u; index < count; index++) {
+        let command = words[list + index];
         let op = words[command];
         if op == 1u {
             layers[base+depth] = accumulated;
@@ -106,7 +109,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 accumulated = source + accumulated*(1.0-source.a);
             }
         }
-        command = words[command+1u];
     }
     textureStore(output, id.xy, accumulated);
 }

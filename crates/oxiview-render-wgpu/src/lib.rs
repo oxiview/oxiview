@@ -9,7 +9,8 @@
 //! retain polygon coverage using a fixed sixteen-sample inside-test pattern.
 //! SDF coverage evaluates distance once at the pixel center, converts it to physical
 //! pixels, and applies the one-pixel ramp `clamp(0.5 - distance_px, 0, 1)`.
-//! The ordered interpreter runs once per pixel with clip and opacity stacks,
+//! Commands are binned into 16x16 physical-pixel tiles using conservative bounds.
+//! The ordered interpreter visits only its tile's commands with clip and opacity stacks,
 //! composing coverage-weighted paint and evaluating gradients at the pixel center.
 //! Shared antialiased edges can exhibit coverage conflation between operations.
 //! Output is straight sRGB RGBA8, without a byte-for-byte CPU equivalence promise.
@@ -96,11 +97,18 @@ impl RenderContext {
         let encoded = scene
             .encode(root)
             .map_err(|e| Error::SceneEncoding(e.to_string()))?;
-        let commands = encoding::Commands::new(&encoded, size)?;
-        self.process
+        let mut process = self
+            .process
             .lock()
-            .map_err(|e| Error::DeviceLost(e.to_string()))?
-            .render(&commands, size)
+            .map_err(|e| Error::DeviceLost(e.to_string()))?;
+        process.ensure_device()?;
+        let gpu = process
+            .gpu
+            .as_ref()
+            .ok_or_else(|| Error::DeviceLost("missing device".into()))?;
+        surface::validate_size(size, gpu.device.limits().max_texture_dimension_2d)?;
+        let commands = encoding::Commands::new(&encoded, size)?;
+        process.render(&commands, size)
     }
 
     /// Destroys the shared device to exercise the real loss/recreation path.

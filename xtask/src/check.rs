@@ -91,6 +91,14 @@ pub(crate) fn execute(check: &dyn Check, root: &Path) -> CheckResult {
             "bench-1.log",
             "bench-2.log",
             "bench-3.log",
+            "bench-latency-1.json",
+            "bench-latency-1.log",
+            "bench-latency-2.json",
+            "bench-latency-2.log",
+            "bench-latency-3.json",
+            "bench-latency-3.log",
+            "bench-idle.json",
+            "bench-idle.log",
         ] {
             let path = format!("target/xtask/{artifact}");
             if root.join(&path).is_file() {

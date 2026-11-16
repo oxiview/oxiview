@@ -169,6 +169,9 @@ pub enum WindowEvent {
     /// supersedes it with a new token. Zero size must be acknowledged after
     /// suspending presentation, without waiting for an impossible drawable.
     Resized {
+        /// Presentation hint: synchronize to display scanout (fullscreen).
+        /// Windowed backends report false; presenters may fall back to synchronization.
+        display_sync: bool,
         /// New content dimensions in physical pixels.
         physical_size: PhysicalSize,
         /// Finite positive physical pixels per logical unit.

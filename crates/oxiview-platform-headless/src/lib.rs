@@ -186,6 +186,7 @@ fn resize(w: &mut Window, now: Duration, interval: Duration) -> Result<ResizeTok
         outcome: None,
     });
     w.events.push_back(WindowEvent::Resized {
+        display_sync: false,
         predicted_presentation_timestamp: prediction,
         refresh_interval: interval,
         physical_size: w.size,

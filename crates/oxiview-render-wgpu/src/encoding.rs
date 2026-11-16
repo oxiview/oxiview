@@ -2,8 +2,11 @@ use crate::{Error, PixelSize};
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, Primitive};
 
+mod tiles;
+use tiles::Bounds;
+
 // Word-addressed private protocol, mirrored in raster.wgsl. Header: width,
-// height, stack stride, end offset. Each operation starts with opcode and next.
+// height, stack stride, tile-table offset. Each operation starts with opcode and next.
 // Draw: outer shape, inner shape, clip count, brush, then clip offsets.
 // SDF shape: MAX tag, inverse affine, bounds, TL/TR/BR/BL radii, scale.
 // Polygon: vertex count then xy pairs. Brush: inverse affine, gradient endpoints,
@@ -19,18 +22,25 @@ impl Commands {
             depth: 1,
         };
         let mut opacities = Vec::new();
+        let mut operations: Vec<(u32, Bounds)> = Vec::new();
         for node in &scene.nodes {
             let start = result.words.len();
+            let mut bounds = Bounds::EMPTY;
             match node {
                 EncodedNode::BeginOpacity(opacity) => {
-                    opacities.push(*opacity);
+                    opacities.push((*opacity, operations.len(), Bounds::EMPTY));
                     result.depth = result.depth.max(count(opacities.len())?);
                     result.words.extend([1, 0]);
                 }
                 EncodedNode::EndOpacity => {
-                    let opacity = opacities
+                    let (opacity, begin, group_bounds) = opacities
                         .pop()
                         .ok_or_else(|| invalid("unbalanced opacity"))?;
+                    bounds = group_bounds;
+                    operations
+                        .get_mut(begin)
+                        .ok_or_else(|| invalid("invalid opacity group"))?
+                        .1 = bounds;
                     result.words.extend([2, 0]);
                     result.float(opacity)?;
                 }
@@ -61,6 +71,8 @@ impl Commands {
                         width.map_or(0.0, |width| width / 2.0),
                         *transform,
                     )?;
+                    bounds =
+                        Bounds::shape(rect, width.map_or(0.0, |width| width / 2.0), *transform);
                     result.set(start + 2, outer)?;
                     let inner = if let Some(width) = width {
                         result.shape(rect, radii, -width / 2.0, *transform)?
@@ -74,6 +86,7 @@ impl Commands {
                             Clip::RoundedRect(rect, radii) => (rect, radii),
                         };
                         let offset = result.shape(rect, radii, 0.0, clip.transform)?;
+                        bounds = bounds.intersect(Bounds::shape(rect, 0.0, clip.transform));
                         result.set(clip_start + index, offset)?;
                     }
                     result.set(start + 5, count(result.words.len())?)?;
@@ -102,9 +115,17 @@ impl Commands {
                 }
             }
             result.set(start + 1, count(result.words.len())?)?;
+            if let Some((_, _, group_bounds)) = opacities.last_mut() {
+                *group_bounds = group_bounds.union(bounds);
+            }
+            operations.push((count(start)?, bounds));
+        }
+        if !opacities.is_empty() {
+            return Err(invalid("unbalanced opacity"));
         }
         result.set(2, result.depth)?;
         result.set(3, count(result.words.len())?)?;
+        tiles::append(&mut result.words, &operations, size)?;
         Ok(result)
     }
     pub(crate) fn bytes(&self) -> Vec<u8> {
@@ -112,6 +133,33 @@ impl Commands {
             .iter()
             .flat_map(|word| word.to_le_bytes())
             .collect()
+    }
+    // Differential-test oracle: the same GPU interpreter visits the original
+    // complete ordered stream in every tile, without any spatial culling.
+    #[cfg(test)]
+    pub(crate) fn unbinned(scene: &EncodedScene, size: PixelSize) -> Result<Self, Error> {
+        let mut commands = Self::new(scene, size)?;
+        let end = *commands
+            .words
+            .get(3)
+            .ok_or_else(|| invalid("missing header"))?;
+        commands.words.truncate(end as usize);
+        let bounds = Bounds::shape(
+            Rect::new(0.0, 0.0, f64::from(size.width), f64::from(size.height)),
+            0.0,
+            Affine::IDENTITY,
+        );
+        let mut operations = Vec::new();
+        let mut cursor = 4;
+        while cursor < end {
+            operations.push((cursor, bounds));
+            cursor = *commands
+                .words
+                .get(cursor as usize + 1)
+                .ok_or_else(|| invalid("invalid command"))?;
+        }
+        tiles::append(&mut commands.words, &operations, size)?;
+        Ok(commands)
     }
     fn float(&mut self, value: f64) -> Result<(), Error> {
         let value = value as f32;

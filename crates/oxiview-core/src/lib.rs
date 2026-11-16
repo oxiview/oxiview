@@ -50,8 +50,15 @@ pub struct LatencyRecord {
     pub input_capture_timestamp: Duration,
     /// Backend timing, including the frame kind.
     pub timing: FrameTiming,
+    /// Endpoint clock sampled immediately after the presenter returned Presented.
+    pub submission_timestamp: Duration,
 }
 impl LatencyRecord {
+    /// Framework capture-to-submission latency, excluding compositor delay.
+    pub fn submit_latency(&self) -> Option<Duration> {
+        self.submission_timestamp
+            .checked_sub(self.input_capture_timestamp)
+    }
     /// Returns None for inconsistent future-dated input, rather than underflowing.
     pub fn latency(&self) -> Option<Duration> {
         self.timing
@@ -117,12 +124,17 @@ impl Scheduler {
     }
     /// Commits a produced frame and returns its input record, if any.
     /// A resize does not disarm a previously requested backend opportunity.
-    pub fn produced(&mut self, timing: FrameTiming) -> Option<LatencyRecord> {
+    pub fn produced(
+        &mut self,
+        timing: FrameTiming,
+        submission_timestamp: Duration,
+    ) -> Option<LatencyRecord> {
         self.dirty = false;
         self.input
             .take()
             .map(|input_capture_timestamp| LatencyRecord {
                 input_capture_timestamp,
+                submission_timestamp,
                 timing,
             })
     }
@@ -178,7 +190,12 @@ pub enum PresentationOutcome {
 /// Renderer-independent presentation boundary, used only on the window thread.
 pub trait Presenter {
     /// Reconfigures or suspends for zero size before painting a resize.
-    fn configure(&mut self, size: PhysicalSize, scale_factor: f64) -> Result<(), Error>;
+    fn configure(
+        &mut self,
+        size: PhysicalSize,
+        scale_factor: f64,
+        display_sync: bool,
+    ) -> Result<(), Error>;
     /// Presents the complete selected scene and maps failures into core errors.
     fn present(&mut self, scene: &PaintedScene) -> Result<PresentationOutcome, Error>;
 }
@@ -263,6 +280,7 @@ fn window_loop(
         }
         match event {
             WindowEvent::Resized {
+                display_sync,
                 physical_size,
                 scale_factor,
                 token,
@@ -272,10 +290,11 @@ fn window_loop(
                 let _span = tracing::info_span!("resize", ?physical_size, ?token).entered();
                 size = physical_size;
                 scale = scale_factor;
-                presenter.configure(size, scale)?;
+                presenter.configure(size, scale, display_sync)?;
                 pending_resize = Some(token);
                 let presented = if scheduler.resize(size) {
                     produce(
+                        || endpoint.now(),
                         application,
                         presenter,
                         &mut scheduler,
@@ -300,6 +319,7 @@ fn window_loop(
             } => {
                 if scheduler.frame() {
                     let outcome = produce(
+                        || endpoint.now(),
                         application,
                         presenter,
                         &mut scheduler,
@@ -338,6 +358,7 @@ fn acknowledge_pending(
     Ok(())
 }
 fn produce(
+    now: impl FnOnce() -> Duration,
     application: &mut impl Application,
     presenter: &mut impl Presenter,
     scheduler: &mut Scheduler,
@@ -352,7 +373,7 @@ fn produce(
         presenter.present(&scene)?
     };
     if outcome == PresentationOutcome::Presented {
-        application.presented(scheduler.produced(timing));
+        application.presented(scheduler.produced(timing, now()));
     }
     Ok(outcome)
 }

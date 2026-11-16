@@ -32,6 +32,7 @@ pub struct WindowSurface {
     handle: NativeSurfaceHandle,
     surface: wgpu::Surface<'static>,
     size: PixelSize,
+    display_sync: bool,
     generation: Option<Arc<AtomicBool>>,
 }
 
@@ -97,6 +98,7 @@ impl WindowSurface {
                 width: 0,
                 height: 0,
             },
+            display_sync: false,
             generation: None,
         })
     }
@@ -104,7 +106,7 @@ impl WindowSurface {
     /// Sets physical dimensions on the window thread; either zero suspends.
     /// Invalid dimensions leave the previous size intact. GPU loss is recoverable
     /// through the shared context; the next use configures the replacement device.
-    pub fn configure(&mut self, size: PixelSize) -> Result<(), Error> {
+    pub fn configure(&mut self, size: PixelSize, display_sync: bool) -> Result<(), Error> {
         let mut process = self
             .context
             .process
@@ -120,7 +122,8 @@ impl WindowSurface {
             self.generation = None;
             return Ok(());
         }
-        configure(&self.surface, gpu, size)?;
+        configure(&self.surface, gpu, size, display_sync)?;
+        self.display_sync = display_sync;
         self.size = size;
         self.generation = Some(Arc::clone(&gpu.lost));
         Ok(())
@@ -152,7 +155,7 @@ impl WindowSurface {
             .as_ref()
             .is_some_and(|generation| Arc::ptr_eq(generation, &gpu.lost))
         {
-            configure(&self.surface, gpu, self.size)?;
+            configure(&self.surface, gpu, self.size, self.display_sync)?;
             self.generation = Some(Arc::clone(&gpu.lost));
         }
         let mut frame = None;
@@ -177,7 +180,7 @@ impl WindowSurface {
                 {
                     // Recreating also handles Lost; no drawable is held here.
                     self.surface = create(&process.instance, self.handle)?;
-                    configure(&self.surface, gpu, self.size)?;
+                    configure(&self.surface, gpu, self.size, self.display_sync)?;
                 }
                 other => {
                     if gpu.lost.load(Ordering::Acquire) {
@@ -208,7 +211,12 @@ impl WindowSurface {
     }
 }
 
-fn configure(surface: &wgpu::Surface<'_>, gpu: &device::Gpu, size: PixelSize) -> Result<(), Error> {
+fn configure(
+    surface: &wgpu::Surface<'_>,
+    gpu: &device::Gpu,
+    size: PixelSize,
+    display_sync: bool,
+) -> Result<(), Error> {
     if !validate_size(size, gpu.device.limits().max_texture_dimension_2d)? {
         return Ok(());
     }
@@ -231,7 +239,20 @@ fn configure(surface: &wgpu::Surface<'_>, gpu: &device::Gpu, size: PixelSize) ->
     {
         return Err(Error::Surface("FIFO presentation unavailable".into()));
     }
-    config.present_mode = wgpu::PresentMode::Fifo;
+    config.present_mode = if !display_sync
+        && capabilities
+            .present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+    {
+        wgpu::PresentMode::Immediate
+    } else {
+        wgpu::PresentMode::Fifo
+    };
+    // Metal maps latency N to N + 1 drawables. Keep three in both modes:
+    // reducing the pool after fullscreen can make even Immediate acquisition
+    // block for an interval. The macOS scheduler bounds outstanding FIFO frames
+    // before painting, allowing input dispatch to continue while the pool is full.
+    config.desired_maximum_frame_latency = 2;
     config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
     scoped(gpu, || surface.configure(&gpu.device, &config))
 }

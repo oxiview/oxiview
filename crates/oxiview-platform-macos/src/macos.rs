@@ -93,13 +93,16 @@ struct Queue {
     endpoint: bool,
     wake: bool,
     frame: bool,
-    #[cfg(debug_assertions)]
-    input_check: VecDeque<Option<Point>>,
+    #[cfg(feature = "diagnostics")]
+    fullscreen: bool,
+    #[cfg(feature = "diagnostics")]
+    input_check: VecDeque<(Point, Duration)>,
     close: bool,
     resize: Option<(ResizeToken, Duration)>,
 }
 struct Shared {
     frames: AtomicU64,
+    feedback: Arc<presentation_probe::Feedback>,
     queue: Mutex<Queue>,
     changed: Condvar,
     source: Arc<RunSource>,
@@ -299,6 +302,7 @@ struct Native {
     initial: Cell<bool>,
     interval: Cell<Duration>,
     target: Cell<Duration>,
+    used_slot: Cell<Duration>,
     closed: Cell<bool>,
 }
 thread_local! { static WINDOWS: RefCell<Vec<Rc<Native>>> = const { RefCell::new(Vec::new()) }; }
@@ -315,28 +319,22 @@ fn service() {
             Ok(q) => (q.close, q.endpoint, q.frame),
             Err(_) => std::process::abort(),
         };
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "diagnostics")]
         {
             let commands = match w.shared.lock() {
                 Ok(mut q) => std::mem::take(&mut q.input_check),
                 Err(_) => std::process::abort(),
             };
-            for position in commands {
-                if let Some(position) = position {
-                    let point =
-                        NSPoint::new(position.x(), w.view.bounds().size.height - position.y());
-                    // A real NSEvent goes through AppKit's event queue and the
-                    // view callback, exercising capture time and coordinate mapping.
-                    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            for (position, timestamp) in commands {
+                let point = NSPoint::new(position.x(), w.view.bounds().size.height - position.y());
+                // A real NSEvent goes through AppKit's event queue and the
+                // view callback, exercising capture time and coordinate mapping.
+                let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
                         objc2_app_kit::NSEventType::MouseMoved, point,
-                        objc2_app_kit::NSEventModifierFlags::empty(), native_time().as_secs_f64(),
+                        objc2_app_kit::NSEventModifierFlags::empty(), timestamp.as_secs_f64(),
                         w.window.windowNumber(), None, 0, 0, 0.0);
-                    if let Some(event) = event {
-                        NSApplication::sharedApplication(w.view.mtm())
-                            .postEvent_atStart(&event, false);
-                    }
-                } else {
-                    w.window.performClose(None);
+                if let Some(event) = event {
+                    NSApplication::sharedApplication(w.view.mtm()).postEvent_atStart(&event, false);
                 }
             }
         }
@@ -359,7 +357,23 @@ fn service() {
             w.window.setDelegate(None);
             w.window.close();
         } else if !w.closed.get() {
-            w.link.setPaused(!frame);
+            #[cfg(feature = "diagnostics")]
+            if w.shared
+                .lock()
+                .is_ok_and(|mut q| std::mem::take(&mut q.fullscreen))
+            {
+                w.window.toggleFullScreen(None);
+            }
+            if frame {
+                let slot = next_slot(w, native_time());
+                if w.target.get() != Duration::ZERO {
+                    deliver(w, slot);
+                } else {
+                    w.link.setPaused(false);
+                }
+            } else {
+                w.link.setPaused(true);
+            }
         }
     }
     if !windows.is_empty()
@@ -379,6 +393,66 @@ fn service() {
                 app.postEvent_atStart(&event, true);
             }
         }
+    }
+}
+// Extrapolate the display clock while paused; startup uses one real tick to
+// establish its phase. Compositor feedback never changes the slot cadence.
+fn unused_slot(slot: Duration, used: Duration, interval: Duration) -> bool {
+    // Recalibration timestamps may differ by microseconds for the same vsync.
+    used.is_zero() || slot.saturating_sub(used) >= interval / 2
+}
+fn next_slot(w: &Native, now: Duration) -> Duration {
+    let anchor = w.target.get();
+    let interval = w.interval.get();
+    if anchor > now {
+        return anchor;
+    }
+    anchor
+        + interval.mul_f64(
+            (now.saturating_sub(anchor).as_secs_f64() / interval.as_secs_f64()).floor() + 1.0,
+        )
+}
+fn prediction(w: &Native, slot: Duration) -> Duration {
+    w.shared
+        .feedback
+        .slot
+        .store(slot.as_nanos() as u64, Ordering::Release);
+    w.shared
+        .feedback
+        .interval
+        .store(w.interval.get().as_nanos() as u64, Ordering::Release);
+    slot + w.shared.feedback.offset()
+}
+fn deliver(w: &Native, slot: Duration) {
+    // A queued tick may arrive after an immediate delivery paused the link.
+    // Never re-arm it unless there is still pending work.
+    if !w.shared.lock().is_ok_and(|q| q.alive && q.frame) {
+        w.link.setPaused(true);
+        return;
+    }
+    if w.layer.displaySyncEnabled() && w.shared.feedback.defer_frame() {
+        // Leave input dispatch running while Metal owns the drawable pool.
+        // Its presentation callback wakes the command source when space returns.
+        w.link.setPaused(true);
+        return;
+    }
+    if !unused_slot(slot, w.used_slot.get(), w.interval.get()) {
+        w.link.setPaused(false);
+        return;
+    }
+    let predicted = prediction(w, slot);
+    if let Ok(mut q) = w.shared.lock()
+        && q.alive
+        && q.frame
+    {
+        q.frame = false;
+        w.used_slot.set(slot);
+        w.link.setPaused(true);
+        q.events.push_back(WindowEvent::Frame {
+            predicted_presentation_timestamp: predicted,
+            refresh_interval: w.interval.get(),
+        });
+        w.shared.changed.notify_all();
     }
 }
 /// # Safety
@@ -459,9 +533,13 @@ fn resize(w: &Native) {
     // A hosting view owns layer geometry. Keep this nested transaction open
     // through acknowledgement, merging it into AppKit's enclosing transaction.
     // Disable implicit animations so old contents never animate between sizes.
+    // Only interactive live resize needs transaction-synchronized presentation.
+    // AppKit reparents the layer during fullscreen transitions; presenting their
+    // final frame with a transaction can discard it and leave the window blank
+    // until new input. Normal asynchronous presentation survives that transition.
     CATransaction::begin();
     CATransaction::setDisableActions(true);
-    w.layer.setPresentsWithTransaction(true);
+    w.layer.setPresentsWithTransaction(w.view.inLiveResize());
     w.layer.setFrame(bounds);
     w.layer.setContentsScale(scale);
     w.layer
@@ -483,13 +561,9 @@ fn resize(w: &Native) {
     if let Ok(mut q) = w.shared.lock() {
         q.resize = Some((token, deadline));
     }
-    // A paused link has no fresh target; use now + last known refresh interval.
-    let predicted = if w.target.get() > now {
-        w.target.get()
-    } else {
-        now.saturating_add(w.interval.get())
-    };
+    let predicted = prediction(w, next_slot(w, now));
     w.shared.emit(WindowEvent::Resized {
+        display_sync: w.window.styleMask().contains(NSWindowStyleMask::FullScreen),
         physical_size: size,
         scale_factor: scale,
         token,
@@ -560,9 +634,8 @@ define_class!(
             if let Some(w) = self.ivars().id.get().and_then(find) {
                 let interval = seconds(link.duration()); if !interval.is_zero() { w.interval.set(interval); }
                 let target = seconds(link.targetTimestamp()); w.target.set(target);
-                if let Ok(mut q) = w.shared.lock() && q.alive && q.frame {
-                    q.frame = false; w.shared.frames.fetch_add(1, Ordering::Relaxed); q.events.push_back(WindowEvent::Frame { predicted_presentation_timestamp: target, refresh_interval: w.interval.get() }); w.shared.changed.notify_all();
-                }
+                w.shared.frames.fetch_add(1, Ordering::Relaxed);
+                deliver(&w, target);
             }
         }); }
         #[unsafe(method(mouseMoved:))]
@@ -637,6 +710,42 @@ define_class!(
     unsafe impl NSObjectProtocol for Delegate {}
     // SAFETY: Exact NSWindowDelegate signatures, dispatched on AppKit's main thread.
     unsafe impl NSWindowDelegate for Delegate {
+        #[unsafe(method(windowDidChangeScreen:))]
+        fn changed_screen(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                if let Some(w) = find(self.ivars().id) {
+                    w.target.set(Duration::ZERO);
+                    w.used_slot.set(Duration::ZERO);
+                    w.shared.feedback.reset();
+                    resize(&w);
+                    // AppKit can discard drawables while reparenting the layer.
+                    // Schedule one normal frame after its transition transaction.
+                    w.shared.emit(WindowEvent::RedrawRequested);
+                }
+            });
+        }
+        #[unsafe(method(windowDidEnterFullScreen:))]
+        fn entered_fullscreen(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                if let Some(w) = find(self.ivars().id) {
+                    resize(&w);
+                    // AppKit can discard drawables while reparenting the layer.
+                    // Schedule one normal frame after its transition transaction.
+                    w.shared.emit(WindowEvent::RedrawRequested);
+                }
+            });
+        }
+        #[unsafe(method(windowDidExitFullScreen:))]
+        fn exited_fullscreen(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                if let Some(w) = find(self.ivars().id) {
+                    resize(&w);
+                    // AppKit can discard drawables while reparenting the layer.
+                    // Schedule one normal frame after its transition transaction.
+                    w.shared.emit(WindowEvent::RedrawRequested);
+                }
+            });
+        }
         #[unsafe(method(windowShouldClose:))]
         fn should_close(&self, _: &NSWindow) -> bool {
             boundary(|| {
@@ -679,26 +788,81 @@ fn key(code: u16) -> KeyCode {
 #[derive(Default)]
 pub struct MacOsPlatform {
     control: MacOsControl,
+    #[cfg(feature = "diagnostics")]
+    diagnostics: bool,
 }
 /// Cross-thread close control and display-link event counters for native runs.
 #[derive(Clone, Default)]
 pub struct MacOsControl(Arc<Mutex<Vec<Arc<Shared>>>>);
 impl MacOsControl {
-    /// ID of the last drawable acquired by the single-window debug probe.
-    #[cfg(debug_assertions)]
-    pub fn test_acquired_drawable(&self) -> u64 {
-        presentation_probe::ACQUIRED.load(Ordering::Acquire)
+    /// ID of the last drawable acquired by the single-window diagnostics probe.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_acquired_drawable(&self) -> u64 {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|w| {
+                w.first()
+                    .map(|w| w.feedback.acquired.load(Ordering::Acquire))
+            })
+            .unwrap_or(0)
     }
 
+    /// Diagnostics only: slot vsync associated with the most recently acquired
+    /// drawable, excluding the production compositor prediction offset.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_acquired_slot(&self) -> Duration {
+        Duration::from_nanos(
+            self.0
+                .lock()
+                .ok()
+                .and_then(|w| {
+                    w.first()
+                        .map(|w| w.feedback.acquired_slot.load(Ordering::Acquire))
+                })
+                .unwrap_or(0),
+        )
+    }
     /// Drains on-screen presentation times (Metal host seconds) and drawable IDs
-    /// captured by the opt-in OXIVIEW_WINDOW_INPUT_CHECK debug layer.
+    /// captured by the opt-in diagnostics layer (also in release builds).
     /// A positive time means Metal reports the drawable was displayed, not merely
-    /// submitted. This process-wide probe is intended for the single-window demo.
-    #[cfg(debug_assertions)]
-    pub fn test_presented_drawables(&self) -> Result<Vec<(u64, f64)>, Error> {
-        presentation_probe::completed()
+    /// submitted. Zero is a distinct not-displayed callback record.
+    /// This process-wide probe is intended for the single-window demo.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_presented_drawables(&self) -> Result<Vec<(u64, f64)>, Error> {
+        let windows = self.0.lock().map_err(|_| failure("control poisoned"))?;
+        let mut result = Vec::new();
+        for w in windows.iter() {
+            if let Ok(mut records) = w.feedback.completed.lock() {
+                result.extend(records.drain(..).map(|(id, time, _slot)| (id, time)));
+            }
+        }
+        Ok(result)
     }
 
+    /// Diagnostics only: schedule fullscreen toggle on the main thread.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_toggle_fullscreen(&self) -> Result<(), Error> {
+        for w in self
+            .0
+            .lock()
+            .map_err(|_| failure("control poisoned"))?
+            .iter()
+        {
+            w.lock()?.fullscreen = true;
+            w.signal();
+        }
+        Ok(())
+    }
+    /// Current production compositor estimate, in host-clock seconds.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_compositor_offset(&self) -> f64 {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|w| w.first().map(|w| w.feedback.offset().as_secs_f64()))
+            .unwrap_or(0.0)
+    }
     /// Requests orderly destruction of all windows from any thread.
     pub fn request_exit(&self) -> Result<(), Error> {
         for window in self
@@ -711,20 +875,45 @@ impl MacOsControl {
         }
         Ok(())
     }
-    /// Posts a synthetic pointer event (Some) or native close-button intent (None).
-    /// Debug builds only, for non-interactive native acceptance checks.
-    #[cfg(debug_assertions)]
-    pub fn post_test_input(&self, position: Option<Point>) -> Result<(), Error> {
-        for w in self
-            .0
-            .lock()
-            .map_err(|_| failure("control poisoned"))?
-            .iter()
-        {
-            w.lock()?.input_check.push_back(position);
-            w.signal();
+    /// Diagnostics only: posts one pointer move through AppKit from any thread.
+    /// Returns its capture timestamp on the backend clock. Bypasses HID and
+    /// WindowServer input; includes the in-process command and AppKit queue delay.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_post_pointer(&self, position: Point) -> Result<Duration, Error> {
+        let windows = self.0.lock().map_err(|_| failure("control poisoned"))?;
+        if windows.len() != 1 {
+            return Err(failure("diagnostics require exactly one window"));
         }
-        Ok(())
+        let timestamp = native_time();
+        let w = &windows[0];
+        w.lock()?.input_check.push_back((position, timestamp));
+        w.signal();
+        Ok(timestamp)
+    }
+
+    /// Diagnostics only: backend host clock; callable from any thread.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_now(&self) -> Duration {
+        native_time()
+    }
+
+    /// Diagnostics only: process user plus system CPU time, from any thread.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_cpu_time(&self) -> Result<Duration, Error> {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: getrusage writes a complete rusage to a correctly aligned
+        // writable pointer on success; RUSAGE_SELF includes all process threads.
+        let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if result != 0 {
+            return Err(failure("getrusage(RUSAGE_SELF) failed"));
+        }
+        // SAFETY: successful getrusage initialized the entire struct above.
+        let usage = unsafe { usage.assume_init() };
+        let total = usage.ru_utime.tv_sec as f64
+            + f64::from(usage.ru_utime.tv_usec) / 1e6
+            + usage.ru_stime.tv_sec as f64
+            + f64::from(usage.ru_stime.tv_usec) / 1e6;
+        Duration::try_from_secs_f64(total).map_err(|_| failure("invalid process CPU time"))
     }
     /// Total display-link frame events delivered in this run.
     pub fn frame_events(&self) -> Result<u64, Error> {
@@ -738,12 +927,21 @@ impl MacOsControl {
     }
 }
 impl MacOsPlatform {
+    /// Enables single-window drawable diagnostics for this run. Call before run,
+    /// on any thread. Feature-gated, off by default even when compiled in.
+    #[cfg(feature = "diagnostics")]
+    pub fn with_diagnostics(mut self) -> Self {
+        self.diagnostics = true;
+        self
+    }
     /// Gets an observation/control handle before entering the main-thread run.
     pub fn control(&self) -> MacOsControl {
         self.control.clone()
     }
 }
 struct Context {
+    #[cfg(feature = "diagnostics")]
+    diagnostics: bool,
     control: MacOsControl,
     mtm: MainThreadMarker,
     source: Arc<RunSource>,
@@ -806,14 +1004,12 @@ impl EventLoopContext for Context {
         let view = ContentView::alloc(self.mtm).set_ivars(ViewState::default());
         // SAFETY: Correct NSView initializer and finite frame for a fresh allocation.
         let view: Retained<ContentView> = unsafe { msg_send![super(view), initWithFrame: rect] };
-        #[cfg(debug_assertions)]
-        let layer = if std::env::var_os("OXIVIEW_WINDOW_INPUT_CHECK").is_some() {
-            presentation_probe::layer()
-        } else {
-            CAMetalLayer::new()
-        };
-        #[cfg(not(debug_assertions))]
-        let layer = CAMetalLayer::new();
+        let feedback = Arc::new(presentation_probe::Feedback::default());
+        #[cfg(feature = "diagnostics")]
+        feedback
+            .diagnostics
+            .store(self.diagnostics, Ordering::Relaxed);
+        let layer = presentation_probe::layer(feedback.clone());
         // Layer-hosting: supply the layer before wantsLayer, so AppKit never
         // replaces it. Never stretch cached content; resize paints physical pixels.
         view.setLayer(Some(&layer));
@@ -828,7 +1024,7 @@ impl EventLoopContext for Context {
         }
         layer.setContentsScale(window.backingScaleFactor());
         // The window thread has no run loop to commit implicit CA transactions.
-        // Only the main-thread resize transaction temporarily enables this flag.
+        // Only interactive live-resize transactions temporarily enable this flag.
         layer.setPresentsWithTransaction(false);
         window.setContentView(Some(&view));
         window.setAcceptsMouseMovedEvents(true);
@@ -849,6 +1045,7 @@ impl EventLoopContext for Context {
         let handle = unsafe { NativeSurfaceHandle::from_macos_metal_layer(address) };
         let shared = Arc::new(Shared {
             frames: AtomicU64::new(0),
+            feedback,
             id,
             handle,
             source: self.source.clone(),
@@ -859,12 +1056,19 @@ impl EventLoopContext for Context {
                 endpoint: true,
                 wake: false,
                 frame: false,
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "diagnostics")]
+                fullscreen: false,
+                #[cfg(feature = "diagnostics")]
                 input_check: VecDeque::new(),
                 close: false,
                 resize: None,
             }),
         });
+        shared
+            .feedback
+            .wake_target
+            .set(Arc::downgrade(&shared))
+            .map_err(|_| failure("presentation wake target already initialized"))?;
         self.control
             .0
             .lock()
@@ -900,6 +1104,7 @@ impl EventLoopContext for Context {
             initial: Cell::new(true),
             interval: Cell::new(Duration::from_nanos(16_666_667)),
             target: Cell::new(Duration::ZERO),
+            used_slot: Cell::new(Duration::ZERO),
             closed: Cell::new(false),
         });
         WINDOWS.with(|w| w.borrow_mut().push(native.clone()));
@@ -943,6 +1148,8 @@ impl Platform for MacOsPlatform {
             app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
             app.finishLaunching();
             let mut context = Context {
+                #[cfg(feature = "diagnostics")]
+                diagnostics: self.diagnostics,
                 control: self.control,
                 mtm,
                 source: source()?,
@@ -974,6 +1181,25 @@ impl Platform for MacOsPlatform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slot_recalibration_does_not_deliver_twice() {
+        let interval = Duration::from_millis(10);
+        let used = Duration::from_millis(100);
+        assert!(!unused_slot(used, used, interval));
+        assert!(!unused_slot(
+            used + Duration::from_micros(10),
+            used,
+            interval
+        ));
+        assert!(!unused_slot(
+            used - Duration::from_micros(10),
+            used,
+            interval
+        ));
+        assert!(unused_slot(used + interval, used, interval));
+        let feedback = presentation_probe::Feedback::default();
+        assert_eq!(feedback.offset(), Duration::from_nanos(16_666_667));
+    }
     #[test]
     fn physical_key_subset_and_buttons() {
         for (code, expected) in [
@@ -1032,80 +1258,260 @@ mod tests {
     }
 }
 
-// Capture the exact drawable returned to wgpu, without acquiring an extra one or
-// relying on private wgpu fields. Only the opt-in debug demo uses this subclass.
-#[cfg(debug_assertions)]
+// Production presentation feedback, per window. Metal reports completed frames;
+// no polling or timers keep an idle application awake.
 mod presentation_probe {
     use super::*;
+    use block2::RcBlock;
+    use objc2::runtime::ProtocolObject;
     use objc2::{AnyThread, runtime::AnyObject};
+    use objc2_metal::MTLDrawable;
+    use std::ptr::NonNull;
+    use std::sync::atomic::AtomicBool;
 
-    struct Drawable(Retained<AnyObject>);
-    // SAFETY: Only CAMetalDrawable objects enter this wrapper. Metal drawables
-    // support cross-thread retention and presentedTime queries; the mutex
-    // serializes our accesses and ownership transfers.
-    unsafe impl Send for Drawable {}
-    static PENDING: Mutex<Vec<Drawable>> = Mutex::new(Vec::new());
-    pub(super) static ACQUIRED: AtomicU64 = AtomicU64::new(0);
+    // Metal may invoke handlers on arbitrary threads. Every field accessed by
+    // handlers is atomic or mutex-protected; no AppKit/window-thread state is used.
+    pub(super) struct Feedback {
+        pub completed: Mutex<Vec<(u64, f64, Duration)>>,
+        pub acquired: AtomicU64,
+        pending: AtomicU64,
+        waiting: AtomicBool,
+        pub wake_target: std::sync::OnceLock<std::sync::Weak<Shared>>,
+        pub acquired_slot: AtomicU64,
+        pub slot: AtomicU64,
+        pub interval: AtomicU64,
+        estimate: AtomicU64,
+        pub diagnostics: AtomicBool,
+    }
+    impl Default for Feedback {
+        fn default() -> Self {
+            Self {
+                completed: Mutex::new(Vec::new()),
+                acquired: AtomicU64::new(0),
+                pending: AtomicU64::new(0),
+                waiting: AtomicBool::new(false),
+                wake_target: std::sync::OnceLock::new(),
+                acquired_slot: AtomicU64::new(0),
+                slot: AtomicU64::new(0),
+                interval: AtomicU64::new(16_666_667),
+                estimate: AtomicU64::new(0),
+                diagnostics: AtomicBool::new(false),
+            }
+        }
+    }
+    impl Feedback {
+        fn acquired(&self, id: u64, slot: u64) {
+            self.pending.fetch_add(1, Ordering::SeqCst);
+            self.acquired.store(id, Ordering::Release);
+            self.acquired_slot.store(slot, Ordering::Release);
+        }
+        // FIFO needs two outstanding presentations to sustain refresh rate, but
+        // painting a third frame would block in nextDrawable behind scanout.
+        // Arm the callback before checking capacity. Sequential consistency
+        // prevents a completion racing this check from losing the wake-up.
+        pub fn defer_frame(&self) -> bool {
+            self.waiting.store(true, Ordering::SeqCst);
+            if self.pending.load(Ordering::SeqCst) >= 2 {
+                true
+            } else {
+                self.waiting.store(false, Ordering::SeqCst);
+                false
+            }
+        }
+        pub fn reset(&self) {
+            self.estimate.store(0, Ordering::Release);
+        }
+        pub fn offset(&self) -> Duration {
+            let interval = self.interval.load(Ordering::Acquire);
+            let estimate = self.estimate.load(Ordering::Acquire);
+            Duration::from_nanos(if estimate == 0 {
+                interval
+            } else {
+                estimate.min(interval * 4)
+            })
+        }
+        fn presented(&self, id: u64, time: f64, slot: Duration) {
+            // Skipped drawables also retire. Count callbacks independently of
+            // drawable IDs, since callbacks can run concurrently and out of order.
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+            if self.waiting.swap(false, Ordering::SeqCst)
+                && let Some(shared) = self.wake_target.get().and_then(std::sync::Weak::upgrade)
+                && shared.lock().is_ok_and(|q| q.alive && q.frame)
+            {
+                shared.signal();
+            }
+            if time.is_finite() && time > 0.0 {
+                let offset = seconds(time).saturating_sub(slot);
+                let bound = self.interval.load(Ordering::Acquire) * 4;
+                let sample = (offset.as_nanos() as u64).clamp(1, bound);
+                // Concurrent callbacks must not overwrite each other's EWMA updates.
+                let _ = self
+                    .estimate
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+                        Some(if old == 0 {
+                            sample
+                        } else {
+                            (old * 7 + sample) / 8
+                        })
+                    });
+            }
+            if self.diagnostics.load(Ordering::Relaxed)
+                && let Ok(mut done) = self.completed.lock()
+            {
+                // Diagnostics must drain records; bound forgotten consumers.
+                if done.len() >= 4096 {
+                    done.remove(0);
+                }
+                // Zero explicitly reports not displayed and never changes the estimate.
+                done.push((id, time, slot));
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn fifo_budget_waits_before_paint_and_retires_out_of_order() {
+            let feedback = Feedback::default();
+            feedback.acquired(0, 1_000_000_000);
+            assert!(!feedback.defer_frame());
+            feedback.acquired(1, 1_016_666_667);
+            assert!(feedback.defer_frame());
+            assert!(feedback.waiting.load(Ordering::SeqCst));
+
+            // A skipped newer drawable retires before the older displayed one.
+            // It frees one slot, rather than declaring every older ID complete.
+            feedback.presented(1, 0.0, Duration::from_nanos(1_016_666_667));
+            assert!(!feedback.waiting.load(Ordering::SeqCst));
+            assert_eq!(feedback.pending.load(Ordering::SeqCst), 1);
+            assert!(!feedback.defer_frame());
+            feedback.acquired(2, 1_033_333_334);
+            assert!(feedback.defer_frame());
+            feedback.presented(0, 1.04, Duration::from_secs(1));
+            assert!(!feedback.defer_frame());
+            feedback.presented(2, 1.06, Duration::from_nanos(1_033_333_334));
+            assert_eq!(feedback.pending.load(Ordering::SeqCst), 0);
+            assert!(!feedback.defer_frame());
+            assert!(!feedback.waiting.load(Ordering::SeqCst));
+        }
+
+        #[test]
+        fn delayed_feedback_keeps_original_slot_and_reports_drops() -> Result<(), String> {
+            let feedback = Arc::new(Feedback::default());
+            feedback.diagnostics.store(true, Ordering::Relaxed);
+            feedback.interval.store(10_000_000, Ordering::Release);
+            // A later acquisition must not invalidate an earlier callback's slot.
+            feedback.slot.store(2_000_000_000, Ordering::Release);
+            feedback.acquired(1, 1_000_000_000);
+            feedback.acquired(2, 2_000_000_000);
+            let worker = Arc::clone(&feedback);
+            std::thread::spawn(move || {
+                worker.presented(1, 1.02, Duration::from_secs(1));
+                worker.presented(2, 0.0, Duration::from_secs(2));
+            })
+            .join()
+            .map_err(|_| "feedback worker panicked")?;
+            assert_eq!(feedback.offset(), Duration::from_millis(20));
+            feedback.acquired(3, 2_000_000_000);
+            feedback.presented(3, 2.028, Duration::from_secs(2));
+            assert_eq!(feedback.offset(), Duration::from_millis(21));
+            let records = feedback.completed.lock().map_err(|e| e.to_string())?;
+            assert_eq!(
+                records.as_slice(),
+                &[
+                    (1, 1.02, Duration::from_secs(1)),
+                    (2, 0.0, Duration::from_secs(2)),
+                    (3, 2.028, Duration::from_secs(2)),
+                ]
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn production_feedback_does_not_collect_diagnostics() -> Result<(), String> {
+            let feedback = Feedback::default();
+            feedback.acquired(1, 1_000_000_000);
+            feedback.presented(1, 1.02, Duration::from_secs(1));
+            assert_eq!(feedback.offset(), Duration::from_millis(20));
+            assert!(
+                feedback
+                    .completed
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .is_empty()
+            );
+            Ok(())
+        }
+    }
 
     define_class!(
-        // SAFETY: CAMetalLayer supports subclassing and off-main-thread
-        // nextDrawable. No AppKit operations or unsynchronized ivars are added.
+        // SAFETY: NSObject subclass with no state; window can be queried on any
+        // thread and always returns nil.
+        #[unsafe(super = NSObject)]
+        struct HostingDelegate;
+        // SAFETY: NSObjectProtocol adds no invariants.
+        unsafe impl NSObjectProtocol for HostingDelegate {}
+        impl HostingDelegate {
+            #[unsafe(method(window))]
+            fn window(&self) -> *mut AnyObject { std::ptr::null_mut() }
+        }
+    );
+    define_class!(
+        // SAFETY: CAMetalLayer supports subclassing and off-main nextDrawable.
+        // All added state is synchronized.
         #[unsafe(super = CAMetalLayer)]
+        #[ivars = Arc<Feedback>]
         struct ProbeLayer;
         impl ProbeLayer {
             #[unsafe(method_id(nextDrawable))]
-            fn next_drawable(&self) -> Option<Retained<AnyObject>> {
+            fn next_drawable(&self) -> Option<Retained<ProtocolObject<dyn MTLDrawable>>> {
                 boundary(|| {
-                    // SAFETY: Forward the exact object-returning superclass
-                    // method; objc2 retains the autoreleased CAMetalDrawable.
-                    let drawable: Option<Retained<AnyObject>> = unsafe {
-                        msg_send![super(self), nextDrawable]
-                    };
-                    if let Some(drawable) = &drawable
-                        && let Ok(mut pending) = PENDING.lock()
-                    {
-                        // SAFETY: nextDrawable returns a CAMetalDrawable;
-                        // drawableID has NSUInteger ABI and is available on macOS 14.
-                        let id: usize = unsafe { msg_send![&**drawable, drawableID] };
-                        ACQUIRED.store(id as u64, Ordering::Release);
-                        pending.push(Drawable(drawable.clone()));
+                    // SAFETY: Exact superclass object-returning method signature;
+                    // CAMetalDrawable conforms to MTLDrawable.
+                    let drawable: Option<Retained<ProtocolObject<dyn MTLDrawable>>> = unsafe { msg_send![super(self), nextDrawable] };
+                    if let Some(drawable) = &drawable {
+                        let slot = self.ivars().slot.load(Ordering::Acquire);
+                        self.ivars().acquired(drawable.drawableID() as u64, slot);
+                        let feedback = Arc::clone(self.ivars());
+                        // Capture only shared feedback and the acquisition slot, never
+                        // the drawable: tracking cannot hold the drawable pool hostage.
+                        let handler = RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
+                            boundary(|| {
+                                // SAFETY: Metal supplies a live drawable for the callback.
+                                let drawable = unsafe { drawable.as_ref() };
+                                feedback.presented(drawable.drawableID() as u64, drawable.presentedTime(), Duration::from_nanos(slot));
+                            });
+                        });
+                        // SAFETY: Valid heap block with the required ABI. Metal copies
+                        // it for later invocation; its captures are thread-safe and
+                        // boundary prevents unwinding across the Objective-C boundary.
+                        unsafe { drawable.addPresentedHandler(RcBlock::as_ptr(&handler)); }
                     }
                     drawable
                 })
             }
         }
     );
-
-    pub(super) fn layer() -> Retained<CAMetalLayer> {
-        // SAFETY: Standard NSObject init on a freshly allocated CAMetalLayer
-        // subclass with no ivars or additional initialization requirements.
-        let layer: Retained<ProbeLayer> = unsafe { msg_send![ProbeLayer::alloc(), init] };
+    pub(super) fn layer(feedback: Arc<Feedback>) -> Retained<CAMetalLayer> {
+        let layer = ProbeLayer::alloc().set_ivars(feedback);
+        // SAFETY: Standard superclass initializer for fresh CAMetalLayer allocation.
+        let layer: Retained<ProbeLayer> = unsafe { msg_send![super(layer), init] };
+        // SAFETY: NSObject initializer on a fresh stateless allocation.
+        let delegate: Retained<HostingDelegate> =
+            unsafe { msg_send![HostingDelegate::alloc(), init] };
+        // SAFETY: CALayer delegate is weak. Intentionally retain for the same
+        // process lifetime as the exported layer (ADR-0025). wgpu-hal 30.0.2
+        // metal/surface.rs acquire_texture/hosting_window (gfx-rs/wgpu#8309)
+        // stops at this delegate's nil window, bypassing false Occluded results
+        // after AppKit fullscreen reparenting. Truly occluded windows can block
+        // in nextDrawable until its timeout; wgpu maps nil to Timeout and our
+        // renderer maps that to FrameOutcome::Skipped, retaining work for retry.
+        unsafe {
+            let _: () = msg_send![&*layer, setDelegate: &*delegate];
+        }
+        std::mem::forget(delegate);
         Retained::into_super(layer)
-    }
-
-    pub(super) fn completed() -> Result<Vec<(u64, f64)>, Error> {
-        let mut pending = PENDING
-            .lock()
-            .map_err(|_| failure("presentation probe poisoned"))?;
-        let mut completed = Vec::new();
-        pending.retain(|drawable| {
-            // SAFETY: Objects captured from CAMetalLayer.nextDrawable conform
-            // to MTLDrawable; these selectors have NSUInteger and CFTimeInterval
-            // return types. macOS 14 supports both. Zero means not displayed
-            // (or skipped), so only a finite positive time passes the check.
-            let (id, time): (usize, f64) = unsafe {
-                (
-                    msg_send![&*drawable.0, drawableID],
-                    msg_send![&*drawable.0, presentedTime],
-                )
-            };
-            if time.is_finite() && time > 0.0 {
-                completed.push((id as u64, time));
-                false
-            } else {
-                true
-            }
-        });
-        Ok(completed)
     }
 }

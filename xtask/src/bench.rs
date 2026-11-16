@@ -4,6 +4,8 @@ use crate::{check::Check, report::Status};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::Path, process::Command, time::SystemTime};
 
+mod native;
+
 type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -22,6 +24,8 @@ struct Metric {
     #[serde(default = "default_threshold")]
     regression_percent: f64,
     target: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh_interval_ms: Option<f64>,
 }
 fn default_threshold() -> f64 {
     10.0
@@ -280,7 +284,8 @@ fn parse_divan(text: &str) -> Result<BTreeMap<String, f64>> {
 
 fn pending() -> BTreeMap<String, Metric> {
     [
-        ("input_to_pixel_ms", "ms", 8.0),
+        ("input_to_submit_ms", "ms", 0.0),
+        ("input_to_pixel_ms", "ms", 0.0),
         ("idle_cpu_percent", "%", 0.0),
         ("list_100k_scroll_dropped_frames", "frames", 0.0),
     ]
@@ -294,6 +299,7 @@ fn pending() -> BTreeMap<String, Metric> {
                 direction: Direction::Lower,
                 regression_percent: default_threshold(),
                 target: Some(target),
+                refresh_interval_ms: None,
             },
         )
     })
@@ -308,17 +314,21 @@ fn validate(baseline: &Baseline) -> Result<()> {
         if !metric.regression_percent.is_finite()
             || !(0.0..=100.0).contains(&metric.regression_percent)
             || metric.value.is_some_and(|v| !v.is_finite() || v < 0.0)
+            || metric
+                .refresh_interval_ms
+                .is_some_and(|v| !v.is_finite() || v <= 0.0)
         {
             return Err(format!("Invalid baseline metric: {name}"));
         }
         if let Some(reserved) = pending().get(name) {
-            if metric.value.is_some()
-                || metric.target != reserved.target
+            if (name == "list_100k_scroll_dropped_frames" && metric.value.is_some())
+                || metric.target.is_some_and(|v| !v.is_finite() || v < 0.0)
+                || (name == "list_100k_scroll_dropped_frames" && metric.target != reserved.target)
                 || metric.unit != reserved.unit
                 || metric.direction != reserved.direction
             {
                 return Err(format!(
-                    "Hard-target metrics must remain pending until real measurements are integrated: {name}"
+                    "Invalid hard-target metadata (M7 list must remain pending): {name}"
                 ));
             }
         } else if metric.value.is_none()
@@ -332,7 +342,7 @@ fn validate(baseline: &Baseline) -> Result<()> {
     }
     if pending()
         .keys()
-        .any(|key| !baseline.metrics.contains_key(key))
+        .any(|key| key != "input_to_submit_ms" && !baseline.metrics.contains_key(key))
     {
         return Err("Baseline is missing reserved hard-target metrics".into());
     }
@@ -342,8 +352,39 @@ fn validate(baseline: &Baseline) -> Result<()> {
 fn regressed(current: f64, previous: f64, direction: &Direction, percent: f64) -> bool {
     let allowance = previous.abs() * percent / 100.0;
     match direction {
-        Direction::Lower => current - previous > allowance,
+        Direction::Lower => current > previous * (1.0 + percent / 100.0),
         Direction::Higher => previous - current > allowance,
+    }
+}
+
+// The display link reports a stable nominal interval. Allow only clock
+// rounding/jitter (0.1%), not switching between e.g. 60 and 120 Hz.
+fn same_display(recorded: Option<f64>, measured: Option<f64>) -> Result<()> {
+    if let (Some(recorded), Some(measured)) = (recorded, measured)
+        && (recorded - measured).abs() > recorded * 0.001
+    {
+        return Err("display refresh interval differs from baseline; use the same display or re-record after human confirmation".into());
+    }
+    Ok(())
+}
+
+fn metric_state(
+    metric: &Metric,
+    old: Option<f64>,
+    record: bool,
+    hard: Option<bool>,
+) -> &'static str {
+    match metric.value {
+        None => "pending",
+        Some(_) if hard == Some(false) => "hard_fail",
+        Some(_) if record => "recorded",
+        Some(value) => match old {
+            None => "missing_baseline",
+            Some(old) if regressed(value, old, &metric.direction, metric.regression_percent) => {
+                "fail"
+            }
+            Some(_) => "pass",
+        },
     }
 }
 
@@ -358,6 +399,16 @@ impl BenchCheck {
             "bench-1.log",
             "bench-2.log",
             "bench-3.log",
+            "bench-latency.json",
+            "bench-latency.log",
+            "bench-latency-1.json",
+            "bench-latency-1.log",
+            "bench-latency-2.json",
+            "bench-latency-2.log",
+            "bench-latency-3.json",
+            "bench-latency-3.log",
+            "bench-idle.json",
+            "bench-idle.log",
         ] {
             match fs::remove_file(root.join("target/xtask").join(artifact)) {
                 Ok(()) => {}
@@ -453,8 +504,69 @@ impl BenchCheck {
                     direction: Direction::Lower,
                     regression_percent: threshold,
                     target: None,
+                    refresh_interval_ms: None,
                 },
             );
+        }
+        let mut native = match native::measure(root) {
+            Ok(measurements) => measurements,
+            Err(error) => {
+                let results: Vec<_> = metrics.iter().map(|(name, metric)| {
+                    let native = matches!(name.as_str(), "input_to_submit_ms" | "input_to_pixel_ms" | "idle_cpu_percent");
+                    serde_json::json!({
+                        "name": name, "current": metric,
+                        "baseline_value": previous.as_ref().and_then(|b| b.metrics.get(name)).and_then(|m| m.value),
+                        "status": if native { "environment_error" } else if metric.value.is_none() { "pending" } else { "not_compared" },
+                        "hard_check_pass": null,
+                        "error": if native { Some(&error) } else { None }
+                    })
+                }).collect();
+                fs::write(
+                    root.join("target/xtask/bench-results.json"),
+                    serde_json::to_vec_pretty(
+                        &serde_json::json!({"machine_id": id, "metrics": results}),
+                    )
+                    .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                return Err(error);
+            }
+        };
+        for (name, measurement) in &native {
+            let metric = metrics
+                .get_mut(name)
+                .ok_or("missing native metric definition")?;
+            metric.value = Some(measurement.value);
+            metric.target = measurement.target;
+            metric.refresh_interval_ms = measurement.refresh_interval_ms;
+            metric.regression_percent = previous
+                .as_ref()
+                .and_then(|b| b.metrics.get(name))
+                .map_or(default_threshold(), |m| m.regression_percent);
+        }
+        let mut environment_error = None;
+        // Pixel comparisons require the optimized baseline protocol, including
+        // the display interval. Legacy values are deliberately not reused.
+        if let Some(pixel) = native.get_mut("input_to_pixel_ms") {
+            let old = previous
+                .as_ref()
+                .and_then(|b| b.metrics.get("input_to_pixel_ms"));
+            if let Some(old) = old {
+                if !self.record {
+                    environment_error =
+                        same_display(old.refresh_interval_ms, pixel.refresh_interval_ms).err();
+                }
+                if let (Some(value), Some(_)) = (old.value, old.refresh_interval_ms) {
+                    let target = value * 1.15;
+                    pixel.target = Some(target);
+                    pixel.hard_pass = Some(pixel.value <= target);
+                }
+            }
+            let metric = metrics
+                .get_mut("input_to_pixel_ms")
+                .ok_or("missing pixel metric")?;
+            metric.regression_percent = 15.0;
+            metric.target = pixel.target;
         }
         let mut status = Status::Pass;
         let mut results = Vec::new();
@@ -462,28 +574,37 @@ impl BenchCheck {
             let old = previous
                 .as_ref()
                 .and_then(|b| b.metrics.get(name))
-                .and_then(|m| m.value);
-            let state = match metric.value {
-                None => "pending",
-                Some(_) if self.record => "recorded",
-                Some(value) => match old {
-                    None => "missing_baseline",
-                    Some(old)
-                        if regressed(value, old, &metric.direction, metric.regression_percent) =>
-                    {
-                        "fail"
+                .and_then(|m| {
+                    if name == "input_to_pixel_ms" && m.refresh_interval_ms.is_none() {
+                        None
+                    } else {
+                        m.value
                     }
-                    Some(_) => "pass",
-                },
+                });
+            let hard = native.get(name);
+            let state = if name == "input_to_pixel_ms" && environment_error.is_some() {
+                "environment_error"
+            } else {
+                metric_state(metric, old, self.record, hard.and_then(|m| m.hard_pass))
             };
-            if ["fail", "missing_baseline"].contains(&state) {
+            if metric.value.is_some() && old.is_none() && !self.record {
+                log.push_str(&format!("Unmeasured recorded metric or missing baseline: {name}; confirm with the owner, then run cargo xtask bench --record after human confirmation.\n"));
+            }
+            if ["fail", "missing_baseline", "hard_fail"].contains(&state) {
                 status = Status::Fail;
             }
             log.push_str(&format!(
                 "{name}: {state}, current {:?} {}, baseline {old:?}, target {:?}, allowed regression {}%\n",
                 metric.value, metric.unit, metric.target, metric.regression_percent
             ));
-            results.push(serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old}));
+            if let Some(hard) = hard {
+                log.push_str(&format!(
+                    "{name}: hard check {:?}; details {}\n",
+                    hard.hard_pass, hard.details
+                ));
+            }
+            results.push(serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old,
+                "hard_check_pass": hard.and_then(|m| m.hard_pass), "details": hard.map(|m| &m.details)}));
         }
         if let Some(old) = &previous {
             for (name, metric) in &old.metrics {
@@ -505,6 +626,9 @@ impl BenchCheck {
                 .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
+        if let Some(error) = environment_error {
+            return Err(error);
+        }
         if self.record && status == Status::Pass {
             let baseline = Baseline {
                 schema_version: 1,
@@ -547,6 +671,45 @@ impl Check for BenchCheck {
 mod tests {
     use super::*;
     #[test]
+    fn native_regressions_and_hard_failures_override_baselines() {
+        for name in ["input_to_pixel_ms", "idle_cpu_percent"] {
+            let mut metric = pending().remove(name).unwrap();
+            metric.value = Some(0.09);
+            assert_eq!(metric_state(&metric, Some(0.08), false, Some(true)), "fail");
+            assert_eq!(metric_state(&metric, Some(0.09), false, Some(true)), "pass");
+            assert_eq!(
+                metric_state(&metric, Some(1.0), false, Some(false)),
+                "hard_fail"
+            );
+            assert_eq!(
+                metric_state(&metric, Some(1.0), true, Some(false)),
+                "hard_fail"
+            );
+            assert_eq!(
+                metric_state(&metric, None, false, Some(true)),
+                "missing_baseline"
+            );
+        }
+    }
+    #[test]
+    fn pixel_boundary_and_display_environment() {
+        let threshold = 20.0 * 1.15;
+        assert!(!regressed(threshold, 20.0, &Direction::Lower, 15.0));
+        assert!(regressed(
+            threshold + 0.00001,
+            20.0,
+            &Direction::Lower,
+            15.0
+        ));
+        assert!(same_display(Some(16.666667), Some(16.666667)).is_ok());
+        let mut report = crate::report::Report::default();
+        report.checks.push(crate::report::CheckResult::error(
+            "bench",
+            same_display(Some(16.666667), Some(8.333333)).unwrap_err(),
+        ));
+        assert_eq!(report.exit_code(), 2);
+    }
+    #[test]
     fn thresholds_and_directions() {
         assert!(!regressed(110.0, 100.0, &Direction::Lower, 10.0));
         assert!(regressed(110.01, 100.0, &Direction::Lower, 10.0));
@@ -579,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn baseline_rejects_invalid_thresholds_and_fake_hard_measurements() {
+    fn baseline_accepts_native_but_rejects_pending_measurements() {
         let machine = Machine {
             model: "model".into(),
             cpu: "cpu".into(),
@@ -599,6 +762,14 @@ mod tests {
             .metrics
             .get_mut("idle_cpu_percent")
             .expect("hard-target metric")
+            .value = Some(0.0);
+        assert!(validate(&baseline).is_ok());
+        baseline.metrics.get_mut("input_to_pixel_ms").unwrap().value = Some(8.0);
+        assert!(validate(&baseline).is_ok());
+        baseline
+            .metrics
+            .get_mut("list_100k_scroll_dropped_frames")
+            .unwrap()
             .value = Some(0.0);
         assert!(validate(&baseline).is_err());
         baseline.metrics = pending();
@@ -629,7 +800,7 @@ mod tests {
         assert_eq!(id, machine_id(&m));
         m.memory_bytes += 1;
         assert_ne!(id, machine_id(&m));
-        assert_eq!(pending().len(), 3);
+        assert_eq!(pending().len(), 4);
         assert!(pending().values().all(|m| m.value.is_none()));
     }
 }

@@ -232,3 +232,37 @@ Native acceptance uses `window --idle-check 5`. Debug builds additionally suppor
 motion events through AppKit, checks that each produces a frame, and invokes
 native close intent. These checks are explicit commands, never window-opening
 unit tests. They are S5 functional checks, not S6 latency or CPU benchmarks.
+
+## Native performance diagnostics (M1 S6)
+
+`libc =0.2.191` (MIT OR Apache-2.0) is now an optional direct dependency of
+`oxiview-platform-macos`, enabled only by its off-by-default `diagnostics`
+feature. This exact version already existed transitively in Cargo.lock; no new
+package is introduced. The version is defined at the workspace root. It
+provides the platform-correct `rusage` layout and `getrusage(RUSAGE_SELF)`
+binding; std does not expose process user/system CPU time. The adapter keeps
+unsafe calls and libc types private, returning only `Duration`. The maintained
+Rust libc project's cached Darwin declarations were used; this step makes no
+new claim about upstream release activity. The normal dependency review checks
+licenses and advisories. The example also reuses workspace `serde_json` for
+its strict measurement output protocol.
+
+The former S5 debug-only input probe is replaced by this explicit,
+release-capable diagnostics feature. See the
+[performance conventions](testing-performance.md) for its measurement scope.
+
+The presented-callback fix uses `block2 =0.6.2` (MIT) and
+`objc2-metal =0.3.2` (MIT), both already transitive dependencies in Cargo.lock
+from the same maintained [objc2 project](https://github.com/madsmtm/objc2).
+The cached release sources were inspected for callback ABI, block copying,
+ownership, and feature gates. This assessment makes no new claim about recent
+upstream activity; verification checks licenses and fresh advisories.
+`block2` provides Rust closures with the native Objective-C block ABI required
+by `MTLDrawable::addPresentedHandler`; std has no equivalent. It uses the system
+Blocks runtime on macOS, with no bundled runtime or additional build tools.
+Metal enables only `std`, `MTLDrawable`, `block2`, and `objc2-core-foundation`
+(for `presentedTime`). Both exact pins live in workspace dependencies and are
+inherited only by the macOS adapter. `block2` joins the existing objc2-family
+external rule, restricted to that adapter. No new package or version is added;
+the existing transitive graph is reused. All native block and Metal types stay
+private to the adapter, with no public API or baseline changes.

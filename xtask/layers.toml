@@ -97,7 +97,7 @@ packages = ["kurbo", "peniko"]
 allow = ["oxiview-base"]
 
 [[external]]
-packages = ["objc2", "objc2-*"]
+packages = ["objc2", "objc2-*", "block2"]
 allow = ["oxiview-platform-macos"]
 
 [[external]]

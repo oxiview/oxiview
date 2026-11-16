@@ -185,6 +185,7 @@ fn resize_ack_supersession_zero_size_and_main_thread_wait() {
                     assert_eq!(
                         e.wait_event().unwrap(),
                         WindowEvent::Resized {
+                            display_sync: false,
                             physical_size: size,
                             scale_factor: 2.0,
                             predicted_presentation_timestamp: ms(20),

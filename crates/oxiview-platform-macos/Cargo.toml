@@ -9,12 +9,19 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+diagnostics = ["dep:libc"]
+
 [dependencies]
 oxiview-platform.workspace = true
 oxiview-base.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true, optional = true }
+block2.workspace = true
+objc2-metal.workspace = true
 objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-app-kit.workspace = true

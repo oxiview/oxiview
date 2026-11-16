@@ -17,6 +17,10 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "macos")]
+mod measurement;
+mod overlay;
+
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 420;
 fn scene(
@@ -64,11 +68,17 @@ struct Demo {
     pointer: Point,
     presents: Arc<AtomicU64>,
     first: Option<mpsc::Sender<()>>,
-    #[cfg(all(target_os = "macos", debug_assertions))]
+    #[cfg(target_os = "macos")]
     probe: Option<(
         oxiview_platform_macos::MacOsControl,
-        mpsc::Sender<(Point, u64)>,
+        mpsc::Sender<measurement::Frame>,
     )>,
+    timing: Option<FrameTiming>,
+    #[cfg(target_os = "macos")]
+    paint_started: Duration,
+    input_events: Arc<AtomicU64>,
+    fullscreen: bool,
+    overlay: Option<overlay::Overlay>,
 }
 impl Application for Demo {
     fn event(
@@ -77,6 +87,17 @@ impl Application for Demo {
         scheduler: &mut Scheduler,
         _: &WindowWaker,
     ) -> Result<(), oxiview_core::Error> {
+        if matches!(
+            event,
+            WindowEvent::PointerMoved { .. }
+                | WindowEvent::PointerButton { .. }
+                | WindowEvent::Key { .. }
+        ) {
+            self.input_events.fetch_add(1, Ordering::SeqCst);
+        }
+        if let WindowEvent::Resized { display_sync, .. } = event {
+            self.fullscreen = *display_sync;
+        }
         if let WindowEvent::PointerMoved { position, .. } = event
             && self.pointer != *position
         {
@@ -87,77 +108,102 @@ impl Application for Demo {
     }
     fn paint(
         &mut self,
-        _: FrameTiming,
+        timing: FrameTiming,
         size: PhysicalSize,
         scale: f64,
     ) -> Result<PaintedScene, oxiview_core::Error> {
-        scene(size, scale, self.pointer)
-            .map_err(|e| oxiview_core::Error::Application(e.to_string()))
+        #[cfg(target_os = "macos")]
+        if let Some((control, _)) = &self.probe {
+            self.paint_started = control.diagnostic_now();
+        }
+        self.timing = Some(timing);
+        if let Some(overlay) = &mut self.overlay {
+            overlay.begin(timing.refresh_interval);
+        }
+        let mut painted = scene(size, scale, self.pointer)
+            .map_err(|e| oxiview_core::Error::Application(e.to_string()))?;
+        if let Some(overlay) = &self.overlay {
+            overlay
+                .draw(&mut painted, size, scale)
+                .map_err(|e| oxiview_core::Error::Application(e.to_string()))?;
+        }
+        Ok(painted)
     }
-    fn presented(&mut self, _: Option<LatencyRecord>) {
+    fn presented(&mut self, record: Option<LatencyRecord>) {
+        if let Some(overlay) = &mut self.overlay {
+            overlay.submitted(record);
+        }
         self.presents.fetch_add(1, Ordering::SeqCst);
-        #[cfg(all(target_os = "macos", debug_assertions))]
-        if let Some((control, sender)) = &self.probe {
-            let _ = sender.send((self.pointer, control.test_acquired_drawable()));
+        #[cfg(target_os = "macos")]
+        if let Some((control, sender)) = &self.probe
+            && let Some(timing) = self.timing
+        {
+            let _ = sender.send(measurement::Frame {
+                pointer: self.pointer,
+                fullscreen: self.fullscreen,
+                drawable: control.diagnostic_acquired_drawable(),
+                slot: control.diagnostic_acquired_slot(),
+                paint_started: self.paint_started,
+                timing,
+                record,
+            });
         }
         if let Some(first) = self.first.take() {
             let _ = first.send(());
         }
     }
 }
-// Metal defines presentedTime as the host time the drawable appeared on screen;
-// it is zero for unpresented/skipped frames. GPU completion and present() calls
-// alone do not provide this guarantee. No pixel/visual correctness is inferred.
-#[cfg(all(target_os = "macos", debug_assertions))]
-fn wait_for_display(
-    control: &oxiview_platform_macos::MacOsControl,
-    expected: u64,
-) -> Result<(u64, f64), String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let displayed = control
-            .test_presented_drawables()
-            .map_err(|e| e.to_string())?;
-        let mut newest = None;
-        for (id, time) in displayed {
-            println!("Native presentation: drawable={id}; presentedTime={time:.9}s");
-            if id == expected {
-                newest = Some((id, time));
-            }
-        }
-        if let Some(frame) = newest {
-            return Ok(frame);
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(
-                "expected drawable has no nonzero MTLDrawable.presentedTime within 5s".into(),
-            );
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-fn run(presents: Arc<AtomicU64>) -> Result<(), Box<dyn Error>> {
+fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
     let mut headless = false;
     let mut idle = None;
+    let mut samples = None;
+    let mut json = false;
+    let mut debug_overlay = false;
+    let mut fullscreen_check = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--json" => json = true,
+            "--debug-overlay" => debug_overlay = true,
+            "--fullscreen-check" => fullscreen_check = true,
+            "--measure-latency" => {
+                let count: usize = args.next().ok_or("missing sample count")?.parse()?;
+                if count == 0 || count > 100_000 {
+                    return Err("samples must be in 1..=100000".into());
+                }
+                samples = Some(count);
+            }
             "--headless" => headless = true,
             "--idle-check" => {
                 let seconds: f64 = args.next().ok_or("missing idle duration")?.parse()?;
-                idle = Some(Duration::try_from_secs_f64(seconds)?);
+                let duration = Duration::try_from_secs_f64(seconds)?;
+                if duration.is_zero() {
+                    return Err("idle duration must be positive".into());
+                }
+                idle = Some(duration);
             }
             _ => {
                 return Err(format!(
-                    "unknown argument: {arg}; usage: window [--headless | --idle-check seconds]"
+                    "unknown argument: {arg}; usage: window [--headless | --idle-check seconds [--json] | --measure-latency samples [--json] | --fullscreen-check [--debug-overlay] [--json]]"
                 )
                 .into());
             }
         }
     }
+    if debug_overlay && (idle.is_some() || samples.is_some() || headless) {
+        return Err("--debug-overlay requires a native window and is supported only interactively or with --fullscreen-check".into());
+    }
+    if fullscreen_check && (idle.is_some() || samples.is_some() || headless) {
+        return Err("select exactly one measurement mode".into());
+    }
+    if idle.is_some() && samples.is_some() {
+        return Err("select exactly one measurement mode".into());
+    }
+    if json && idle.is_none() && samples.is_none() && !fullscreen_check {
+        return Err("--json requires a measurement mode".into());
+    }
     if headless {
-        if idle.is_some() {
+        if idle.is_some() || samples.is_some() {
             return Err("--idle-check requires a native window".into());
         }
         let painted = scene(
@@ -188,66 +234,47 @@ fn run(presents: Arc<AtomicU64>) -> Result<(), Box<dyn Error>> {
         writer.finish()?;
         presents.fetch_add(1, Ordering::SeqCst);
         println!("Wrote {}", path.display());
-        return Ok(());
+        return Ok(true);
     }
     #[cfg(target_os = "macos")]
     {
         let platform = oxiview_platform_macos::MacOsPlatform::default();
+        let platform = if idle.is_some() || samples.is_some() || fullscreen_check {
+            platform.with_diagnostics()
+        } else {
+            platform
+        };
         let control = platform.control();
         let (tx, rx) = mpsc::channel();
-        #[cfg(debug_assertions)]
-        let input_check = std::env::var_os("OXIVIEW_WINDOW_INPUT_CHECK").is_some();
-        #[cfg(not(debug_assertions))]
-        let input_check = false;
-        #[cfg(debug_assertions)]
         let (frame_tx, frame_rx) = mpsc::channel();
-        #[cfg(debug_assertions)]
-        let probe = input_check.then(|| (control.clone(), frame_tx));
-        let idle_worker = (idle.is_some() || input_check).then(|| {
-            let duration = idle.unwrap_or_default();
+        let measuring = idle.is_some() || samples.is_some() || fullscreen_check;
+        let input_events = Arc::new(AtomicU64::new(0));
+        let observed_inputs = input_events.clone();
+        let probe = measuring.then(|| (control.clone(), frame_tx));
+        let idle_worker = measuring.then(|| {
             let presents = presents.clone();
-            std::thread::spawn(move || -> Result<(), String> {
-                rx.recv().map_err(|e| e.to_string())?;
-                #[cfg(debug_assertions)]
-                if input_check {
-                    let check = (|| -> Result<(), String> {
-                        // Post one move at a time. Match the drawable ID reported
-                        // by the window thread after presenting that pointer's scene.
-                        // The initial drawable can be skipped before the window
-                        // becomes visible; it is not evidence for this check.
-                        for position in [Point::new(100.0, 100.0), Point::new(500.0, 300.0)] {
-                            control.post_test_input(Some(position)).map_err(|e| e.to_string())?;
-                            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                            let drawable = loop {
-                                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                                let (painted_pointer, drawable) = frame_rx.recv_timeout(remaining)
-                                    .map_err(|e| format!("pointer frame not submitted: {e}"))?;
-                                if painted_pointer == position {
-                                    break drawable;
-                                }
-                            };
-                            wait_for_display(&control, drawable)?;
-                            println!("Pointer ({}, {}): drawable={drawable} displayed", position.x(), position.y());
-                        }
-                        println!("Native presentation check: two posted NSEvent pointer moves reached the display (MTLDrawable.presentedTime > 0); requesting native close");
-                        Ok(())
-                    })();
-                    if check.is_ok() {
-                        control.post_test_input(None).map_err(|e| e.to_string())?;
+            std::thread::spawn(move || -> Result<bool, String> {
+                let result = (|| {
+                    rx.recv_timeout(Duration::from_secs(10)).map_err(|e| {
+                        format!("first frame unavailable (display session/GPU required): {e}")
+                    })?;
+                    if fullscreen_check {
+                        measurement::fullscreen(&control, &frame_rx, json)
+                    } else if let Some(count) = samples {
+                        measurement::latency(&control, &frame_rx, count, json)
                     } else {
-                        control.request_exit().map_err(|e| e.to_string())?;
+                        measurement::idle(
+                            &control,
+                            &presents,
+                            &observed_inputs,
+                            idle.unwrap_or_default(),
+                            json,
+                        )
                     }
-                    return check;
-                }
-                let initial = presents.load(Ordering::SeqCst);
-                let initial_events = control.frame_events().map_err(|e| e.to_string())?;
-                std::thread::sleep(duration);
-                let frames = presents.load(Ordering::SeqCst) - initial;
-                let events = control.frame_events().map_err(|e| e.to_string())? - initial_events;
-                println!("Idle interval: {:.3}s; presented frames: {frames}; display-link frame events: {events}", duration.as_secs_f64());
-                control.request_exit().map_err(|e| e.to_string())?;
-                if frames != 0 || events != 0 { return Err("idle frame check failed".into()); }
-                Ok(())
+                })();
+                let close = control.request_exit().map_err(|e| e.to_string());
+                close?;
+                result
             })
         });
         let result = oxiview_app::run_macos(
@@ -262,8 +289,12 @@ fn run(presents: Arc<AtomicU64>) -> Result<(), Box<dyn Error>> {
                     pointer: Point::new(320.0, 210.0),
                     presents,
                     first: Some(tx),
-                    #[cfg(debug_assertions)]
                     probe,
+                    timing: None,
+                    paint_started: Duration::ZERO,
+                    input_events,
+                    fullscreen: false,
+                    overlay: debug_overlay.then(overlay::Overlay::new),
                 })
             },
         );
@@ -276,8 +307,7 @@ fn run(presents: Arc<AtomicU64>) -> Result<(), Box<dyn Error>> {
             })
             .transpose();
         result?;
-        idle_result?;
-        Ok(())
+        Ok(idle_result?.unwrap_or(true))
     }
     #[cfg(not(target_os = "macos"))]
     Err("native demo requires macOS 14 or later".into())
@@ -285,15 +315,18 @@ fn run(presents: Arc<AtomicU64>) -> Result<(), Box<dyn Error>> {
 fn main() -> std::process::ExitCode {
     let presents = Arc::new(AtomicU64::new(0));
     let result = run(presents.clone());
-    println!(
-        "Total presented frames: {}",
-        presents.load(Ordering::SeqCst)
-    );
+    if !std::env::args().any(|a| a == "--json") {
+        println!(
+            "Total presented frames: {}",
+            presents.load(Ordering::SeqCst)
+        );
+    }
     match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(true) => std::process::ExitCode::SUCCESS,
+        Ok(false) => std::process::ExitCode::FAILURE,
         Err(error) => {
             eprintln!("window: {error}");
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(2)
         }
     }
 }

@@ -764,6 +764,7 @@ dependencies = [
  "bitflags",
  "block2",
  "objc2",
+ "objc2-core-foundation",
  "objc2-foundation",
 ]
 
@@ -861,9 +862,12 @@ dependencies = [
 name = "oxiview-platform-macos"
 version = "0.0.0"
 dependencies = [
+ "block2",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "objc2-metal",
  "objc2-quartz-core",
  "oxiview-base",
  "oxiview-platform",
@@ -885,6 +889,7 @@ dependencies = [
 name = "oxiview-render-wgpu"
 version = "0.0.0"
 dependencies = [
+ "divan",
  "oxiview-base",
  "oxiview-scene",
  "thiserror",
@@ -1687,6 +1692,8 @@ dependencies = [
  "oxiview-render-cpu",
  "oxiview-scene",
  "png",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

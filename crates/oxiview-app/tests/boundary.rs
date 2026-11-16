@@ -49,7 +49,7 @@ struct GatedPresenter {
     fail: bool,
 }
 impl Presenter for GatedPresenter {
-    fn configure(&mut self, _: PhysicalSize, _: f64) -> Result<(), oxiview_core::Error> {
+    fn configure(&mut self, _: PhysicalSize, _: f64, _: bool) -> Result<(), oxiview_core::Error> {
         Ok(())
     }
     fn present(&mut self, _: &PaintedScene) -> Result<PresentationOutcome, oxiview_core::Error> {

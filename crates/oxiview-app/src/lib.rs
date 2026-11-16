@@ -54,6 +54,7 @@ impl Presenter for CpuPresenter {
         &mut self,
         size: PhysicalSize,
         _scale_factor: f64,
+        _display_sync: bool,
     ) -> Result<(), oxiview_core::Error> {
         self.size = size;
         Ok(())
@@ -145,12 +146,20 @@ pub fn run_headless<A: Application>(
 struct SurfacePresenter(oxiview_render_wgpu::WindowSurface);
 #[cfg(target_os = "macos")]
 impl Presenter for SurfacePresenter {
-    fn configure(&mut self, size: PhysicalSize, _: f64) -> Result<(), oxiview_core::Error> {
+    fn configure(
+        &mut self,
+        size: PhysicalSize,
+        _: f64,
+        display_sync: bool,
+    ) -> Result<(), oxiview_core::Error> {
         self.0
-            .configure(PixelSize {
-                width: size.width,
-                height: size.height,
-            })
+            .configure(
+                PixelSize {
+                    width: size.width,
+                    height: size.height,
+                },
+                display_sync,
+            )
             .map_err(|e| oxiview_core::Error::Present(e.to_string()))
     }
     fn present(
