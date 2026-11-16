@@ -87,6 +87,13 @@ fn boundary<T>(f: impl FnOnce() -> T) -> T {
         Err(_) => std::process::abort(),
     }
 }
+#[cfg(feature = "diagnostics")]
+struct DiagnosticInput {
+    number: isize,
+    position: Point,
+    capture: Duration,
+    delivered: std::sync::mpsc::SyncSender<Option<Duration>>,
+}
 struct Queue {
     events: VecDeque<WindowEvent>,
     alive: bool,
@@ -96,7 +103,12 @@ struct Queue {
     #[cfg(feature = "diagnostics")]
     fullscreen: bool,
     #[cfg(feature = "diagnostics")]
-    input_check: VecDeque<(Point, Duration)>,
+    input_check: VecDeque<DiagnosticInput>,
+    #[cfg(feature = "diagnostics")]
+    input_receipts:
+        std::collections::BTreeMap<isize, std::sync::mpsc::SyncSender<Option<Duration>>>,
+    #[cfg(feature = "diagnostics")]
+    next_input_number: isize,
     close: bool,
     resize: Option<(ResizeToken, Duration)>,
 }
@@ -325,16 +337,27 @@ fn service() {
                 Ok(mut q) => std::mem::take(&mut q.input_check),
                 Err(_) => std::process::abort(),
             };
-            for (position, timestamp) in commands {
-                let point = NSPoint::new(position.x(), w.view.bounds().size.height - position.y());
+            for command in commands {
+                let point = NSPoint::new(
+                    command.position.x(),
+                    w.view.bounds().size.height - command.position.y(),
+                );
                 // A real NSEvent goes through AppKit's event queue and the
                 // view callback, exercising capture time and coordinate mapping.
                 let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
                         objc2_app_kit::NSEventType::MouseMoved, point,
-                        objc2_app_kit::NSEventModifierFlags::empty(), timestamp.as_secs_f64(),
-                        w.window.windowNumber(), None, 0, 0, 0.0);
+                        objc2_app_kit::NSEventModifierFlags::empty(), command.capture.as_secs_f64(),
+                        w.window.windowNumber(), None, command.number, 0, 0.0);
                 if let Some(event) = event {
+                    match w.shared.lock() {
+                        Ok(mut q) => {
+                            q.input_receipts.insert(command.number, command.delivered);
+                        }
+                        Err(_) => std::process::abort(),
+                    }
                     NSApplication::sharedApplication(w.view.mtm()).postEvent_atStart(&event, false);
+                } else {
+                    let _ = command.delivered.send(None);
                 }
             }
         }
@@ -670,6 +693,12 @@ impl ContentView {
             let p = event.locationInWindow();
             let position = top_left(p, self.bounds().size.height);
             let timestamp = seconds(event.timestamp());
+            #[cfg(feature = "diagnostics")]
+            let receipt = w
+                .shared
+                .lock()
+                .ok()
+                .and_then(|mut q| q.input_receipts.remove(&event.eventNumber()));
             let event = if let Some(pressed) = pressed {
                 WindowEvent::PointerButton {
                     button: button(event.buttonNumber()),
@@ -684,6 +713,13 @@ impl ContentView {
                 }
             };
             w.shared.emit(event);
+            #[cfg(feature = "diagnostics")]
+            if let Some(receipt) = receipt {
+                // AppKit's queue can quantize NSEvent's floating-point timestamp
+                // again. Acknowledge the exact capture value delivered to core.
+                // Capacity one prevents this main-thread callback from blocking.
+                let _ = receipt.send(Some(timestamp));
+            }
         }
     }
     fn key(&self, event: &NSEvent, pressed: bool) {
@@ -875,20 +911,46 @@ impl MacOsControl {
         }
         Ok(())
     }
-    /// Diagnostics only: posts one pointer move through AppKit from any thread.
-    /// Returns its capture timestamp on the backend clock. Bypasses HID and
-    /// WindowServer input; includes the in-process command and AppKit queue delay.
+    /// Diagnostics only: posts one pointer move through AppKit from a worker thread.
+    /// Waits up to five seconds for delivery and returns the capture timestamp
+    /// delivered to core on the backend clock. Capture precedes the command;
+    /// it includes in-process command and AppKit queue delay, but bypasses HID
+    /// and WindowServer input. Calling on the main thread returns an error.
     #[cfg(feature = "diagnostics")]
     pub fn diagnostic_post_pointer(&self, position: Point) -> Result<Duration, Error> {
-        let windows = self.0.lock().map_err(|_| failure("control poisoned"))?;
-        if windows.len() != 1 {
-            return Err(failure("diagnostics require exactly one window"));
+        if MainThreadMarker::new().is_some() {
+            return Err(failure("diagnostic input posting requires a worker thread"));
         }
-        let timestamp = native_time();
-        let w = &windows[0];
-        w.lock()?.input_check.push_back((position, timestamp));
-        w.signal();
-        Ok(timestamp)
+        let capture = native_time();
+        let (delivered, receipt) = std::sync::mpsc::sync_channel(1);
+        {
+            let windows = self.0.lock().map_err(|_| failure("control poisoned"))?;
+            if windows.len() != 1 {
+                return Err(failure("diagnostics require exactly one window"));
+            }
+            let w = &windows[0];
+            {
+                let mut q = w.lock()?;
+                if !q.alive {
+                    return Err(Error::WindowDestroyed);
+                }
+                let number = q.next_input_number;
+                q.next_input_number = number
+                    .checked_sub(1)
+                    .ok_or_else(|| failure("diagnostic input number exhausted"))?;
+                q.input_check.push_back(DiagnosticInput {
+                    number,
+                    position,
+                    capture,
+                    delivered,
+                });
+            }
+            w.signal();
+        }
+        receipt
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| failure("AppKit did not deliver diagnostic input within 5s"))?
+            .ok_or_else(|| failure("AppKit could not create diagnostic input"))
     }
 
     /// Diagnostics only: backend host clock; callable from any thread.
@@ -1060,6 +1122,10 @@ impl EventLoopContext for Context {
                 fullscreen: false,
                 #[cfg(feature = "diagnostics")]
                 input_check: VecDeque::new(),
+                #[cfg(feature = "diagnostics")]
+                input_receipts: std::collections::BTreeMap::new(),
+                #[cfg(feature = "diagnostics")]
+                next_input_number: -1,
                 close: false,
                 resize: None,
             }),

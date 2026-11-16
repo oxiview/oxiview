@@ -52,6 +52,18 @@ _Avoid_: lazy rendering, passive rendering
 **Predicted presentation timestamp**:
 The backend clock time at which a requested frame is expected to become visible on the display.
 
+**Input capture timestamp**:
+The backend clock time carried by an input event. A frame's latency record keeps
+the oldest unpresented input it consumes, including when several events coalesce.
+
+**Submission timestamp**:
+The endpoint clock time immediately after the presenter reports a submitted
+frame. It is not GPU completion or confirmation that the frame reached the display.
+
+**Actual presentation timestamp**:
+Native presentation feedback confirming when a frame became visible. On macOS,
+this is a nonzero Metal drawable `presentedTime`; zero means it was not displayed.
+
 **Signal**:
 A reactive value whose dependencies can be tracked. Changes directly notify dependent computations and node properties.
 _Avoid_: State, Observable, Atom

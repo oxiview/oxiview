@@ -24,3 +24,13 @@ Embedding the framework as a UI layer inside a game engine is not a non-goal; th
 
 - Broad coverage means the architecture cannot specialize in one application category, such as GPUI's editor focus. Every layer must be extensible to 3D and external-content compositing.
 - Performance targets enter CI from day one, so benchmark and latency-measurement infrastructure must be built during M0–M1.
+
+## M1 execution note — 2026-11-16
+
+[ADR-0019](0019-local-only-verification.md) moved verification to local xtask
+commands. [ADR-0026](0026-m1-native-latency-gates.md) partially supersedes the
+initial one-frame pixel gate with two explicit checks: phase-swept input-to-submit
+p95 within one measured refresh interval, and actual input-to-pixel p95 within
+115% of a compatible human-recorded optimized baseline. The original absolute
+one-frame pixel goal has not been achieved. Fullscreen pixel baselines remain
+M10 work; the 100,000-row scrolling target remains pending until M7.

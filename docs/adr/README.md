@@ -4,7 +4,7 @@ Language: **English**
 
 | # | Decision | Dimension |
 |---|------|------|
-| [0001](0001-goals-and-non-goals.md) | Goals and non-goals: broad coverage, milestone progression, house style, hard performance targets in CI | 1 Goals and non-goals |
+| [0001](0001-goals-and-non-goals.md) | Goals and non-goals: broad coverage, milestone progression, house style, hard performance targets (M1 latency gate partially superseded by 0026) | 1 Goals and non-goals |
 | [0002](0002-own-platform-backends.md) | Platform layer: owned backends, Wayland first, capability traits | 2 Platform abstraction |
 | [0003](0003-window-threading-model.md) | Threading: main thread pumps events, one window thread per window by default | 2 Platform abstraction |
 | [0004](0004-frame-scheduling.md) | Frame scheduling: on-demand by default, reserved continuous rendering, display vsync | 3 Frame scheduling |
@@ -29,3 +29,4 @@ Language: **English**
 | [0023](0023-agent-conventions-dual-harness.md) | Agent conventions: one canonical source for Claude Code and Codex | Engineering |
 | [0024](0024-project-name-oxiview.md) | Project name: oxiview | Engineering |
 | [0025](0025-owned-native-surface-handle.md) | Owned native surface handle and one unsafe constructor declaration in oxiview-base | 2 Platform abstraction |
+| [0026](0026-m1-native-latency-gates.md) | M1 native latency gates: one-interval submission and actual presentation within a human-recorded baseline margin | Performance |
