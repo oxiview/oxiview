@@ -7,6 +7,11 @@ milestone: M1
 
 Goal: a native macOS window presenting through a `wgpu::Surface`, rendered on its own window thread while the main thread only pumps system events. Frames are produced on demand and aligned to the display's vsync; rounded rectangles take an SDF fast path. A headless platform backend implements the same platform interface as its second implementation (ADR-0018). The two M1 hard targets, input-to-pixel latency and idle CPU, get their first real measurements. M0's blit presentation path is deleted.
 
+Current status (2026-11-16): implementation and human visual acceptance are
+delivered. S6 baseline reproducibility and S7 full verification remain incomplete;
+the performance comparison failures below prevent marking M1 done. M2 has not
+started.
+
 ## Decisions
 
 Confirmed before execution:
@@ -23,6 +28,17 @@ Confirmed before execution:
 | Input | Raw pointer and keyboard events delivered to the window thread. No hit testing (M2), no IME (M6), no key mapping (M5). |
 | Headless rendering | The headless backend renders frames through the CPU renderer, so input-to-pixel tests run end to end without a GPU. |
 | Execution | Same as M0: one step, one verification, one commit. |
+
+### Accepted measurement adjustment
+
+[ADR-0026](../adr/0026-m1-native-latency-gates.md) records the owner's adjustment
+after real presentation measurements: windowed phase-swept input-to-submit p95
+must fit one measured refresh interval; actual input-to-pixel p95 must remain
+within 115% of the human-recorded optimized baseline on the same display interval.
+Idle CPU must be at or below 0.1%, with no submissions, presentations or
+display-link frame events. Fullscreen pixel baselines remain deferred to M10.
+These are the M1 close-out gates; they do not establish one-frame end-to-end
+latency for all workloads.
 
 ## Scope
 
@@ -118,4 +134,87 @@ Acceptance: a fresh clone passes `cargo xtask verify` with every check marked pa
 
 ## Remaining items
 
-Filled in at close-out.
+- M2: arena node tree, dirty flags, layout, hit testing and pointer dispatch.
+- M3/M4: reactivity and components; Parley text and the Vello GPU path. M1 keeps
+  the polygon compute fallback and SDF rectangle path.
+- M9: multiple windows, shared-thread mode, and reclaimable native surface-handle
+  ownership. M1 intentionally retains one Metal layer per window for process
+  lifetime under ADR-0025.
+- M10: fullscreen pixel-latency baselines, continuous rendering, and further
+  compositor/presentation latency work. Continuous input can exceed one refresh
+  interval even with full display cadence. On the internal 120 Hz display,
+  windowed/restored paint-to-submit p95 can also exceed 8.33 ms with the overlay;
+  the optional fullscreen diagnostic does not pass every budget check.
+- Revisit the Metal hosting-delegate workaround when wgpu's occlusion handling
+  supports this fullscreen path without false timeouts. Check actual occlusion
+  and window lifecycle behavior before removing the workaround.
+- Partial repaint and damage-region tracking remain deferred; M1 repaints the
+  complete window on demand. The 100,000-row scrolling metric remains pending
+  until M7; Windows/Linux native backends remain M14/M15.
+
+## Execution record
+
+| Step | Delivery | Validation |
+| --- | --- | --- |
+| S1 | `3a886f9`: platform interface and owned native surface handle | Local verify passed; threading and ownership contracts documented. |
+| S2 | `b41ee54`: deterministic headless backend | Local verify passed; platform interface, virtual input/vsync and resize tests. |
+| S3 | `faf4109`: on-demand scheduler and window-thread loop | Local verify passed; one frame for input, no frames during idle, skipped-frame retry. |
+| S4 | `131a904`: native surfaces, SDF path and shared RGBA8 image | Local verify passed; CPU/GPU comparisons, snapshots and recovery tests. |
+| S5 | `46865da`: AppKit backend and application wiring | Local verify passed; native surface demo replaces the M0 blit path. |
+| S6 implementation | `9078375`: native metrics, presentation diagnostics and sparse rendering optimization | Local verify passed; native measurements and sustained presentation checks. |
+| S6 diagnostic correction | `857e3d7`: acknowledge the exact input timestamp delivered by AppKit; record the accepted latency gates | Local and fresh-clone ordinary verify passed; native measurements complete, baseline reproducibility still pending. |
+
+On 2026-11-16, the owner confirmed the final demo's visual checks: complete
+content, pointer-following rectangle, no stretching or flicker while dragging
+window edges, and no persistent white screen after entering/exiting fullscreen.
+Yellow overlay latency bars were explicitly evaluated separately.
+
+### S6/S7 close-out checks — 2026-11-16
+
+- Fixed diagnostic event attribution: AppKit can quantize an injected event's
+  timestamp by one nanosecond during queue delivery. Diagnostic event numbers
+  now correlate a worker receipt with the view callback's exact capture value.
+  Capture still starts before queuing, and frame attribution still requires
+  exact timestamp equality. Repeated native latency and cadence runs exercise
+  this path; no timestamp tolerance or latency threshold was relaxed.
+- `cargo xtask verify`: all seven checks passed locally. A fresh local clone,
+  with the candidate changes applied and no copied `target` cache, also passed
+  all seven checks.
+- The owner explicitly approved `cargo xtask bench --record` and immediate
+  comparison. Recording succeeded on the internal 120 Hz display. The candidate
+  baseline remains uncommitted because subsequent comparison did not reproduce
+  every metric within its existing tolerance. Do not record again just to clear
+  these failures.
+- `cargo xtask verify --full`: exit 1. The seven ordinary checks passed; bench
+  failed for idle CPU and two sparse-render metrics. Pixel/submit latency,
+  zero idle work, and existing image-comparison metrics passed. M7 scrolling
+  remains pending, not passing.
+
+| Metric | Recorded candidate | Latest full verification | Result |
+| --- | --- | --- | --- |
+| Input-to-submit p95 | 4.573 ms | 4.606 ms | Pass: one interval is 8.333 ms; relative comparison also passes. |
+| Input-to-pixel p95 | 30.262 ms | 29.105 ms | Pass: actual presentation, ceiling 34.801 ms. |
+| Idle process CPU | 0.02458% | 0.03257% | Hard target 0.1% passes; baseline +10% fails. |
+| Idle submitted/presented frames and display-link events | 0 / 0 / 0 | 0 / 0 / 0 | Pass. |
+| GPU sparse scene, 1 primitive | 4.130 ms | 7.758 ms | Baseline +10% fails. |
+| GPU sparse scene, 128 primitives | 2.842 ms | 3.944 ms | Baseline +10% fails. |
+| GPU sparse scene, 1,000 primitives | 7.465 ms | 6.234 ms | Pass. |
+
+The same build produced materially different GPU medians on repeated runs.
+Quieter agent activity, a one-second GPU warm-up, and a longer idle settling
+period did not resolve the variation; the experimental source changes were
+reverted. The Mac was on battery power and the owner could not connect power
+during this session. Power and background GPU load remain environment factors
+to isolate, not a proven explanation for every failure. Baselines and thresholds
+were not changed after the failed comparison.
+
+The supplemental `--fullscreen-check --debug-overlay --json` reported roughly
+120 displayed frames/s in all three stages and a confirmed transition frame.
+Cadence passed, but paint-to-submit p95 was 9.81 ms in windowed/restored stages
+and continuous input-to-submit p95 was 17.78–18.75 ms. Its exit status was 1;
+this is recorded separately from the accepted windowed phase-swept baseline.
+
+Next: repeat the unchanged baseline comparison under stable power and desktop
+load, investigate any remaining failures, and require a passing
+`cargo xtask verify --full` before committing the baseline and marking S6/S7/M1
+complete. The final committed checkout must also pass ordinary verify.

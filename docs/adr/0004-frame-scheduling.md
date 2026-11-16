@@ -12,3 +12,25 @@ Align the frame clock to the window's display vsync (CVDisplayLink/CADisplayLink
 
 - The compositor needs a layer concept (see decision 12 on compositing and external content), even when only on-demand rendering is implemented initially.
 - Switch frame-clock sources when a window moves between displays with different refresh rates.
+
+## M1 execution note — 2026-11-16
+
+M1 implements on-demand whole-window repainting. Invalidation, a timed request or
+a system repaint request can schedule a frame; an idle window produces no frames
+or display-link frame events. Dirty-region repainting is deferred. Both
+continuous policies remain explicit unsupported capabilities until M10.
+
+On macOS 14+, a view-associated `CADisplayLink` supplies display timing and pauses
+when no work is pending. The headless backend supplies deterministic virtual
+vsync. Predictions include a bounded compositor-offset estimate updated by
+actual Metal presentation feedback; a prediction is never reported as measured
+input-to-pixel latency. M1 has no animation API; that remains M8.
+
+Windowed surfaces prefer Immediate presentation; fullscreen uses Fifo. Both keep
+three Metal drawables. The platform defers ordinary FIFO frame opportunities
+while two acquired drawables await presentation, leaving the window thread free
+to consume input. Presentation callbacks release capacity and wake deferred work.
+After a display/fullscreen transition, one repaint restores content even if
+AppKit discarded a transition drawable. These requests do not create an idle
+rendering loop. See the [performance conventions](../conventions/testing-performance.md)
+for the diagnostic workload and the remaining continuous-input latency overruns.

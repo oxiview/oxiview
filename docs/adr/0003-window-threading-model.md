@@ -18,3 +18,22 @@ State and signals on a window thread are `!Send`, used only on that thread witho
 - The reactive runtime (decision 4) must be thread-local, with one instance per window thread.
 - Forwarding events from the main thread to a window thread adds a cross-thread hop. Include it in the input-to-pixel ≤ 1 frame budget and monitor it in CI.
 - Platform backends must provide low-latency main/window-thread channels that are not starved by blocking operations such as macOS modal loops or Windows drag-resize loops.
+
+## M1 execution note — 2026-11-16
+
+AppKit window creation and event dispatch run on the main thread. A dedicated
+window thread owns the application, scheduler, scene construction and surface
+presentation. The application factory runs there, allowing application state to
+remain `!Send`; cross-thread endpoints carry owned events and wake requests.
+The headless backend implements the same interface and resize protocol.
+
+Interactive live resize is a bounded exception to the nonblocking main-thread
+rule: the main thread services a resize-only run-loop mode while waiting up to
+the configured timeout (250 ms by default) for the window thread to commit the resized frame with the Core Animation
+transaction. Timeout releases the main thread and is traced. Ordinary rendering
+and fullscreen reparenting do not use transaction-synchronized presentation.
+
+M1 implements one window in the demo. Multiple windows and shared-thread mode
+remain M9 work; the thread-local reactive runtime remains M3 work. Native latency
+is checked locally under [ADR-0026](0026-m1-native-latency-gates.md), including the
+main-to-window-thread hop.
