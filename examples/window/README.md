@@ -6,7 +6,7 @@ From the repository root:
 cargo run -p window
 cargo run -p window -- --headless
 cargo run --release -p window -- --measure-latency 120 --json
-cargo run --release -p window -- --idle-check 5 --json
+cargo run --release -p window -- --idle-check 30 --json
 ```
 
 The native demo requires macOS 14+, a visible WindowServer display session and

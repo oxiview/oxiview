@@ -8,35 +8,44 @@
     "os": "macos 27.2",
     "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)"
   },
-  "recorded_at_unix_seconds": 1794480609,
+  "recorded_at_unix_seconds": 1794835346,
   "metrics": {
     "compare/image_compare/1024": {
-      "value": 2791000.0,
+      "value": 2854000.0,
       "unit": "ns",
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
     },
     "compare/image_compare/256": {
-      "value": 177600.0,
+      "value": 179600.0,
       "unit": "ns",
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
     },
     "idle_cpu_percent": {
-      "value": null,
+      "value": 0.0245752521067472,
       "unit": "%",
       "direction": "lower",
       "regression_percent": 10.0,
-      "target": 0.0
+      "target": 0.1
     },
     "input_to_pixel_ms": {
-      "value": null,
+      "value": 30.262043,
+      "unit": "ms",
+      "direction": "lower",
+      "regression_percent": 15.0,
+      "target": null,
+      "refresh_interval_ms": 8.333333
+    },
+    "input_to_submit_ms": {
+      "value": 4.573207999999999,
       "unit": "ms",
       "direction": "lower",
       "regression_percent": 10.0,
-      "target": 8.0
+      "target": 8.333333,
+      "refresh_interval_ms": 8.333333
     },
     "list_100k_scroll_dropped_frames": {
       "value": null,
@@ -44,6 +53,27 @@
       "direction": "lower",
       "regression_percent": 10.0,
       "target": 0.0
+    },
+    "render/sparse_ui/1": {
+      "value": 4130000.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "render/sparse_ui/1000": {
+      "value": 7465000.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "render/sparse_ui/128": {
+      "value": 2842000.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
     }
   }
 }

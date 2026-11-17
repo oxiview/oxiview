@@ -2,6 +2,10 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+// A five-second interval overweights small, deferred native startup work.
+// Keep all zero-work counters and the CPU ceiling, but measure steady idle longer.
+const IDLE_SECONDS: u32 = 30;
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Latency {
@@ -74,7 +78,7 @@ impl Idle {
     fn parse(text: &str) -> Result<Self> {
         let v: Self = serde_json::from_str(text).map_err(|e| format!("invalid idle JSON: {e}"))?;
         if !nonnegative(&[v.cpu_percent, v.interval_seconds])
-            || v.interval_seconds == 0.0
+            || v.interval_seconds < f64::from(IDLE_SECONDS)
             || v.pass != v.hard_pass()
         {
             return Err("invalid or inconsistent idle measurement".into());
@@ -161,10 +165,10 @@ pub(super) fn measure(root: &Path) -> Result<BTreeMap<String, Measurement>> {
         rounds.push(latency);
     }
     let mut measurements = aggregate_latency(&rounds)?;
-    let (text, code) = run(root, "--idle-check", "5", "idle")?;
+    let (text, code) = run(root, "--idle-check", &IDLE_SECONDS.to_string(), "idle")?;
     let idle = Idle::parse(&text)?;
-    if idle.interval_seconds < 5.0 || code != Some(i32::from(!idle.pass)) {
-        return Err("idle interval or process exit disagrees with JSON".into());
+    if code != Some(i32::from(!idle.pass)) {
+        return Err("idle process exit disagrees with JSON".into());
     }
     measurements.insert(
         "idle_cpu_percent".into(),
@@ -220,7 +224,18 @@ fn aggregate_latency(rounds: &[Latency]) -> Result<BTreeMap<String, Measurement>
 mod tests {
     use super::*;
     const LATENCY: &str = r#"{"samples":120,"p50_ms":4,"p95_ms":10,"max_ms":12,"refresh_interval_ms":10,"p95_frames":1,"submit_p50_ms":4,"submit_p95_ms":10,"submit_max_ms":12,"compositor_offset_ms":10,"pixel_gate":"requires human-recorded baseline; checked by xtask bench","pass":true}"#;
-    const IDLE: &str = r#"{"frames":0,"submitted_frames":0,"display_link_events":0,"cpu_percent":0.1,"interval_seconds":5,"pass":true}"#;
+    const IDLE: &str = r#"{"frames":0,"submitted_frames":0,"display_link_events":0,"cpu_percent":0.1,"interval_seconds":30,"pass":true}"#;
+    #[test]
+    fn idle_requires_the_full_measurement_interval() {
+        assert!(Idle::parse(IDLE).is_ok());
+        for interval in ["5", "29.999", "0"] {
+            let shortened = IDLE.replace(
+                "\"interval_seconds\":30",
+                &format!("\"interval_seconds\":{interval}"),
+            );
+            assert!(Idle::parse(&shortened).is_err(), "{shortened}");
+        }
+    }
     #[test]
     fn three_round_median_preserves_failures_and_rejects_display_changes() {
         let mut rounds: Vec<_> = (0..3).map(|_| Latency::parse(LATENCY).unwrap()).collect();
@@ -277,7 +292,7 @@ mod tests {
             IDLE.replace("\"frames\":0,", ""),
             IDLE.replace("\"cpu_percent\":0.1", "\"cpu_percent\":null"),
             IDLE.replace("\"cpu_percent\":0.1", "\"cpu_percent\":1e999"),
-            IDLE.replace("\"interval_seconds\":5", "\"interval_seconds\":0"),
+            IDLE.replace("\"interval_seconds\":30", "\"interval_seconds\":0"),
             IDLE.replace("\"frames\":0", "\"frames\":1"),
             IDLE.replace("\"display_link_events\":0", "\"display_link_events\":1"),
         ] {

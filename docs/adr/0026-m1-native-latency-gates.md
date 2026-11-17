@@ -51,3 +51,17 @@ Native checks need a visible display session and a stable environment. Baseline
 recording remains a human decision, never an automatic response to a regression.
 The benchmark protocol and diagnostic endpoints are specified in the
 [performance conventions](../conventions/testing-performance.md).
+
+## Measurement implementation note — 2026-11-17
+
+Native diagnostics now place their window explicitly on the primary display,
+avoiding AppKit's focus-dependent centering on a different monitor. Actual
+display-link intervals still determine baseline compatibility.
+
+The idle observation interval is thirty seconds after the same one-second
+settling period. Short five-second runs gave millisecond-scale process CPU totals
+whose relative variation overwhelmed the near-zero baseline. A thirty-second
+control measured 0.0072% versus 0.0361% over five seconds, with zero work counters
+in both runs. This supports a longer observation period to reduce transient
+startup influence, without claiming lower framework CPU cost. The 0.1% CPU
+ceiling, zero-work checks and existing relative tolerance remain unchanged.

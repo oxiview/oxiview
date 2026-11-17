@@ -989,8 +989,9 @@ impl MacOsControl {
     }
 }
 impl MacOsPlatform {
-    /// Enables single-window drawable diagnostics for this run. Call before run,
-    /// on any thread. Feature-gated, off by default even when compiled in.
+    /// Enables single-window drawable diagnostics and places the window on the
+    /// primary display. Call before run, on any thread. Feature-gated, off by
+    /// default even when compiled in.
     #[cfg(feature = "diagnostics")]
     pub fn with_diagnostics(mut self) -> Self {
         self.diagnostics = true;
@@ -1062,6 +1063,26 @@ impl EventLoopContext for Context {
         // SAFETY: Retained owns the window; no NSWindowController manages it.
         unsafe {
             window.setReleasedWhenClosed(false);
+        }
+        #[cfg(feature = "diagnostics")]
+        if self.diagnostics {
+            // The first NSScreen is the primary display. mainScreen follows
+            // keyboard focus and can put successive benchmark windows on a
+            // different monitor with an incompatible refresh interval.
+            let screen = objc2_app_kit::NSScreen::screens(self.mtm)
+                .firstObject()
+                .ok_or_else(|| failure("native diagnostics require a primary display"))?;
+            let visible = screen.visibleFrame();
+            let frame = window.frame();
+            window.setFrameOrigin(NSPoint::new(
+                visible.origin.x + (visible.size.width - frame.size.width) * 0.5,
+                visible.origin.y + (visible.size.height - frame.size.height) * 0.5,
+            ));
+            eprintln!(
+                "Native diagnostics: primary display {}, maximum {} Hz",
+                screen.localizedName(),
+                screen.maximumFramesPerSecond()
+            );
         }
         let view = ContentView::alloc(self.mtm).set_ivars(ViewState::default());
         // SAFETY: Correct NSView initializer and finite frame for a fresh allocation.
@@ -1174,7 +1195,12 @@ impl EventLoopContext for Context {
             closed: Cell::new(false),
         });
         WINDOWS.with(|w| w.borrow_mut().push(native.clone()));
+        #[cfg(not(feature = "diagnostics"))]
         native.window.center();
+        #[cfg(feature = "diagnostics")]
+        if !self.diagnostics {
+            native.window.center();
+        }
         native.window.makeKeyAndOrderFront(None);
         native.window.makeFirstResponder(Some(&native.view));
         Ok(CreatedWindow {

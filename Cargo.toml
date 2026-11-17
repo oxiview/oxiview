@@ -23,7 +23,7 @@ objc2-quartz-core = { version = "=0.3.2", default-features = false, features = [
 oxiview-render-wgpu = { version = "0.0.0", path = "crates/oxiview-render-wgpu" }
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSGeometry", "NSRunLoop"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSView", "NSEvent", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation", "objc2-quartz-core"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSScreen", "NSWindow", "NSView", "NSEvent", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation", "objc2-quartz-core"] }
 wgpu = { version = "=30.0.2", default-features = false, features = ["std", "metal", "vulkan", "dx12", "wgsl"] }
 oxiview-scene = { version = "0.0.0", path = "crates/oxiview-scene" }
 vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline"] }
