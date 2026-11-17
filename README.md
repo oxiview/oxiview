@@ -7,8 +7,9 @@ A self-drawn Rust UI framework exclusively for native macOS, Windows, and Linux 
 M1 delivers the first native macOS window, a deterministic headless platform,
 on-demand scheduling on a dedicated window thread, and GPU surface presentation
 with an SDF rounded-rectangle path. M2, node trees and layout, is next.
-M1 close-out remains in progress: native visual checks and ordinary verification
-pass, but performance baseline reproducibility and full verification are pending.
+M1 is complete: native visual acceptance, fresh-clone verification and local
+performance baseline comparison passed. See the [execution record](docs/plans/m1-first-window.md)
+for measured results and remaining latency work.
 The toolchain is pinned to Rust stable 1.97.0 with edition 2024.
 
 On macOS 14+ with a visible display session and Metal GPU, run the pointer-following demo:

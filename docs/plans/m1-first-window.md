@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 milestone: M1
 ---
 
@@ -7,10 +7,9 @@ milestone: M1
 
 Goal: a native macOS window presenting through a `wgpu::Surface`, rendered on its own window thread while the main thread only pumps system events. Frames are produced on demand and aligned to the display's vsync; rounded rectangles take an SDF fast path. A headless platform backend implements the same platform interface as its second implementation (ADR-0018). The two M1 hard targets, input-to-pixel latency and idle CPU, get their first real measurements. M0's blit presentation path is deleted.
 
-Current status (2026-11-16): implementation and human visual acceptance are
-delivered. S6 baseline reproducibility and S7 full verification remain incomplete;
-the performance comparison failures below prevent marking M1 done. M2 has not
-started.
+Completed on 2026-11-17: implementation, human visual acceptance, a fresh-clone
+verification and local full verification passed. The owner-approved native
+baseline is committed. M2 has not started; remaining latency work is listed below.
 
 ## Decisions
 
@@ -162,59 +161,61 @@ Acceptance: a fresh clone passes `cargo xtask verify` with every check marked pa
 | S4 | `131a904`: native surfaces, SDF path and shared RGBA8 image | Local verify passed; CPU/GPU comparisons, snapshots and recovery tests. |
 | S5 | `46865da`: AppKit backend and application wiring | Local verify passed; native surface demo replaces the M0 blit path. |
 | S6 implementation | `9078375`: native metrics, presentation diagnostics and sparse rendering optimization | Local verify passed; native measurements and sustained presentation checks. |
-| S6 diagnostic correction | `857e3d7`: acknowledge the exact input timestamp delivered by AppKit; record the accepted latency gates | Local and fresh-clone ordinary verify passed; native measurements complete, baseline reproducibility still pending. |
+| S6 diagnostic correction | `857e3d7`: acknowledge the exact input timestamp delivered by AppKit; record the accepted latency gates | Local and fresh-clone ordinary verify passed; native event attribution exercised. |
+| S6 completion | `197da5e`: primary-display diagnostics, thirty-second idle observation and the owner-approved native baseline | Local verify and verify --full passed; the existing candidate baseline and tolerances were unchanged during successful comparison. |
+| S7 | Roadmap, plan status, README and canonical agent instructions updated; dated ADR-0003/0004 execution notes retained | Fresh clone without copied build output passed all seven ordinary checks; local full verification passed all eight checks. |
 
 On 2026-11-16, the owner confirmed the final demo's visual checks: complete
 content, pointer-following rectangle, no stretching or flicker while dragging
 window edges, and no persistent white screen after entering/exiting fullscreen.
 Yellow overlay latency bars were explicitly evaluated separately.
 
-### S6/S7 close-out checks — 2026-11-16
+### S6/S7 close-out checks — 2026-11-17
 
-- Fixed diagnostic event attribution: AppKit can quantize an injected event's
-  timestamp by one nanosecond during queue delivery. Diagnostic event numbers
-  now correlate a worker receipt with the view callback's exact capture value.
-  Capture still starts before queuing, and frame attribution still requires
-  exact timestamp equality. Repeated native latency and cadence runs exercise
-  this path; no timestamp tolerance or latency threshold was relaxed.
-- `cargo xtask verify`: all seven checks passed locally. A fresh local clone,
-  with the candidate changes applied and no copied `target` cache, also passed
-  all seven checks.
-- The owner explicitly approved `cargo xtask bench --record` and immediate
-  comparison. Recording succeeded on the internal 120 Hz display. The candidate
-  baseline remains uncommitted because subsequent comparison did not reproduce
-  every metric within its existing tolerance. Do not record again just to clear
-  these failures.
-- `cargo xtask verify --full`: exit 1. The seven ordinary checks passed; bench
-  failed for idle CPU and two sparse-render metrics. Pixel/submit latency,
-  zero idle work, and existing image-comparison metrics passed. M7 scrolling
-  remains pending, not passing.
+- `cargo xtask verify`: all seven checks passed locally and in a new local clone
+  without copied `target` output.
+- `cargo xtask verify --full`: all eight checks passed on this Mac, including
+  three sequential native latency rounds and a thirty-second idle measurement.
+- The owner explicitly approved baseline recording and immediate comparison on
+  2026-11-16. That candidate is now committed at
+  [perf/baselines/macos-8a09e0b60732277a.json](../../perf/baselines/macos-8a09e0b60732277a.json).
+  Its values and tolerances were not rewritten after failed comparisons.
+- Verification used AC power, the primary internal 120 Hz display and no input
+  during idle observation. The external 60 Hz display remained connected.
+  M7 scrolling remains pending, not passing.
 
-| Metric | Recorded candidate | Latest full verification | Result |
+| Metric | Recorded baseline | Final full verification | Result |
 | --- | --- | --- | --- |
-| Input-to-submit p95 | 4.573 ms | 4.606 ms | Pass: one interval is 8.333 ms; relative comparison also passes. |
-| Input-to-pixel p95 | 30.262 ms | 29.105 ms | Pass: actual presentation, ceiling 34.801 ms. |
-| Idle process CPU | 0.02458% | 0.03257% | Hard target 0.1% passes; baseline +10% fails. |
+| Input-to-submit p95 | 4.573 ms | 4.620 ms | Pass: one interval is 8.333 ms; baseline +10% also passes. |
+| Input-to-pixel p95 | 30.262 ms | 27.304 ms | Pass: actual presentation, ceiling 34.801 ms. |
+| Idle process CPU | 0.02458% | 0.00937% | Pass: 0.1% hard ceiling and baseline +10%. |
 | Idle submitted/presented frames and display-link events | 0 / 0 / 0 | 0 / 0 / 0 | Pass. |
-| GPU sparse scene, 1 primitive | 4.130 ms | 7.758 ms | Baseline +10% fails. |
-| GPU sparse scene, 128 primitives | 2.842 ms | 3.944 ms | Baseline +10% fails. |
-| GPU sparse scene, 1,000 primitives | 7.465 ms | 6.234 ms | Pass. |
+| GPU sparse scene, 1 primitive | 4.130 ms | 2.511 ms | Pass. |
+| GPU sparse scene, 128 primitives | 2.842 ms | 2.742 ms | Pass. |
+| GPU sparse scene, 1,000 primitives | 7.465 ms | 4.394 ms | Pass. |
 
-The same build produced materially different GPU medians on repeated runs.
-Quieter agent activity, a one-second GPU warm-up, and a longer idle settling
-period did not resolve the variation; the experimental source changes were
-reverted. The Mac was on battery power and the owner could not connect power
-during this session. Power and background GPU load remain environment factors
-to isolate, not a proven explanation for every failure. Baselines and thresholds
-were not changed after the failed comparison.
+The initial battery-powered comparisons failed for idle CPU and sparse GPU
+rendering. With AC power the GPU comparisons passed, but native latency runs
+selected the active external 60 Hz display. Diagnostics now position the window
+explicitly on the primary display and skip AppKit's subsequent focus-dependent
+centering; observed refresh intervals returned to 8.333 ms. A regression check
+also rejects idle reports covering less than thirty seconds.
 
-The supplemental `--fullscreen-check --debug-overlay --json` reported roughly
-120 displayed frames/s in all three stages and a confirmed transition frame.
-Cadence passed, but paint-to-submit p95 was 9.81 ms in windowed/restored stages
-and continuous input-to-submit p95 was 17.78–18.75 ms. Its exit status was 1;
-this is recorded separately from the accepted windowed phase-swept baseline.
+The longer idle interval reduces the influence of millisecond-scale startup
+housekeeping on near-zero CPU percentages; it does not demonstrate a framework
+CPU optimization. An idle run interrupted by input was rejected. During a quiet
+thirty-second diagnostic, the window thread accumulated no CPU time and the
+main-thread framework service count stayed unchanged. Temporary thread probes
+were removed before final verification. Quiet desktop conditions remain
+necessary for meaningful baseline comparisons. See the
+[measurement protocol](../conventions/testing-performance.md) and
+[ADR-0026](../adr/0026-m1-native-latency-gates.md).
 
-Next: repeat the unchanged baseline comparison under stable power and desktop
-load, investigate any remaining failures, and require a passing
-`cargo xtask verify --full` before committing the baseline and marking S6/S7/M1
-complete. The final committed checkout must also pass ordinary verify.
+The supplemental 2026-11-16 `--fullscreen-check --debug-overlay --json` reported
+roughly 120 displayed frames/s in all three stages and a confirmed transition
+frame. Cadence passed, but paint-to-submit p95 was 9.81 ms in windowed/restored
+stages and continuous input-to-submit p95 was 17.78–18.75 ms. Its exit status was
+1. This diagnostic remains separate from the accepted windowed phase-swept
+baseline; M1 completion does not establish one-frame end-to-end latency or a
+passing continuous-input budget. Fullscreen pixel baselines and further
+presentation latency work remain M10 items.
