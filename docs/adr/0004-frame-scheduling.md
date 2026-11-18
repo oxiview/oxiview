@@ -26,14 +26,15 @@ vsync. Predictions include a bounded compositor-offset estimate updated by
 actual Metal presentation feedback; a prediction is never reported as measured
 input-to-pixel latency. M1 has no animation API; that remains M8.
 
-Windowed surfaces prefer Immediate presentation; fullscreen uses Fifo. Both keep
-three Metal drawables. The platform defers ordinary FIFO frame opportunities
-while two acquired drawables await presentation, leaving the window thread free
-to consume input. Presentation callbacks release capacity and wake deferred work.
+Windowed surfaces prefer Immediate presentation and fullscreen uses FIFO. Both
+keep three Metal drawables. At M1 close-out the platform deferred ordinary FIFO
+frame opportunities while two acquired drawables awaited presentation.
+Presentation callbacks released capacity and woke deferred work.
 After a display/fullscreen transition, one repaint restores content even if
 AppKit discarded a transition drawable. These requests do not create an idle
 rendering loop. See the [performance conventions](../conventions/testing-performance.md)
 for the diagnostic workload and the remaining continuous-input latency overruns.
 
-The 2026-11-18 [FIFO pacing decision](0036-fifo-drawable-readiness.md) replaces
-the two-presentation limit above with asynchronous drawable acquisition.
+Since 2026-11-18 the renderer acquires ordinary drawables asynchronously in
+both modes. The window thread continues processing input while it waits.
+[ADR-0036](0036-fifo-drawable-readiness.md) replaces the M1 two-presentation rule.

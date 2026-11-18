@@ -7,7 +7,7 @@ and DPI-aware glyph rasterization. Parley/fontique/Harfrust provide logical
 layout; Swash rasterizes glyphs into immutable shared foundation images. Core converts the returned
 `GlyphImage { rect, image }` records into Scene image primitives; the text
 crate has no dependency on the Scene drawing language. The native
-GPU renderer samples those images directly through its command-buffer atlas,
+GPU renderer samples glyph pixels from the Scene's encoded command buffer,
 with the same transform, clip, and group-opacity semantics as other primitives.
 The CPU renderer supports the same image primitive for headless runs.
 
@@ -33,7 +33,7 @@ system-font test additionally covers Chinese and a color emoji without opening
 a window.
 
 The current implementation emits glyph images. It does not yet implement the
-large-text vector path, arbitrary transformed vector glyphs, complete COLRv1
+dedicated GPU texture atlas, large-text vector path, arbitrary transformed vector glyphs, complete COLRv1
 painting, or a Vello GPU backend migration from ADR-0010/0012. This library and
 the Snake demonstration establish working font text without claiming those
 remaining M4 capabilities or editable-text behavior from later milestones.

@@ -7,7 +7,7 @@ Language: **English**
 | [0001](0001-goals-and-non-goals.md) | Goals and non-goals: broad coverage, milestone progression, house style, hard performance targets (M1 latency gate partially superseded by 0026) | 1 Goals and non-goals |
 | [0002](0002-own-platform-backends.md) | Platform layer: owned backends, Wayland first, capability traits | 2 Platform abstraction |
 | [0003](0003-window-threading-model.md) | Threading: main thread pumps events, one window thread per window by default | 2 Platform abstraction |
-| [0004](0004-frame-scheduling.md) | Frame scheduling: on-demand by default, reserved continuous rendering, display vsync | 3 Frame scheduling |
+| [0004](0004-frame-scheduling.md) | Frame scheduling: on-demand by default, reserved continuous rendering, display vsync (M1 FIFO admission rule superseded by [0036](0036-fifo-drawable-readiness.md)) | 3 Frame scheduling |
 | [0005](0005-fine-grained-reactivity.md) | Reactivity: thread-local fine-grained signals, structural reconciliation, local executor | 4 State and reactivity |
 | [0006](0006-builder-api-and-function-components.md) | Component API: Builder core, function components, props | 5 Components and API |
 | [0007](0007-single-arena-node-tree.md) | Retained tree: one arena node tree, three dirty-flag levels | 6 Retained tree / invalidation |

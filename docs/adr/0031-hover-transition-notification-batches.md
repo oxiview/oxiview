@@ -9,7 +9,9 @@ individual enter/leave event would let an earlier handler change or destroy
 recipients before the rest of that transition is delivered. Treat the related
 notifications as one batch, publish its new hover state before delivery, and
 apply callback mutations after the complete batch. The owner confirmed this
-refinement during M2 planning on 2026-11-17. Implementation remains pending.
+refinement during M2 planning on 2026-11-17. The preview batches hover
+notifications. Tests exercise an enter callback that requests deletion and
+inner-first leave order during removal. [Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs)
 
 This refines the mutation boundary in
 [ADR-0029](0029-deferred-event-handler-mutations.md) for a hover notification

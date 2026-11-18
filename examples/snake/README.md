@@ -34,14 +34,15 @@ cargo run --release -p snake -- --debug-overlay
 open -n "target/xtask/snake/Oxiview Snake.app" --args --debug-overlay
 ```
 
-It shows application FPS over the last second, the backend's display cadence,
+APP FPS counts successful application frame submissions over the last second.
+The panel also shows the backend's display cadence,
 CPU event-processing time, CPU paint-to-submission time, live node and draw
 counts, cumulative layout/measurement/cache statistics, and logical viewport
-size/DPI. Submission timing is not GPU execution or confirmed scanout timing.
-Classic Snake normally updates at about eight frames per second because its
-initial simulation step is 125 ms; this is distinct from display refresh rate.
-The [continuous animation demo](../animation-fps/README.md) measures a scene
-that changes on every frame opportunity and includes actual Metal display feedback.
+size/DPI. Paint-to-submit starts when application painting begins, after any
+ordinary drawable wait. At Classic pace the initial simulation step is 125 ms,
+so steady play typically submits about eight frames per second. To measure
+actual Metal display times under continuous motion, use the
+[continuous animation demo](../animation-fps/README.md).
 
 The layer is disabled by default, draws above the Scene, does not participate in
 hit testing, and never changes the game's retained layout. Labels update on

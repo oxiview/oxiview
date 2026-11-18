@@ -8,8 +8,9 @@ Run the demo on macOS 14+ with a visible window and a Metal GPU.
 cargo run --release -p animation-fps
 ```
 
-The window starts with 32 moving objects on three tracks. Each displayed-frame
-opportunity samples the predicted presentation time to position the objects.
+The window starts with 32 moving objects on three tracks. After a successful
+submission, the demo wakes its window and requests the next on-demand frame.
+It samples the predicted presentation time to position the objects.
 The workload uses the normal retained UI tree, text nodes, Scene and native
 GPU presenter. Space pauses or resumes. Up doubles the object count and Down
 halves it, within 1 to 128. An inactive, hidden or zero-sized window suspends
@@ -45,9 +46,12 @@ application paint to submission. [Native frame pacing](../../docs/adr/0036-fifo-
 documents this measurement boundary.
 
 Keep the window visible, active and at a stable size for the timed run.
-Interrupted runs or missing display feedback return an error. Run measurements
-sequentially on the same display with the same object count and window size for
-comparison. Results describe this animation and include its metrics panel.
+Interrupted runs or missing display feedback return an error. For a windowed
+versus fullscreen comparison, run sequentially on the same display with the
+same object count and duration. Record `pixel_width`, `pixel_height` and
+`scale` for each mode because fullscreen usually changes the pixel workload.
+Use matching physical dimensions when isolating the effect of presentation mode.
+Results include the cost of the metrics panel.
 
 To build a local application bundle, run `./examples/animation-fps/package-macos.sh`.
 The result is `target/xtask/animation-fps/Oxiview Motion.app`.

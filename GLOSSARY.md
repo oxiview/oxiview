@@ -64,6 +64,12 @@ frame. It is not GPU completion or confirmation that the frame reached the displ
 Native presentation feedback confirming when a frame became visible. On macOS,
 this is a nonzero Metal drawable `presentedTime`; zero means it was not displayed.
 
+**Submitted FPS**:
+Successful frame submissions per second, counted by submission timestamp within the sample interval.
+
+**Displayed FPS**:
+Frames per second confirmed visible by an actual presentation timestamp within the sample interval.
+
 **Signal**:
 A reactive value whose dependencies can be tracked. Changes directly notify dependent computations and node properties.
 _Avoid_: State, Observable, Atom
@@ -76,7 +82,7 @@ _Avoid_: Owner (for the owning scope), Context
 A non-owning reference to a reactive scope, represented by the `Owner` API.
 
 **Structural reconciliation**:
-Adding, removing, and moving nodes by key when view structure changes, such as in conditionals or lists. This is the framework's only update path that changes tree shape.
+Updating mounted children when a conditional branch or keyed list changes. Surviving list keys retain their node identities.
 _Avoid_: diff, re-render
 
 ## Components and nodes
@@ -87,6 +93,9 @@ _Avoid_: Widget (reserved for low-level drawable node types), View function
 
 **Props**:
 The input parameter struct of a component.
+
+**View**:
+A construction description consumed when mounting UI nodes and their bindings.
 
 **Node**:
 An element in the retained tree with style, layout results, and painting content, identified by `NodeId`.

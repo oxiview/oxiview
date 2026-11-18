@@ -477,9 +477,9 @@ The owner selected capture that continues outside the originating window:
   with deterministic headless coverage of the same event sequence. Normal
   boundary crossing must not be mistaken for a platform interruption.
 
-This confirms the required delivery scope. Existing event forwarding is an
-implementation starting point; outside-window delivery has not yet passed
-native acceptance.
+The native preview verified dragging and releasing beyond the right window
+edge. The remaining native resize, transition and interruption cases are
+listed in the [execution record](#execution-record).
 
 ### Pointer capture lifecycle
 
@@ -845,24 +845,24 @@ defines placement of the notification batch relative to input and queued
 commands. Bounds for callbacks that repeatedly generate more transitions are
 delegated engineering work. ADR-0033 defines the cleanup staging above.
 
-## Starting point
+## Starting point at M1 close-out
 
 - [`oxiview-core`](../../crates/oxiview-core/src/lib.rs) already owns `Scheduler`,
   `Application`, `PaintedScene`, and the window-thread loop. `Application::event`
   requests invalidation; `Application::paint` produces a complete Scene.
 - [`oxiview-platform`](../../crates/oxiview-platform/src/interface.rs) delivers
   pointer coordinates in logical units, physical window sizes, scale changes,
-  input capture timestamps, and resize transactions. It has no node routing or
-  pointer-leave/window-activation events yet.
+  input capture timestamps, and resize transactions. M2 subsequently added
+  pointer-leave and window-lifecycle events at the port and node routing in core.
 - [`oxiview-scene`](../../crates/oxiview-scene/src/lib.rs) already has a retained
   painting representation and its own `NodeId`. Scenes use physical pixel
   coordinates at the presentation boundary. A Scene entry is not a UI node.
 - [`oxiview-app`](../../crates/oxiview-app/src/lib.rs) composes the same core loop
   with the headless CPU presenter or native GPU presenter. No second window loop
   is needed for M2.
-- [`xtask/layers.toml`](../../xtask/layers.toml) registers `oxiview-layout` and
-  `oxiview-style`, but those crates do not exist yet. Only `oxiview-layout` may
-  depend directly on Taffy.
+- [`xtask/layers.toml`](../../xtask/layers.toml) reserved `oxiview-layout` and
+  `oxiview-style` before M2 created them. Only `oxiview-layout` may depend
+  directly on Taffy.
 - The M1 `window` example is also the native latency and idle measurement fixture.
   Its measurement modes and workload remain comparable to their recorded baseline.
 
@@ -1194,9 +1194,8 @@ Capture-scope evidence: the current
 mouse-dragged and mouse-up events to the platform event stream and preserves
 coordinates outside the content bounds. AppKit documents an originating-view
 [down/drag/up dispatch sequence](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/EventArchitecture/EventArchitecture.html).
-This provides an implementation starting point, not verified delivery outside
-the window. Require native outside-window drag/up acceptance and deterministic
-headless lifecycle tests before claiming support.
+The [execution record](#execution-record) documents the native right-edge
+drag/release observation and the headless lifecycle tests.
 
 ## Steps
 
@@ -1768,3 +1767,10 @@ overflowed the default test-thread stack; Flex, Grid, and Block chains at
 the same limit before mutation; its rejection and iterative teardown tests
 passed. Snapshot acceptance, performance baseline recording, and full milestone
 acceptance remain pending.
+
+### Integration check (2026-11-18)
+
+Snake and the continuous animation demo exercise this tree in two native
+applications. The full workspace check passed after the drawable scheduling
+change. It compared the recorded M1 metrics. M2-specific layout benchmarks
+and snapshot acceptance remain open. [Integration demo](../../examples/snake/README.md) · [Frame pacing evidence](../adr/0036-fifo-drawable-readiness.md)

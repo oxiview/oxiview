@@ -21,3 +21,4 @@ Color: blend internally in **linear space**, support Display P3 wide gamut, and 
 ## Notes
 
 - 2026-11-13 (M0): The CPU path adopted `vello_cpu` (pinned `=0.4.0`, confined to `oxiview-render-cpu`) and is locked by pixel snapshots. An offscreen wgpu renderer with a process-wide device arrived ahead of M1; it rasterizes the shared Scene encoding with its own compute shader, and Vello itself was deferred to M4, when text and arbitrary paths need it; M1 adds only the SDF fast path (decided while planning M1). GPU pixels are not required to match the CPU path byte for byte. Presentation blits pixels into the window until M1 introduces a `wgpu::Surface`.
+- In the M4 integration, both renderers composite glyphs as Scene image primitives. The native presenter uses the wgpu compute path with a window surface. Full Vello integration remains open. [M4 implementation](../plans/m4-text-and-snake.md) · [Native frame pacing](0036-fifo-drawable-readiness.md)

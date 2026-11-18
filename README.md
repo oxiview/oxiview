@@ -10,29 +10,28 @@ with an SDF rounded-rectangle path. M2 now has an interactive native preview
 with a retained UI tree, Flex/Grid/Block layout, stacking, clipping, pointer
 routing, and capture. The [detailed plan](docs/plans/m2-node-tree-and-layout.md)
 records the approved design and remaining full-milestone work.
-The latest integration target is a playable [Snake game](examples/snake/README.md)
-using M3 Signals/components/view! and M4 real font shaping, DPI-aware glyph
-images, and GPU compositing. Framework implementation and full milestone
-acceptance are tracked separately in the plans.
+The playable [Snake game](examples/snake/README.md) uses M3 Signals, function
+components and optional JSX-like `view!` expressions in Rust source files.
+M4 shapes its text, rasterizes glyphs at the display scale and composites them
+on the GPU. The milestone plans track the remaining acceptance work.
 M1 is complete: native visual acceptance, fresh-clone verification and local
 performance baseline comparison passed. See the [execution record](docs/plans/m1-first-window.md)
 for measured results and remaining latency work.
 The toolchain is pinned to Rust stable 1.97.0 with edition 2024.
 
-Run Snake on macOS 14+ with a visible display session and Metal GPU:
+## Snake
+
+Run Snake on macOS 14+ with a visible display session and Metal GPU.
 
 ```sh
 cargo run --release -p snake
 ```
 
-Add `-- --debug-overlay` to show FPS, display cadence, CPU timings, scene/layout
-counts, and viewport scale in the top-right corner. It is off by default and
-stops refreshing after one final idle update.
-
-To measure continuous motion, run `cargo run --release -p animation-fps`.
-The [animation demo](examples/animation-fps/README.md) shows live submitted and
-displayed FPS, the latter measured from Metal presentation timestamps. Use
-`-- --measure 5 --json` for a five-second native sample.
+Add `-- --debug-overlay` to show application FPS, display cadence, CPU timings,
+scene/layout counts and viewport scale in the top-right corner. At Classic
+pace the snake initially advances every 125 ms, so about 8 application FPS
+is expected during steady play. The overlay is off by default and stops
+refreshing after one final idle update.
 
 Enter starts a new game, Space pauses/resumes, and arrows or WASD steer. Mouse
 controls, selectable pace, score, session best, and recent runs are included.
@@ -50,7 +49,24 @@ Artifacts and the pass/fail manifest are written to `target/xtask/snake/`.
 bundle there. See the [M3 plan](docs/plans/m3-reactivity-and-components.md) and
 [M4 text/Snake plan](docs/plans/m4-text-and-snake.md) for scope and pending gates.
 
-Run the M2 Layout Lab on macOS 14+ with a visible display session and Metal GPU:
+## Continuous animation FPS
+
+Run `cargo run --release -p animation-fps` for the live panel. For a repeatable
+comparison, run these commands separately on the same display.
+
+```sh
+cargo run --release -p animation-fps -- --objects 128 --measure 5 --json
+cargo run --release -p animation-fps -- --objects 128 --measure 5 --fullscreen --json
+```
+
+The demo reports submissions and actual displayed frames separately. Compare
+`displayed_fps` and `display_gap_p95_ms` alongside the physical pixel
+dimensions. See the [measurement guide](examples/animation-fps/README.md) and
+the [native frame pacing results](docs/adr/0036-fifo-drawable-readiness.md).
+
+## Layout Lab
+
+Run the M2 Layout Lab on macOS 14+ with a visible display session and Metal GPU.
 
 ```sh
 cargo run --release -p window -- --layout-demo
@@ -76,7 +92,9 @@ stacking, and unchanged-input redraw suppression. Images are written to
 artifacts, not accepted snapshot baselines. M2 milestone acceptance and its
 new performance baselines remain pending.
 
-On macOS 14+ with a visible display session and Metal GPU, run the pointer-following demo:
+## M1 window diagnostics
+
+On macOS 14+ with a visible display session and Metal GPU, run the pointer-following demo.
 
 ```sh
 cargo run --release -p window -- --debug-overlay
@@ -97,16 +115,16 @@ cargo run --release -p window -- --headless
 
 The image is written to `target/xtask/window.png`.
 
-Run all local checks with:
+## Verification
+
+Run the standard local checks from the repository root.
 
 ```sh
 cargo xtask verify
 ```
 
-See the [M2 plan](docs/plans/m2-node-tree-and-layout.md) for the next implementation
-steps, the [M1 plan](docs/plans/m1-first-window.md) for completed scope and remaining items,
-[the roadmap](docs/roadmap.md) for later milestones, and
-[GLOSSARY.md](GLOSSARY.md) for terminology.
+The [roadmap](docs/roadmap.md) links the milestone plans and their acceptance
+status. The [glossary](GLOSSARY.md) defines the framework terminology.
 
 License: MIT OR Apache-2.0. Copyright The oxiview Authors.
 

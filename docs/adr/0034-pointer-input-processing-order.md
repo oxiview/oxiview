@@ -108,6 +108,7 @@ implicitly settled by this ordering, and neither permits stale-node dispatch.
 
 After confirming this group, the owner approved the remaining groups 3-12 and
 authorized immediate native-preview implementation using engineering judgment
-and parallel agents. Implementation is underway. This approval does not claim
-that every contract above is implemented or verified, and does not accept
-snapshot/performance baselines or complete M2 milestone acceptance.
+and parallel agents. The preview's public tests cover stable routing across an
+enter callback's deletion request and final-button release before queued removal.
+The M2 execution record tracks remaining native, snapshot and performance
+acceptance. [Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs) · [M2 execution record](../plans/m2-node-tree-and-layout.md#execution-record)

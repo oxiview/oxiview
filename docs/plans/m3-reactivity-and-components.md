@@ -33,7 +33,9 @@ remain unstable. A working demo does not replace remaining milestone acceptance.
 - `view!` parses nested Node/component tags and Rust expression children,
   lowering directly to the Builder API. Component tags accept ordinary props;
   `Props` derive generates checked Builders with required/default fields.
-  The macro stays optional and introduces no separate runtime or view tree.
+  Authors write these expressions in Rust `.rs` files. The optional macro
+  compiles as part of the Rust crate. Standalone `.oxi` files have no loader
+  or compiler in M3. [Component API decision](../adr/0006-builder-api-and-function-components.md)
 
 ## Mutation and lifecycle boundaries
 

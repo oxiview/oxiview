@@ -9,7 +9,9 @@ structure or layout order. Use CSS stacking-context semantics for the typed
 properties supported by oxiview. Ordinary parents do not isolate their
 descendants' stack levels; a stacking context is ordered atomically within its
 containing context. The owner confirmed this decision during M2 planning on
-2026-11-17. Implementation and milestone acceptance remain pending.
+2026-11-17. Layout Lab exercises this ordering through its LAYER control.
+Core tests cover hit testing with stacking contexts and rounded clips.
+[Layout Lab](../../examples/window/README.md) · [Core tests](../../crates/oxiview-core/src/ui/tests.rs)
 
 This extends the CSS vocabulary decision in
 [ADR-0008](0008-typed-style-with-css-vocabulary.md), preserving the single UI

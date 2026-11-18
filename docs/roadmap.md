@@ -13,14 +13,17 @@ Progress from small to large. Every milestone delivers a runnable demo, tests, a
 
 ## Milestones
 
+A ✅ marks a milestone whose detailed plan records completion. For milestones
+in progress, the table names what is already usable and what remains open.
+
 | # | Name | Key scope | Related ADRs |
 |---|---|---|---|
 | M-1 | [Engineering baseline](plans/m-1-engineering-baseline.md) ✅ | **Choices**: technology, design, build system, directory constraints (ADRs 0019–0023); **conventions**: AGENTS.md (unsafe/panic/errors, API stability and versions, dependencies, commits and branches); **skills**: ADR and glossary maintenance, scaffolding (crates/widgets/capabilities), review checklist, verification; **test harness**: snapshots, benchmarks, performance; **agent harness**: automated `cargo xtask` verification; workspace skeleton + dependency rules and checks | 0001, 0019–0023 |
 | M0 | [Foundation](plans/m0-foundation.md) ✅ | Retained Scene; CPU renderer (vello_cpu) with pixel snapshots; offscreen wgpu renderer with a process-wide device; injectable clocks, scheduling, and randomness; tracing; one macOS window presenting by blit | 0012, 0016 |
 | M1 | [First window](plans/m1-first-window.md) ✅ | Platform interface; macOS + headless platform backends; main/window thread separation; wgpu surface; on-demand frame scheduling and vsync; SDF fast path; measured native performance baselines and visual acceptance | 0002, 0003, 0004, 0018, 0026 |
-| M2 | [Node tree and layout](plans/m2-node-tree-and-layout.md) (preview implementation in progress) | Arena node tree; three levels of dirty flags; layout protocol + Taffy; typed styles; z-index and stacking contexts; hit testing, pointer events, and capture | 0007, 0008, 0009, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034 |
-| M3 | [Reactivity and components](plans/m3-reactivity-and-components.md) (implementation in progress) | Signals, scopes, Show/For; Builder API and optional view! syntax; function components; local executor + background thread pool | 0005, 0006, 0035 |
-| M4 | [Real text and Snake](plans/m4-text-and-snake.md) (demo implementation in progress) | Parley text stack; real-font Snake integration demo; GPU glyph images and DPI; vector/Vello/rich-text completion remains pending | 0010 |
+| M2 | [Node tree and layout](plans/m2-node-tree-and-layout.md) (Layout Lab delivered) | Arena node tree, three dirty-flag levels, layout protocol and Taffy, typed styles, z-index and stacking contexts, hit testing, pointer events and capture. Native interaction coverage, snapshot acceptance and layout performance baselines remain open. | 0007, 0008, 0009, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034 |
+| M3 | [Reactivity and components](plans/m3-reactivity-and-components.md) (implemented and tested in Snake) | Signals, scopes, Show/For, Builders, optional Rust `view!`, function components, local executor and background pool. The plan lists native visual acceptance and performance baseline review as separate gates. | 0005, 0006, 0035 |
+| M4 | [Real text and Snake](plans/m4-text-and-snake.md) (playable Snake delivered) | Parley text shaping, DPI-aware glyph images and GPU compositing. Vector glyphs, full Vello integration and the rich-text API remain open. | 0010, 0012 |
 | M5 | Focus, keyboard, and themes | Focus and Tab order; Action/Keymap; state variants; tokens and theme hot reload; system preference signals | 0008, 0011 |
 | M6 | Text editing | Editing core; IME preedit; selection; undo; fuzzing | 0010, 0011 |
 | M7 | Basic widgets and scrolling | Basic widgets; scrolling and inertia; virtual lists and tables | 0001 |
@@ -32,3 +35,10 @@ Progress from small to large. Every milestone delivers a runnable demo, tests, a
 | M13 | Distribution | Packaging, signing, automatic updates; application lifecycle | 0017 |
 | M14 | Windows port | Win32 + D3D12; modal resize loop; DPI; TSF; complete accessibility and distribution | 0002, 0018 |
 | M15 | Linux port | Wayland first, X11 compatibility; complete accessibility and distribution; full platform matrix | 0002, 0018 |
+
+The [Layout Lab](../examples/window/README.md) exercises the M2 tree and
+[Snake](../examples/snake/README.md) integrates M3 views with M4 text.
+The [continuous animation demo](../examples/animation-fps/README.md) measures
+the native presenter by requesting each successive frame through the on-demand
+scheduler. The animation API remains in M8 and continuous window/layer frame
+policies remain in M10. [Native frame pacing](adr/0036-fifo-drawable-readiness.md)

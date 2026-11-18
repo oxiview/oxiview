@@ -33,7 +33,12 @@ the configured timeout (250 ms by default) for the window thread to commit the r
 transaction. Timeout releases the main thread and is traced. Ordinary rendering
 and fullscreen reparenting do not use transaction-synchronized presentation.
 
-M1 implements one window in the demo. Multiple windows and shared-thread mode
-remain M9 work; the thread-local reactive runtime remains M3 work. Native latency
+M1 implemented one window in the demo. Multiple windows and shared-thread mode
+remain M9 work. Native latency
 is checked locally under [ADR-0026](0026-m1-native-latency-gates.md), including the
 main-to-window-thread hop.
+
+M3 installs the [reactive runtime and local executor](../plans/m3-reactivity-and-components.md)
+on the window thread. Ordinary native frames now acquire their surface texture
+on a worker. Input dispatch, layout, painting and submission stay on the window
+thread. [Native frame pacing](0036-fifo-drawable-readiness.md)

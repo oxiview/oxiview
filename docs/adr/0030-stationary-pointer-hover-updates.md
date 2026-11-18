@@ -15,12 +15,13 @@ The property name/type, default, lack of inheritance, and runtime switching
 rules were also confirmed. Ordering within each resulting notification batch
 is defined by [ADR-0031](0031-hover-transition-notification-batches.md).
 Lifecycle cleanup and replacement-entry eligibility are completed by
-[ADR-0033](0033-hover-lifecycle-cleanup.md). Implementation remains pending.
+[ADR-0033](0033-hover-lifecycle-cleanup.md).
 [ADR-0034](0034-pointer-input-processing-order.md) places final-state
 stationary-hover checks after command-batch reports and required geometry
 preparation, while mandatory capture/lifecycle notifications finish within
-their commands. Native-preview implementation is now authorized; full
-contract coverage remains to be verified.
+their commands. The preview implements the style opt-in. A regression test
+checks stationary geometry changes with the option disabled and enabled,
+including removal of an enabled node. [Core tests](../../crates/oxiview-core/src/ui/tests.rs)
 
 This adds an input policy to the typed node styles in
 [ADR-0008](0008-typed-style-with-css-vocabulary.md). It complements the capture

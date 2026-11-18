@@ -55,15 +55,27 @@ inside input dispatch. Increasing the old budget improved animation cadence
 on one machine but retained its dependency on compositor latency. Immediate
 presentation in fullscreen changed synchronization as well as pacing.
 
-On the M2 Pro's 120 Hz display, three five-second runs of the optimized
-128-object scene at 2× scale displayed 117.8, 120.0 and 119.6 FPS in fullscreen
-(3456×2168), and 118.2, 119.6 and 119.6 FPS in a window (1920×1200).
+On 2026-11-18 the release build ran 128 objects on the M2 Pro's built-in
+120 Hz display at 2× scale. Each run warmed up for one second. FPS counts
+drawables with a positive Metal presentation timestamp.
+
+| Mode and physical pixels | Original, 5 s | After fix, three 5 s runs | Median FPS | After fix, 20 s |
+| --- | ---: | --- | ---: | ---: |
+| Windowed, 1920×1200 | 119.6 | 118.2, 119.6, 119.6 | 119.6 | 119.35 |
+| Fullscreen, 3456×2168 | 53.6 | 117.8, 120.0, 119.6 | 119.6 | 119.95 |
+
+Fullscreen P95 display gap fell from 33.33 ms to 8.34 ms (median across the
+three runs). The first 20-second windowed attempt timed out waiting for a
+stable visible window. The table reports the completed retry.
+
 The renderer also skips per-pixel opacity-stack allocation for flat scenes
 and encodes solid colors directly. In two fullscreen pointer probes, all
 111 markers reached the display. Capture-to-display P95 was 40.0 and 42.4 ms,
 compared with 50.2 and 50.4 ms with the original gate. Capture starts before
 posting a synthetic AppKit event and uses the first displayed drawable that
-contains its marker.
+contains its marker. In a separate sustained-input `window --fullscreen-check`
+run, fullscreen input-to-submit P95 was 10.67 ms against an 8.33 ms refresh
+interval. The cadence and paint-to-submit checks passed.
 
 Use the [continuous animation measurement](../../examples/animation-fps/README.md)
 with fixed load, backing scale and sample duration. Compare actual displayed

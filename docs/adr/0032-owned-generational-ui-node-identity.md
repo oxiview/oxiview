@@ -13,7 +13,9 @@ lifecycle, deferred creation with mounting on successful execution, `NodeId`
 reservation when actual creation is enqueued with command-owned reservation
 cleanup, ordered insertion/reparenting, and child-list-ordered postorder
 resource release using an explicit stack during M2 planning on 2026-11-17.
-Implementation remains pending.
+The preview implements generational IDs, reservation, structural validation and
+postorder teardown. Regression tests exercise stale and foreign IDs, failed
+reserved creation and rejection of invalid reparenting. [Core tests](../../crates/oxiview-core/src/ui/tests.rs)
 
 This refines identity for the arena tree in
 [ADR-0007](0007-single-arena-node-tree.md) and supports the deferred commands and

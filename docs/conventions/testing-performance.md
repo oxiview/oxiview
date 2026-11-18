@@ -78,6 +78,12 @@ Idle requests use the next unused display slot immediately from the main command
 
 For ordinary frames the renderer acquires one actual surface texture asynchronously in both presentation modes. During the wait the window thread continues handling input. The ready signal resumes painting with current application state. Submission and display rates remain separate measurements. A positive Metal presentation timestamp counts as on-screen feedback, and a zero timestamp identifies a drawable that was never displayed. Resize transactions still configure, present and acknowledge synchronously. See [ADR-0036](../adr/0036-fifo-drawable-readiness.md) for ownership, cancellation and the scope of paint-to-submit timing.
 
+For a sustained animation workload, run the windowed and fullscreen commands
+in the [FPS demo](../../examples/animation-fps/README.md). Its JSON pairs
+actual displayed FPS and P95 display gap with physical size, scale and
+sample duration. This is a standalone diagnostic. The `xtask bench` gates
+above use the M1 pointer and idle workloads.
+
 The hosting layer has a process-lifetime delegate returning nil for window. This bypasses wgpu-hal 30.0.2's metal/surface.rs hosting_window/acquire_texture occlusion check (gfx-rs/wgpu#8309), which misclassifies visibly rendering fullscreen windows on the tested macOS 27.2 process. Truly occluded nextDrawable may block until its timeout; nil becomes wgpu Timeout, FrameOutcome::Skipped, and a retained pending frame retried by core. The existing skipped-frame tests exercise that retry path.
 
 Fullscreen input-to-pixel latency baselines remain deferred to M10. The example's

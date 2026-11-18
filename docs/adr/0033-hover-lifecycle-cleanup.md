@@ -8,7 +8,9 @@ Hover can intentionally differ from the geometric hit when stationary-pointer
 updates are disabled. That policy cannot keep removed or display-suppressed
 nodes in the hover path or defer their final notifications until after resource
 release. The owner confirmed the following lifecycle contract as decision group
-1 of the remaining M2 planning topics on 2026-11-17. Implementation is pending.
+1 of the remaining M2 planning topics on 2026-11-17. The preview performs
+cleanup during removal and suppression. Public tests cover deletion of hovered
+ancestry and hiding a captured subtree. [Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs)
 
 This completes lifecycle staging left open by
 [ADR-0028](0028-pointer-capture-ownership-and-lifecycle.md),

@@ -58,6 +58,14 @@ with the files. Tests can register them without system font discovery, a display
 session, or network access. No snapshot baseline was accepted as part of adding
 these fixtures.
 
+## M3 view macros
+
+`oxiview-macros` uses the workspace pins for `syn =2.0.119`,
+`quote =1.0.47` and `proc-macro2 =1.0.107`. All three versions were already
+present in the M1 lockfile. They run at compile time to parse Rust expressions
+and emit Builder calls and props Builders. Applications using handwritten
+Builders can depend directly on core. [Component API](../adr/0006-builder-api-and-function-components.md)
+
 ## M2 layout adapter (2026-11-17)
 
 `taffy =0.15.1` implements the previously selected layout backend in ADR-0009.
@@ -162,7 +170,7 @@ network failure refreshing the database is not evidence of an advisory pass.
 
 | Dependency | Assessment and scope |
 | --- | --- |
-| `proptest =1.12.0` | MIT OR Apache-2.0. The [published release](https://docs.rs/crate/proptest/1.12.0) is dated 2026-10-10; [upstream commits](https://github.com/proptest-rs/proptest/commits/main/) show maintenance of random generation, toolchain compatibility, and safety fixes during 2026. Pure Rust, with no native build tool or system-library requirement beyond Rust's platform support. Used only in `oxiview-scene` dev-dependencies; no upstream type enters the scene API. Neither std nor the existing workspace test harness provides generated strategies and automatic shrinking. |
+| `proptest =1.12.0` | MIT OR Apache-2.0. The [published release](https://docs.rs/crate/proptest/1.12.0) is dated 2026-10-10; [upstream commits](https://github.com/proptest-rs/proptest/commits/main/) show maintenance of random generation, toolchain compatibility, and safety fixes during 2026. Pure Rust, with no native build tool or system-library requirement beyond Rust's platform support. Used in the dev-dependencies of `oxiview-scene` and the Snake example for generated Scene edits and game inputs. Neither std nor the existing workspace test harness provides generated strategies and automatic shrinking. |
 
 Only `std` is enabled; default fork, timeout, and bit-set support are disabled.
 The published dependency metadata lists `bitflags`, `chacha20`, `core_detect`,
@@ -172,11 +180,8 @@ The published dependency metadata lists `bitflags`, `chacha20`, `core_detect`,
 edit sequences and minimized counterexamples without adding a production
 runtime dependency. The version is pinned exactly at the workspace root.
 
-Local resolution of 1.12.0 is currently blocked by crates.io DNS failure; the
-cached index only contains older releases. Consequently the resolved transitive
-footprint, duplicate versions, licenses, and fresh advisories remain unverified.
-The lockfile must be resolved and `cargo xtask verify` must pass when registry
-access is available; this assessment does not claim those checks passed.
+An initial DNS failure delayed resolution. The workspace lockfile now pins
+1.12.0, and the local dependency check reviews its resolved graph.
 
 ## CPU rasterizer (M0 S3)
 
@@ -203,9 +208,9 @@ Snapshots catch silent output drift. Bumping the version requires re-reviewing
 and re-accepting baselines, including changes to transitive rasterizer packages.
 The exact pin alone does not freeze the transitive graph; retain Cargo.lock.
 
-Since M1 S4, both adapters use the owned straight-RGBA8 image and physical
-pixel size defined in `oxiview-scene`. Existing adapter imports remain available
-through compatibility re-exports. Snapshot tests still convert to the separate
+Both adapters use the owned straight-RGBA8 image and physical pixel size
+introduced in Scene in M1 S4 and moved to `oxiview-base` in M4. Existing
+adapter imports remain available through compatibility re-exports. Snapshot tests still convert to the separate
 `oxiview-testing` image: that crate is dev-only and is not a production API.
 The rasterizer has its own external allowlist entry; the GPU entry is unchanged.
 
@@ -254,7 +259,7 @@ the prohibition on dependencies between rendering adapters. They share the CPU
 snapshot scene definitions and compare premultiplied RGBA with documented bounds;
 straight-RGBA metrics are reported too. This is not a byte-for-byte CPU promise.
 
-The image definition now belongs to `oxiview-scene`. Process-wide device state
+Scene reexports the foundation's image type. Process-wide device state
 is shared by both clones and independent contexts; real loss callbacks and
 simulated destruction invalidate the same state for replacement on next use.
 Per-window surfaces track the device identity and reconfigure after replacement.
@@ -262,10 +267,9 @@ Surface warnings reuse the existing workspace `tracing` pin; no new third-party
 package is introduced. Native creation is confined to the rendering adapter's
 unsafe boundary under ADR-0025.
 
-Live documentation fetching was unavailable. `cargo xtask deps` passed dependency
-direction checks but could not refresh RustSec because `github.com` failed DNS
-resolution. Fresh advisories and the complete cargo-deny review are therefore
-unverified; offline compilation is not an advisory pass.
+During the initial M1 review, dependency direction checks passed but DNS
+failure prevented the RustSec refresh. Subsequent local verification fetched
+the advisory data and passed cargo-deny. [M1 verification record](../plans/m1-first-window.md)
 
 ## Native AppKit window backend (M1 S5)
 
@@ -286,6 +290,7 @@ for NSView's CADisplayLink. No system library is bundled or downloaded.
 
 Defaults are disabled. AppKit enables `std`, `NSApplication`,
 `NSRunningApplication`, `NSResponder`, `NSWindow`, `NSView`, `NSEvent`,
+`NSTrackingArea` (M2 pointer entry and exit),
 `NSGraphics` (backing-store type), `NSGraphicsContext` (event constructors),
 `objc2-core-foundation` (backing scale), and `objc2-quartz-core` (view layers and
 display links). The M0 image-view, image, image-representation, bitmap, and control
@@ -310,11 +315,10 @@ painting, surface configuration, and presentation. A CFRunLoopSource services
 commands in common modes and in a dedicated resize-wait mode. That mode also
 services display links, so skipped resize frames can retry before the bounded
 wait expires. The display link is paused unless a frame is armed, and pauses
-again when delivering its one coalesced opportunity. The layer permanently uses
-`presentsWithTransaction`, avoiding a race between acquisition and flag changes;
-wgpu-hal 30.0.2 reads the flag during acquisition and waits for command scheduling
-before directly presenting the drawable. Live-resize visual quality still needs
-human confirmation.
+again when delivering its one coalesced opportunity. The layer enables
+`presentsWithTransaction` during interactive live resize and clears it after
+the resize wait. Ordinary windowed and fullscreen frames acquire a drawable
+asynchronously. [Native frame pacing](../adr/0036-fifo-drawable-readiness.md)
 
 All timestamps use mach absolute uptime in seconds: `CACurrentMediaTime`,
 `NSEvent.timestamp`, and CADisplayLink's `targetTimestamp`, converted to Duration.
@@ -327,11 +331,11 @@ No Objective-C or renderer-specific type enters the platform or core APIs.
 Core's presentation outcome preserves dirty state and input attribution on a
 skipped presentation and defers resize acknowledgement until success.
 
-Native acceptance uses `window --idle-check 5`. Debug builds additionally support
-`OXIVIEW_WINDOW_INPUT_CHECK=1 cargo run -p window`, which posts two native mouse
-motion events through AppKit, checks that each produces a frame, and invokes
-native close intent. These checks are explicit commands, never window-opening
-unit tests. They are S5 functional checks, not S6 latency or CPU benchmarks.
+The S5 functional checks used `window --idle-check 5`. Debug builds then supported
+`OXIVIEW_WINDOW_INPUT_CHECK=1 cargo run -p window`, which posted two native mouse
+motion events through AppKit, checked that each produced a frame, and invoked
+native close intent. The S6 diagnostics below replaced that probe. The current idle
+baseline measures 30 seconds.
 
 ## Native performance diagnostics (M1 S6)
 

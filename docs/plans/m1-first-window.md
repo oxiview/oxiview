@@ -9,7 +9,9 @@ Goal: a native macOS window presenting through a `wgpu::Surface`, rendered on it
 
 Completed on 2026-11-17: implementation, human visual acceptance, a fresh-clone
 verification and local full verification passed. The owner-approved native
-baseline is committed. M2 has not started; remaining latency work is listed below.
+baseline is committed. The [M2 plan](m2-node-tree-and-layout.md) records the
+subsequent layout preview. The later [native frame pacing decision](../adr/0036-fifo-drawable-readiness.md)
+documents the drawable scheduling change and its separate animation measurements.
 
 ## Decisions
 

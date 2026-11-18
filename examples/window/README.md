@@ -1,4 +1,21 @@
-# M1 window example
+# Window diagnostics and Layout Lab
+
+## M2 Layout Lab
+
+```sh
+cargo run --release -p window -- --layout-demo
+cargo run --release -p window -- --layout-demo --headless
+```
+
+The native preview exercises Flex, Grid and Block layout in one retained tree.
+Use ADD and REMOVE to change the tree, LAYER to change the stacking order, and
+drag the orange tile across the clip or outside the window to exercise pointer
+capture. The headless command runs the interaction checks and writes
+`initial.png`, `interacted.png` and `resized.png` under `target/xtask/m2-preview/`.
+The M1 measurement and overlay flags apply to the pointer-following scene below.
+[M2 plan and acceptance status](../../docs/plans/m2-node-tree-and-layout.md)
+
+## M1 pointer-following scene
 
 From the repository root:
 
@@ -65,7 +82,7 @@ rendering while allowing OS jitter; they do not change the latency hard target.
 
 Entering fullscreen also requires a confirmed on-screen transition frame without
 pointer input. Missing presentation feedback or a changing refresh interval
-returns exit 2; a measured cadence or paint-to-submit p95 above one refresh
+returns exit 2. A failed cadence check or paint-to-submit p95 above one refresh
 interval returns exit 1. JSON separates `cadence_pass`,
 `paint_submit_within_refresh` and `input_submit_within_refresh`; 60 FPS alone
 does not establish low latency. Each stage also reports submitted/displayed FPS,

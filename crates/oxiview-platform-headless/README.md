@@ -15,6 +15,8 @@ Clone the returned `Driver` onto controlling threads as needed.
 - `advance_by`: advance by a duration, rejecting overflow.
 - `pointer_moved`: inject logical position and an optional capture timestamp.
 - `pointer_button`: inject button, press/release, position, and capture timestamp.
+- `pointer_left` reports an ordinary pointer exit. `pointer_interrupted` reports loss of pointer continuity.
+- `activation_changed` and `visibility_changed` inject window activation and visibility transitions with their capture timestamps.
 - `key`: inject physical key, press/release, repeat, and capture timestamp.
 - `resize`: change physical size and scale, returning a fresh resize token.
 - `resize_outcome`: inspect a pending or completed resize transaction.
@@ -60,7 +62,10 @@ Resize deadlines are measured from publication using the window's resize_timeout
 Advancement expires pending tokens at or beyond the deadline, counts each timeout
 once, and traces its window, token, and timeout. A blocked wait never advances
 time itself. Event waits prefer queued events to elapsed deadlines, and terminal
-destruction takes precedence over a timeout. Wakes coalesce until consumed.
+destruction takes precedence over a timeout. Application wakes coalesce until
+consumed. A presenter's readiness notification queues a separate
+`PresentationReady` event and wakes the window thread. This allows tests to
+deliver input while a presenter is waiting for a drawable.
 
 A controlling thread can call resize followed by wait_resize to simulate the
 blocking main-thread portion of live resize. Another thread must acknowledge or
@@ -88,4 +93,5 @@ handshake, with no wall-clock timeout.
 
 There are no extra dependencies beyond existing workspace oxiview-base,
 oxiview-platform, tracing, and thiserror. The adapter inherits the workspace
-unsafe prohibition. No S3 scheduler or renderer integration is included.
+unsafe prohibition. The [Snake window-loop tests](../../examples/snake/tests/window_loop.rs)
+use the driver to verify timed steps, pause/resume and zero idle frames.

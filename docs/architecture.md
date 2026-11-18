@@ -26,7 +26,26 @@ flowchart TD
     ports --> base[Shared foundation]
 ```
 
-Adapters use only their own ports and permitted lower layers, never one another. The composition root selects implementations and wires ports together; it is the only crate allowed to depend on both ports and adapters. UI core and widgets depend on ports. The public facade exposes the composition root, widgets, and procedural macros. Procedural macros remain independent.
+Adapters use only their own ports and permitted lower layers, never one another. The composition root selects implementations and wires ports together. UI core depends on ports. The public facade and widget library are planned. The examples currently use the internal crates directly.
+
+## Implemented UI and presentation path
+
+`oxiview-core` owns each window's retained UI tree. Optional `oxiview-macros`
+syntax expands to the same Rust Builders as handwritten views. Signals and
+node-owned scopes in `oxiview-reactive` drive bound properties and structural
+updates. The Taffy adapter reads typed layout inputs from the tree.
+[M2 layout](plans/m2-node-tree-and-layout.md) · [M3 views](plans/m3-reactivity-and-components.md)
+
+For text, core uses `oxiview-text` to measure paragraphs and obtain positioned
+glyph images. Core adds these images to the Scene consumed by both renderers.
+The shared `RgbaImage` and `PixelSize` types live in `oxiview-base`.
+[M4 text and rendering](plans/m4-text-and-snake.md)
+
+On macOS, the window thread owns input dispatch, painting and submission.
+For an ordinary native frame, a worker waits for a surface texture and wakes
+the window thread when it is available. The window can process input during
+that wait. Live resize configures, paints and acknowledges synchronously.
+[Native frame pacing](adr/0036-fifo-drawable-readiness.md)
 
 ## Anti-corruption layers
 

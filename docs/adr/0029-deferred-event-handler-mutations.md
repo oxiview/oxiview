@@ -13,8 +13,10 @@ throughout delivery. The owner confirmed this boundary during M2 planning on
 2026-11-17 and subsequently confirmed application-time validation with
 individual rejection and partial batch success, queue-tail insertion for
 commands produced during application, and completed-batch reports delivered to
-the application on the window thread. Implementation and milestone acceptance
-remain pending.
+the application on the window thread. The preview implements deferred edits and
+reports their outcomes. Tests exercise a failed reserved parent, dependent
+child failure and successful independent edits in the same sequence.
+[Core tests](../../crates/oxiview-core/src/ui/tests.rs)
 
 This complements the single arena in
 [ADR-0007](0007-single-arena-node-tree.md) and the capture lifecycle in

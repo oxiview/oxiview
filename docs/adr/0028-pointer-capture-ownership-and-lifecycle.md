@@ -11,7 +11,9 @@ release from exceptional cancellation so components can end interactions
 predictably without depending on which ancestor handler runs last. The owner
 confirmed this scope and lifecycle during M2 planning on 2026-11-17, and then
 selected capture-based hover during the same planning discussion.
-Implementation and native acceptance remain pending.
+The preview implements capture. A native drag across the right window edge
+continued to deliver movement and release. The full native acceptance matrix
+remains open. [M2 execution record](../plans/m2-node-tree-and-layout.md#execution-record)
 
 This complements the node ownership in
 [ADR-0007](0007-single-arena-node-tree.md) and owned platform adapters in

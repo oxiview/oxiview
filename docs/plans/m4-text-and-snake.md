@@ -49,6 +49,11 @@ display loop. Ready, paused, and finished states cancel the next tick. Window
 activation/visibility loss pauses gameplay; restoration waits for explicit
 resume. A long clock gap pauses rather than fast-forwarding an unseen run.
 
+Snake's optional `--debug-overlay` counts application submissions. At Classic
+pace the initial step is 125 ms. The [continuous animation demo](../../examples/animation-fps/README.md)
+exercises the same native presenter under a new frame request after each
+submission and measures actual displayed FPS from Metal feedback.
+
 ## Automated acceptance
 
 Run from the repository root:

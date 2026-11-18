@@ -21,3 +21,11 @@ The framework's own **editing core** provides **editable text**: grapheme-level 
 - Query system font directories and user font settings directly so fallback chains approximate system behavior.
 - Upstream crates such as Parley are evolving; pin versions and maintain a patch queue.
 - The editing core is among the largest and riskiest parts of the framework. Validate it early in prototyping, after layout and before complex widgets.
+
+## M4 implementation
+
+Snake uses Parley for layout and Swash for DPI-aware rasterization. A bounded
+cache retains glyph images, and the GPU renderer reads deduplicated pixel data
+from the encoded Scene's command buffer. A persistent GPU texture atlas,
+large-text vector paths and the full rich-text API remain open.
+[M4 text and Snake](../plans/m4-text-and-snake.md)
