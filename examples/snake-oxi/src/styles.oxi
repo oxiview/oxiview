@@ -1,0 +1,6 @@
+use oxiview_style::Style;
+
+pub(crate) style pressed_face(base: Style, pressed: bool) {
+    opacity: if pressed { base.opacity * 0.78 } else { base.opacity },
+    ..base
+}

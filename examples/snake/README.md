@@ -8,6 +8,9 @@ The model is independent of UI nodes and uses injected randomness and a fixed
 simulation clock. Text is shaped with Parley and rasterized into cached glyph
 images; the native renderer composites those images on the GPU.
 
+The [snake-oxi example](../snake-oxi/README.md) expresses this screen in
+precompiled `.oxi` files and runs the same gameplay replay.
+
 ## Run
 
 From the repository root, on macOS 14+ with a visible Metal-capable display:

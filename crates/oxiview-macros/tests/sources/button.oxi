@@ -1,0 +1,3 @@
+<Node bind_style={move || value.get()} on_pointer={move |n| target.set(n)}>
+    <Node style={3}/>
+</Node>

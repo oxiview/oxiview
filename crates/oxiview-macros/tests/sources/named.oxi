@@ -1,0 +1,7 @@
+use std::{cell::Cell, rc::Rc};
+
+pub(super) view button(value: Rc<Cell<u32>>, target: Rc<Cell<u32>>) {
+    <Node bind_style={move || value.get()} on_pointer={move |n| target.set(n)}>
+        <Node style={3}/>
+    </Node>
+}

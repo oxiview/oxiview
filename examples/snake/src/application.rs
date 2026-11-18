@@ -4,30 +4,29 @@ use crate::{
     board,
     debug::{DebugOverlay, SceneInfo},
     game::{Board, Collision, Difficulty, Direction, Game, Phase, SeededRng, Snapshot, TickClock},
+    presentation::{
+        BOARD, BORDER, INK, MUTED, PAPER, RunSummary, ScreenProps, Slots, Ui, WHITE, blank,
+        button_style, centered_label, color, column, label, phase_caption, primary_caption, px,
+        row, surface,
+    },
 };
-use oxiview_base::{Color, CornerRadii, Point, Rect, Size};
+use oxiview_base::{Color, Rect, Size};
 use oxiview_core::{
-    Application, FrameSubmission, FrameTiming, LatencyRecord, NodeId, PaintedScene,
-    PointerEventKind, Scheduler, UiBatchReport, UiError, UiTree, View, component, keyed_for, show,
-    text,
+    Application, FrameSubmission, FrameTiming, LatencyRecord, NodeId, PaintedScene, Scheduler,
+    UiBatchReport, UiError, UiTree, View, component, keyed_for, show,
 };
 use oxiview_macros::{Props, view};
-use oxiview_platform::{
-    KeyCode, PhysicalSize, PointerButton, WindowAttributes, WindowEvent, WindowWaker,
-};
+use oxiview_platform::{KeyCode, PhysicalSize, WindowAttributes, WindowEvent, WindowWaker};
 use oxiview_reactive::{Memo, Scope, Signal, batch, memo, signal};
-use oxiview_style::{
-    Alignment, ContentAlignment, Edges, FlexDirection, LayoutStyle, Length, Overflow, Position,
-    Style,
-};
-use oxiview_text::{TextAlign, TextStyle, TextSystem};
+use oxiview_style::{Alignment, ContentAlignment, Edges, LayoutStyle, Length, Overflow, Position};
+use oxiview_text::TextSystem;
 use std::{
-    cell::{Cell as LocalCell, RefCell},
+    cell::RefCell,
     rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver},
     },
     time::{Duration, Instant},
 };
@@ -37,52 +36,6 @@ pub const WIDTH: u32 = 1120;
 /// Default logical height of the standalone game window.
 pub const HEIGHT: u32 = 820;
 
-const PAPER: [u8; 3] = [245, 246, 239];
-const WHITE: [u8; 3] = [255, 255, 250];
-const INK: [u8; 3] = [31, 49, 39];
-const MUTED: [u8; 3] = [105, 120, 108];
-const GREEN: [u8; 3] = [184, 232, 118];
-const BORDER: [u8; 3] = [216, 223, 211];
-const BOARD: [u8; 3] = [18, 35, 30];
-
-fn color([r, g, b]: [u8; 3]) -> Color {
-    Color::from_rgba8(r, g, b, 255)
-}
-fn px(value: f64) -> Length {
-    Length::Points(value)
-}
-fn column() -> LayoutStyle {
-    LayoutStyle {
-        flex_direction: FlexDirection::Column,
-        min_width: px(0.0),
-        min_height: px(0.0),
-        ..Default::default()
-    }
-}
-fn row() -> LayoutStyle {
-    LayoutStyle {
-        min_width: px(0.0),
-        min_height: px(0.0),
-        align_items: Alignment::Center,
-        ..Default::default()
-    }
-}
-fn surface(layout: LayoutStyle, background: [u8; 3], radius: f64) -> Style {
-    Style {
-        layout,
-        background: color(background),
-        border_radii: CornerRadii::uniform(radius),
-        hit_test: false,
-        ..Default::default()
-    }
-}
-fn blank(layout: LayoutStyle) -> Style {
-    Style {
-        layout,
-        hit_test: false,
-        ..Default::default()
-    }
-}
 fn app_error(error: impl std::fmt::Display) -> oxiview_core::Error {
     oxiview_core::Error::Application(error.to_string())
 }
@@ -144,189 +97,6 @@ pub struct Counters {
     pub canceled_bindings: AtomicU64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RunSummary {
-    id: u64,
-    score: u32,
-    level: u32,
-    won: bool,
-}
-
-#[derive(Default)]
-struct Slots {
-    board: Rc<LocalCell<Option<NodeId>>>,
-    primary: Rc<LocalCell<Option<NodeId>>>,
-    overlay_primary: Rc<LocalCell<Option<NodeId>>>,
-    restart: Rc<LocalCell<Option<NodeId>>>,
-    chill: Rc<LocalCell<Option<NodeId>>>,
-    classic: Rc<LocalCell<Option<NodeId>>>,
-    swift: Rc<LocalCell<Option<NodeId>>>,
-    up: Rc<LocalCell<Option<NodeId>>>,
-    right: Rc<LocalCell<Option<NodeId>>>,
-    down: Rc<LocalCell<Option<NodeId>>>,
-    left: Rc<LocalCell<Option<NodeId>>>,
-    history: Rc<LocalCell<Option<NodeId>>>,
-}
-impl Slots {
-    fn button(&self, action: Action) -> Rc<LocalCell<Option<NodeId>>> {
-        match action {
-            Action::Primary | Action::Pause => Rc::clone(&self.primary),
-            Action::NewGame => Rc::clone(&self.restart),
-            Action::Difficulty(Difficulty::Chill) => Rc::clone(&self.chill),
-            Action::Difficulty(Difficulty::Classic) => Rc::clone(&self.classic),
-            Action::Difficulty(Difficulty::Swift) => Rc::clone(&self.swift),
-            Action::Turn(Direction::Up) => Rc::clone(&self.up),
-            Action::Turn(Direction::Right) => Rc::clone(&self.right),
-            Action::Turn(Direction::Down) => Rc::clone(&self.down),
-            Action::Turn(Direction::Left) => Rc::clone(&self.left),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct Ui {
-    text: Rc<RefCell<TextSystem>>,
-    state: Signal<Snapshot>,
-    phase: Memo<Phase>,
-    difficulty: Memo<Difficulty>,
-    score: Memo<u32>,
-    best: Memo<u32>,
-    board_size: Signal<Size>,
-    overlay_visible: Signal<bool>,
-    history: Signal<Vec<RunSummary>>,
-    history_empty: Signal<bool>,
-    notice: Signal<String>,
-    slots: Rc<Slots>,
-    actions: Sender<Action>,
-    errors: Sender<String>,
-    counters: Arc<Counters>,
-}
-
-fn label(ui: &Ui, source: impl Into<String>, size: f64, weight: u16, ink: [u8; 3]) -> View {
-    text(
-        Rc::clone(&ui.text),
-        source,
-        TextStyle {
-            font_size: size,
-            weight,
-            color: color(ink),
-            line_height: 1.25,
-            ..Default::default()
-        },
-    )
-    .style(blank(LayoutStyle {
-        flex_shrink: 0.0,
-        min_width: px(0.0),
-        ..Default::default()
-    }))
-}
-fn centered_label(
-    ui: &Ui,
-    source: impl Into<String>,
-    size: f64,
-    weight: u16,
-    ink: [u8; 3],
-) -> View {
-    text(
-        Rc::clone(&ui.text),
-        source,
-        TextStyle {
-            font_size: size,
-            weight,
-            color: color(ink),
-            align: TextAlign::Center,
-            line_height: 1.3,
-            ..Default::default()
-        },
-    )
-    .style(blank(LayoutStyle {
-        width: Length::Percent(1.0),
-        flex_shrink: 0.0,
-        min_width: px(0.0),
-        ..Default::default()
-    }))
-}
-fn primary_caption(phase: Phase) -> &'static str {
-    match phase {
-        Phase::Ready => "Start game",
-        Phase::Running => "Pause",
-        Phase::Paused => "Resume",
-        Phase::Over(_) | Phase::Won => "Play again",
-    }
-}
-fn phase_caption(phase: Phase) -> &'static str {
-    match phase {
-        Phase::Ready => "Ready",
-        Phase::Running => "Playing",
-        Phase::Paused => "Paused",
-        Phase::Over(_) => "Game over",
-        Phase::Won => "Board cleared",
-    }
-}
-fn button_enabled(action: Action, phase: Phase) -> bool {
-    match action {
-        Action::Difficulty(_) => !matches!(phase, Phase::Running | Phase::Paused),
-        Action::Turn(_) => phase == Phase::Running,
-        _ => true,
-    }
-}
-fn button_style(
-    action: Action,
-    phase: Phase,
-    difficulty: Difficulty,
-    primary: bool,
-    compact: bool,
-) -> Style {
-    let enabled = button_enabled(action, phase);
-    let selected = matches!(action, Action::Difficulty(choice) if choice == difficulty);
-    let directional = matches!(action, Action::Turn(_));
-    let mut style = surface(
-        LayoutStyle {
-            width: if directional {
-                px(38.0)
-            } else if compact {
-                Length::Auto
-            } else {
-                Length::Percent(1.0)
-            },
-            height: px(if directional {
-                36.0
-            } else if compact {
-                32.0
-            } else if primary {
-                46.0
-            } else {
-                38.0
-            }),
-            flex_grow: if compact && !directional { 1.0 } else { 0.0 },
-            flex_shrink: 0.0,
-            border_width: 1.0,
-            padding: Edges::all(px(0.0)),
-            justify_content: ContentAlignment::Center,
-            align_items: Alignment::Center,
-            ..row()
-        },
-        if primary {
-            GREEN
-        } else if selected {
-            [226, 237, 210]
-        } else {
-            WHITE
-        },
-        if compact { 9.0 } else { 12.0 },
-    );
-    style.hit_test = enabled;
-    style.opacity = if enabled { 1.0 } else { 0.48 };
-    style.border_color = color(if primary {
-        [160, 207, 101]
-    } else if selected {
-        [139, 169, 112]
-    } else {
-        BORDER
-    });
-    style
-}
-
 #[derive(Props)]
 struct ButtonProps {
     ui: Ui,
@@ -379,8 +149,7 @@ fn button_content(props: ButtonProps, pressed: Signal<bool>) -> View {
     } else {
         ui.slots.button(action)
     };
-    let actions = ui.actions;
-    let errors = ui.errors;
+    let pointer = ui.button_pointer(action, pressed);
     view! {
         <Node
             bind_style={move || {
@@ -389,35 +158,7 @@ fn button_content(props: ButtonProps, pressed: Signal<bool>) -> View {
                 Ok(style)
             }}
             on_mount={move |id| slot.set(Some(id))}
-            on_pointer={move |event, tree, commands| {
-                if event.target != event.current_target { return; }
-                match event.kind {
-                    PointerEventKind::Down if event.button == Some(PointerButton::Primary) => {
-                        commands.capture(event.current_target);
-                        if let Err(error) = pressed.set(true) {
-                            let _ = errors.send(error.to_string());
-                        }
-                    }
-                    PointerEventKind::Up if event.button == Some(PointerButton::Primary) => {
-                        let was_pressed = match pressed.get() {
-                            Ok(value) => value,
-                            Err(error) => { let _ = errors.send(error.to_string()); false }
-                        };
-                        let inside = tree.bounds(event.current_target).is_ok_and(|bounds| in_rect(bounds, event.position));
-                        if let Err(error) = pressed.set(false) {
-                            let _ = errors.send(error.to_string());
-                        }
-                        if was_pressed && inside {
-                            // Dropping the application receiver during shutdown ends action delivery.
-                            let _ = actions.send(action);
-                        }
-                    }
-                    PointerEventKind::Cancel => {
-                        if let Err(error) = pressed.set(false) { let _ = errors.send(error.to_string()); }
-                    }
-                    _ => {}
-                }
-            }}
+            on_pointer={pointer}
         > {title} </Node>
     }
 }
@@ -714,11 +455,8 @@ fn sidebar(ui: Ui) -> View {
     }
 }
 
-#[derive(Props)]
-struct ScreenProps {
-    ui: Ui,
-}
-fn screen(props: ScreenProps) -> View {
+/// Builds the original Rust and inline-view Snake screen.
+pub fn screen(props: ScreenProps) -> View {
     let ui = props.ui;
     ui.counters.screen_mounts.fetch_add(1, Ordering::SeqCst);
     let title = label(&ui, "Snake", 38.0, 800, INK);
@@ -769,14 +507,8 @@ fn screen(props: ScreenProps) -> View {
     }
 }
 
-fn in_rect(rect: Rect, point: Point) -> bool {
-    let origin = rect.origin();
-    let size = rect.size();
-    point.x() >= origin.x()
-        && point.y() >= origin.y()
-        && point.x() < origin.x() + size.width()
-        && point.y() < origin.y() + size.height()
-}
+/// A Snake screen factory, mounted once per application.
+pub type Screen = fn(ScreenProps) -> View;
 
 /// The native/headless application; retained nodes are mounted once.
 pub struct SnakeApp {
@@ -799,6 +531,15 @@ pub struct SnakeApp {
 impl SnakeApp {
     /// Creates the complete game UI without opening a native window.
     pub fn new(config: Config, counters: Arc<Counters>) -> Result<Self, oxiview_core::Error> {
+        Self::with_screen(config, counters, screen)
+    }
+
+    /// Mounts the supplied screen over the same game model, input and rendering paths.
+    pub fn with_screen(
+        config: Config,
+        counters: Arc<Counters>,
+        screen: Screen,
+    ) -> Result<Self, oxiview_core::Error> {
         let model = Game::new(
             Board::default(),
             Difficulty::Classic,
@@ -1331,9 +1072,17 @@ impl Application for SnakeApp {
     }
 }
 
-/// Opens the standalone macOS game without any polling or initial gameplay.
-#[cfg(target_os = "macos")]
+/// Opens the original Snake screen on a supported native platform.
 pub fn run_native(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    run_native_with_screen(config, screen)
+}
+
+/// Opens the supplied screen with the shared native window and game loop.
+#[cfg(target_os = "macos")]
+pub fn run_native_with_screen(
+    config: Config,
+    screen: Screen,
+) -> Result<(), Box<dyn std::error::Error>> {
     let counters = Arc::new(Counters::default());
     oxiview_app::run_macos(
         oxiview_platform_macos::MacOsPlatform::default(),
@@ -1347,13 +1096,13 @@ pub fn run_native(config: Config) -> Result<(), Box<dyn std::error::Error>> {
             logical_size: Size::new(f64::from(config.width), f64::from(config.height)),
             resize_timeout: Duration::from_millis(250),
         },
-        move || SnakeApp::new(config, counters),
+        move || SnakeApp::with_screen(config, counters, screen),
     )?;
     Ok(())
 }
 
 /// Reports that only the headless game is currently available on other hosts.
 #[cfg(not(target_os = "macos"))]
-pub fn run_native(_: Config) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_native_with_screen(_: Config, _: Screen) -> Result<(), Box<dyn std::error::Error>> {
     Err("the native game currently requires macOS 14+; use --headless on other hosts".into())
 }

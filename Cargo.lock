@@ -1666,6 +1666,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "snake-oxi"
+version = "0.0.0"
+dependencies = [
+ "oxiview-base",
+ "oxiview-core",
+ "oxiview-macros",
+ "oxiview-reactive",
+ "oxiview-style",
+ "snake",
+]
+
+[[package]]
 name = "spirv"
 version = "0.4.0+sdk-1.4.341.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

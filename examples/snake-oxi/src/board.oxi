@@ -1,0 +1,131 @@
+use crate::{controls::{ButtonProps, action_button}, messages::{overlay_message, overlay_title}};
+use oxiview_base::{Color, CornerRadii};
+use oxiview_core::show;
+use oxiview_style::{Alignment, ContentAlignment, Edges, LayoutStyle, Length, Overflow, Position};
+use snake::{
+    application::Action,
+    presentation::{BOARD, Ui, centered_label, color, column, draw_board, px, row},
+};
+use std::{rc::Rc, sync::{Arc, atomic::Ordering}};
+
+view overlay_branch(props: Ui) {
+    <overlay props={props}/>
+}
+
+view overlay(ui: Ui) {
+    ui.counters.overlay_mounts.fetch_add(1, Ordering::SeqCst);
+    let phase = ui.phase;
+    let snapshot = ui.state;
+    let title = centered_label(&ui, "Ready when you are.", 31.0, 800, [239, 246, 226])
+        .bind_text(move || Ok(overlay_title(phase.get()?).into()));
+    let subtitle = centered_label(
+        &ui,
+        "Collect the coral food.\nLeave yourself room to turn.",
+        15.0,
+        400,
+        [174, 196, 177],
+    )
+    .bind_text(move || Ok(overlay_message(&snapshot.get()?)));
+    let button = ButtonProps {
+        ui,
+        action: Action::Primary,
+        caption: "Start game",
+        primary: true,
+        compact: false,
+        overlay: true,
+    };
+    <Node style={overlay_surface()}>
+        <Node style={overlay_copy()}>
+            {title} {subtitle}
+            <Node style={overlay_action()}>
+                <action_button props={button}/>
+            </Node>
+        </Node>
+    </Node>
+}
+
+pub(crate) view game_panel(ui: Ui) {
+    let game = ui.state;
+    let board_size = ui.board_size;
+    let counters = Arc::clone(&ui.counters);
+    let slot = Rc::clone(&ui.slots.board);
+    let overlay_ui = ui.clone();
+    let conditional = show(ui.overlay_visible, move || Ok(overlay_branch(overlay_ui.clone())))
+        .style(overlay_position());
+    <Node style={board_surface()} on_mount={move |id| slot.set(Some(id))}
+        bind_content={move || {
+            counters.board_updates.fetch_add(1, Ordering::SeqCst);
+            Ok(draw_board(&game.get()?, board_size.get()?))
+        }}>
+        {conditional}
+    </Node>
+}
+
+style overlay_copy() {
+    layout: LayoutStyle {
+        width: Length::Percent(1.0),
+        max_width: px(420.0),
+        row_gap: px(14.0),
+        align_items: Alignment::Center,
+        ..column()
+    },
+    hit_test: false,
+}
+
+style overlay_action() {
+    layout: LayoutStyle {
+        width: px(184.0),
+        height: px(46.0),
+        margin: Edges { top: px(8.0), ..Edges::all(px(0.0)) },
+        ..row()
+    },
+    hit_test: false,
+}
+
+style overlay_surface() {
+    layout: LayoutStyle {
+        width: Length::Percent(1.0),
+        height: Length::Percent(1.0),
+        justify_content: ContentAlignment::Center,
+        align_items: Alignment::Center,
+        padding: Edges::all(px(28.0)),
+        row_gap: px(18.0),
+        ..column()
+    },
+    background: Color::from_rgba8(13, 28, 22, 225),
+    border_radii: CornerRadii::uniform(22.0),
+    hit_test: true,
+}
+
+style overlay_position() {
+    layout: LayoutStyle {
+        position: Position::Absolute,
+        width: Length::Percent(1.0),
+        height: Length::Percent(1.0),
+        inset: Edges {
+            left: px(0.0),
+            top: px(0.0),
+            ..Edges::all(Length::Auto)
+        },
+        ..column()
+    },
+    z_index: Some(10),
+    hit_test: false,
+}
+
+style board_surface() {
+    layout: LayoutStyle {
+        position: Position::Relative,
+        flex_grow: 1.0,
+        flex_basis: px(0.0),
+        min_width: px(240.0),
+        border_width: 1.0,
+        ..column()
+    },
+    background: color(BOARD),
+    border_radii: CornerRadii::uniform(24.0),
+    border_color: color([38, 61, 46]),
+    overflow: Overflow::Clip,
+    z_index: Some(0),
+    hit_test: false,
+}

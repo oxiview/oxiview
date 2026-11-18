@@ -28,3 +28,7 @@ and accept a props expression. The `Props` derive generates a Builder for a
 named props struct. The [Snake UI](../../examples/snake/src/application.rs)
 uses this syntax. Standalone `.oxi` source files and a compiler for them
 remain outside this design.
+
+M3+1 adds optional external source syntax under
+[ADR-0037](0037-optional-precompiled-oxi.md). The Builder and function-component
+contracts above also govern that syntax.

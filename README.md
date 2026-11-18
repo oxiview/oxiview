@@ -27,6 +27,9 @@ Run Snake on macOS 14+ with a visible display session and Metal GPU.
 cargo run --release -p snake
 ```
 
+Run `cargo run --release -p snake-oxi` for the same game with Rust logic and
+precompiled `.oxi` views and styles. [Snake in .oxi](examples/snake-oxi/README.md)
+
 Add `-- --debug-overlay` to show application FPS, display cadence, CPU timings,
 scene/layout counts and viewport scale in the top-right corner. At Classic
 pace the snake initially advances every 125 ms, so about 8 application FPS

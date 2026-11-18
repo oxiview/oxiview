@@ -1,0 +1,5 @@
+<Node bind_style={appearance}
+      on_mount={move |id| slot.set(Some(id))}
+      on_pointer={pointer}>
+    {title}
+</Node>

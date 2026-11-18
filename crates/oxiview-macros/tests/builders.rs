@@ -159,3 +159,44 @@ fn deriving_props_does_not_require_using_its_optional_builder() {
     let props = DirectProps { value: 5 };
     assert_eq!(props.value, 5);
 }
+
+mod authored {
+    oxiview_macros::oxi_module!("tests/sources/named.oxi");
+}
+
+#[test]
+fn four_source_forms_bind_and_dispatch_identically() -> Result<(), Box<dyn std::error::Error>> {
+    type Button = fn(Rc<Cell<u32>>, Rc<Cell<u32>>) -> View;
+    let forms: [Button; 4] = [
+        |value, target| {
+            node()
+                .bind_style(move || value.get())
+                .on_pointer(move |n| target.set(n))
+                .child(node().style(3))
+        },
+        |value, target| {
+            view! {
+                <Node bind_style={move || value.get()} on_pointer={move |n| target.set(n)}>
+                    <Node style={3}/>
+                </Node>
+            }
+        },
+        authored::button,
+        |value, target| oxiview_macros::oxi_view!("tests/sources/button.oxi"),
+    ];
+    for form in forms {
+        let value = Rc::new(Cell::new(5));
+        let target = Rc::new(Cell::new(0));
+        let mut mounted = form(Rc::clone(&value), Rc::clone(&target))
+            .mount()
+            .map_err(|_| "mount failed")?;
+        assert_eq!(mounted.style, 5);
+        assert_eq!(mounted.children.len(), 1);
+        assert_eq!(mounted.children.first().ok_or("missing child")?.style, 3);
+        value.set(12);
+        assert_eq!(mounted.binding.as_mut().ok_or("missing binding")?(), 12);
+        mounted.on_pointer.as_mut().ok_or("missing handler")?(42);
+        assert_eq!(target.get(), 42);
+    }
+    Ok(())
+}

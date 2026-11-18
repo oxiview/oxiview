@@ -23,6 +23,7 @@ in progress, the table names what is already usable and what remains open.
 | M1 | [First window](plans/m1-first-window.md) ✅ | Platform interface; macOS + headless platform backends; main/window thread separation; wgpu surface; on-demand frame scheduling and vsync; SDF fast path; measured native performance baselines and visual acceptance | 0002, 0003, 0004, 0018, 0026 |
 | M2 | [Node tree and layout](plans/m2-node-tree-and-layout.md) (Layout Lab delivered) | Arena node tree, three dirty-flag levels, layout protocol and Taffy, typed styles, z-index and stacking contexts, hit testing, pointer events and capture. Native interaction coverage, snapshot acceptance and layout performance baselines remain open. | 0007, 0008, 0009, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034 |
 | M3 | [Reactivity and components](plans/m3-reactivity-and-components.md) (implemented and tested in Snake) | Signals, scopes, Show/For, Builders, optional Rust `view!`, function components, local executor and background pool. The plan lists native visual acceptance and performance baseline review as separate gates. | 0005, 0006, 0035 |
+| M3+1 | [Precompiled .oxi sources and Snake](plans/m3-plus-1-oxi.md) ✅ | Optional view fragments, named views, typed styles and reusable Rust logic. The `snake-oxi` example reproduces Snake through the same Builders and replay. | 0006, 0008, 0037 |
 | M4 | [Real text and Snake](plans/m4-text-and-snake.md) (playable Snake delivered) | Parley text shaping, DPI-aware glyph images and GPU compositing. Vector glyphs, full Vello integration and the rich-text API remain open. | 0010, 0012 |
 | M5 | Focus, keyboard, and themes | Focus and Tab order; Action/Keymap; state variants; tokens and theme hot reload; system preference signals | 0008, 0011 |
 | M6 | Text editing | Editing core; IME preedit; selection; undo; fuzzing | 0010, 0011 |
@@ -38,6 +39,8 @@ in progress, the table names what is already usable and what remains open.
 
 The [Layout Lab](../examples/window/README.md) exercises the M2 tree and
 [Snake](../examples/snake/README.md) integrates M3 views with M4 text.
+[Snake in .oxi](../examples/snake-oxi/README.md) pairs Rust application logic
+with M3+1 views and styles.
 The [continuous animation demo](../examples/animation-fps/README.md) measures
 the native presenter by requesting each successive frame through the on-demand
 scheduler. The animation API remains in M8 and continuous window/layer frame

@@ -12,7 +12,7 @@ fn rgb(r: u8, g: u8, b: u8) -> Color {
 }
 
 /// Draws the board at its actual retained node size, centered on whole logical cells.
-pub(crate) fn draw(snapshot: &Snapshot, size: Size) -> Vec<Primitive> {
+pub fn draw(snapshot: &Snapshot, size: Size) -> Vec<Primitive> {
     let columns = f64::from(snapshot.board.columns());
     let rows = f64::from(snapshot.board.rows());
     let cell = ((size.width() - 32.0) / columns)

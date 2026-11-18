@@ -1,0 +1,128 @@
+use crate::{board::game_panel, sidebar::sidebar};
+use oxiview_base::CornerRadii;
+use oxiview_style::{Alignment, ContentAlignment, Edges, LayoutStyle, Length};
+use snake::{
+    game::Phase,
+    presentation::{INK, MUTED, PAPER, ScreenProps, blank, centered_label, column,
+                   color, label, phase_caption, px, row},
+};
+use std::sync::atomic::Ordering;
+
+/// Constructs the persistent Snake screen from the shared application state.
+pub view screen(props: ScreenProps) {
+    let ui = props.ui;
+    ui.counters.screen_mounts.fetch_add(1, Ordering::SeqCst);
+    let title = label(&ui, "Snake", 38.0, 800, INK);
+    let subtitle = label(&ui, "Collect food. Keep moving.", 14.0, 400, MUTED);
+    let phase = ui.phase;
+    let badge_label = centered_label(&ui, "Ready", 13.0, 650, INK)
+        .bind_text(move || Ok(phase_caption(phase.get()?).into()));
+    let game_props = ui.clone();
+    let sidebar_props = ui.clone();
+    let state = ui.state;
+    let notice = ui.notice;
+    let note = label(&ui, "Press Enter or choose Start game.", 12.0, 400, MUTED)
+        .bind_text(move || {
+            let game = state.get()?;
+            let note = notice.get()?;
+            Ok(if note.is_empty() {
+                format!("Level {}  ·  {} pace", game.level, game.difficulty.name())
+            } else {
+                note
+            })
+        })
+        .style(blank(LayoutStyle {
+            flex_grow: 1.0,
+            min_width: px(0.0),
+            ..Default::default()
+        }));
+    let keys = label(&ui, "SPACE  pause   ·   ENTER  new game", 12.0, 500, MUTED).style(blank(
+        LayoutStyle {
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+    ));
+    <Node style={window_surface()}>
+        <Node style={header()}>
+            <Node style={heading()}>{title}{subtitle}</Node>
+            <Node bind_style={move || Ok(phase_badge(phase.get()?))}>
+                {badge_label}
+            </Node>
+        </Node>
+        <Node style={play_area()}>
+            <game_panel props={game_props}/>
+            <sidebar props={sidebar_props}/>
+        </Node>
+        <Node style={footer()}>{note}{keys}</Node>
+    </Node>
+}
+
+style header() {
+    layout: LayoutStyle {
+        height: px(64.0),
+        flex_shrink: 0.0,
+        column_gap: px(20.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style heading() {
+    layout: LayoutStyle {
+        flex_grow: 1.0,
+        row_gap: px(1.0),
+        ..column()
+    },
+    hit_test: false,
+}
+
+style play_area() {
+    layout: LayoutStyle {
+        flex_grow: 1.0,
+        min_height: px(400.0),
+        column_gap: px(20.0),
+        align_items: Alignment::Stretch,
+        ..row()
+    },
+    hit_test: false,
+}
+
+style footer() {
+    layout: LayoutStyle {
+        height: px(22.0),
+        flex_shrink: 0.0,
+        column_gap: px(12.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style window_surface() {
+    layout: LayoutStyle {
+        width: Length::Percent(1.0),
+        height: Length::Percent(1.0),
+        padding: Edges::all(px(28.0)),
+        row_gap: px(20.0),
+        ..column()
+    },
+    background: color(PAPER),
+    hit_test: false,
+}
+
+style phase_badge(phase: Phase) {
+    layout: LayoutStyle {
+        width: px(124.0),
+        height: px(32.0),
+        justify_content: ContentAlignment::Center,
+        align_items: Alignment::Center,
+        flex_shrink: 0.0,
+        ..row()
+    },
+    background: color(match phase {
+        Phase::Running | Phase::Won => [226, 237, 210],
+        Phase::Over(_) => [249, 222, 209],
+        _ => [232, 235, 225],
+    }),
+    border_radii: CornerRadii::uniform(16.0),
+    hit_test: false,
+}

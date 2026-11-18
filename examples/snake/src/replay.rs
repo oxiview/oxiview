@@ -1,7 +1,7 @@
 //! Deterministic, display-independent acceptance replay and real-font images.
 
 use crate::{
-    application::{Action, Config, Counters, SnakeApp},
+    application::{Action, Config, Counters, Screen, SnakeApp, screen},
     game::{Cell, Difficulty, Direction, Phase, Snapshot},
 };
 use oxiview_base::Point;
@@ -21,7 +21,7 @@ use std::{
 };
 
 /// One image generated from the application's actual text/Scene pipeline.
-#[derive(Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub struct ImageEvidence {
     /// Output image path.
     pub path: String,
@@ -37,7 +37,7 @@ pub struct ImageEvidence {
     pub glyph_pixels: u64,
 }
 /// A machine-readable acceptance result, independent of a native window.
-#[derive(Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub struct Report {
     /// True only after every replay assertion passed.
     pub passed: bool,
@@ -312,6 +312,15 @@ fn finish_run(
 
 /// Runs reproducible real-UI inputs and writes ready/playing/paused/end/resize images.
 pub fn run(config: Config, output: &Path) -> Result<Report, Box<dyn Error>> {
+    run_with_screen(config, output, screen)
+}
+
+/// Drives the same replay against an alternate presentation of the game.
+pub fn run_with_screen(
+    config: Config,
+    output: &Path,
+    screen: Screen,
+) -> Result<Report, Box<dyn Error>> {
     std::fs::create_dir_all(output)?;
     let manifest = output.join("report.json");
     std::fs::write(
@@ -320,7 +329,7 @@ pub fn run(config: Config, output: &Path) -> Result<Report, Box<dyn Error>> {
             "passed": false, "status": "running", "seed": config.seed
         }))?,
     )?;
-    match run_checks(config, output) {
+    match run_checks(config, output, screen) {
         Ok(report) => {
             std::fs::write(&manifest, serde_json::to_vec_pretty(&report)?)?;
             Ok(report)
@@ -337,9 +346,9 @@ pub fn run(config: Config, output: &Path) -> Result<Report, Box<dyn Error>> {
     }
 }
 
-fn run_checks(config: Config, output: &Path) -> Result<Report, Box<dyn Error>> {
+fn run_checks(config: Config, output: &Path, screen: Screen) -> Result<Report, Box<dyn Error>> {
     let counters = Arc::new(Counters::default());
-    let mut app = SnakeApp::new(config, Arc::clone(&counters))?;
+    let mut app = SnakeApp::with_screen(config, Arc::clone(&counters), screen)?;
     let mut scheduler = Scheduler::default();
     let mut checks = Vec::new();
     let mut images = Vec::new();

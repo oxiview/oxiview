@@ -1,0 +1,18 @@
+[package]
+name = "snake-oxi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+snake.workspace = true
+oxiview-base.workspace = true
+oxiview-core.workspace = true
+oxiview-macros.workspace = true
+oxiview-reactive.workspace = true
+oxiview-style.workspace = true

@@ -5,6 +5,7 @@
 
 use proc_macro::TokenStream;
 
+mod oxi;
 mod props;
 mod view;
 
@@ -37,6 +38,23 @@ pub fn view(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(error) => error.into_compile_error().into(),
     }
+}
+
+/// Precompiles a package-relative `.oxi` file into Rust items in this module.
+/// Ordinary Rust items, named `view` functions and typed `style` functions
+/// can be freely combined. Place this invocation inside `mod name { ... }`
+/// to give the exports a separate namespace.
+#[proc_macro]
+pub fn oxi_module(input: TokenStream) -> TokenStream {
+    oxi::include(input, oxi::Source::Module)
+}
+
+/// Embeds a package-relative `.oxi` view fragment as a Builder expression.
+/// Names resolve at the invocation site, including function-local bindings.
+/// Uses the same tag and Rust-expression grammar and expansion as `view!`.
+#[proc_macro]
+pub fn oxi_view(input: TokenStream) -> TokenStream {
+    oxi::include(input, oxi::Source::Fragment)
 }
 
 /// Generates a Builder for a named props struct without rerunning components.
