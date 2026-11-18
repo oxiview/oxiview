@@ -211,6 +211,15 @@ impl Drop for Endpoint {
     }
 }
 impl WindowWake for Shared {
+    fn presentation_ready(&self) -> Result<(), Error> {
+        let mut q = self.lock()?;
+        if !q.alive || !q.endpoint {
+            return Err(Error::WindowDestroyed);
+        }
+        q.events.push_back(WindowEvent::PresentationReady);
+        self.changed.notify_all();
+        Ok(())
+    }
     fn wake(&self) -> Result<(), Error> {
         let mut q = self.lock()?;
         if !q.alive || !q.endpoint {
@@ -451,12 +460,6 @@ fn deliver(w: &Native, slot: Duration) {
     // A queued tick may arrive after an immediate delivery paused the link.
     // Never re-arm it unless there is still pending work.
     if !w.shared.lock().is_ok_and(|q| q.alive && q.frame) {
-        w.link.setPaused(true);
-        return;
-    }
-    if w.layer.displaySyncEnabled() && w.shared.feedback.defer_frame() {
-        // Leave input dispatch running while Metal owns the drawable pool.
-        // Its presentation callback wakes the command source when space returns.
         w.link.setPaused(true);
         return;
     }
@@ -1239,11 +1242,6 @@ impl EventLoopContext for Context {
                 resize: None,
             }),
         });
-        shared
-            .feedback
-            .wake_target
-            .set(Arc::downgrade(&shared))
-            .map_err(|_| failure("presentation wake target already initialized"))?;
         self.control
             .0
             .lock()
@@ -1457,9 +1455,6 @@ mod presentation_probe {
     pub(super) struct Feedback {
         pub completed: Mutex<Vec<(u64, f64, Duration)>>,
         pub acquired: AtomicU64,
-        pending: AtomicU64,
-        waiting: AtomicBool,
-        pub wake_target: std::sync::OnceLock<std::sync::Weak<Shared>>,
         pub acquired_slot: AtomicU64,
         pub slot: AtomicU64,
         pub interval: AtomicU64,
@@ -1471,9 +1466,6 @@ mod presentation_probe {
             Self {
                 completed: Mutex::new(Vec::new()),
                 acquired: AtomicU64::new(0),
-                pending: AtomicU64::new(0),
-                waiting: AtomicBool::new(false),
-                wake_target: std::sync::OnceLock::new(),
                 acquired_slot: AtomicU64::new(0),
                 slot: AtomicU64::new(0),
                 interval: AtomicU64::new(16_666_667),
@@ -1484,22 +1476,8 @@ mod presentation_probe {
     }
     impl Feedback {
         fn acquired(&self, id: u64, slot: u64) {
-            self.pending.fetch_add(1, Ordering::SeqCst);
             self.acquired.store(id, Ordering::Release);
             self.acquired_slot.store(slot, Ordering::Release);
-        }
-        // FIFO needs two outstanding presentations to sustain refresh rate, but
-        // painting a third frame would block in nextDrawable behind scanout.
-        // Arm the callback before checking capacity. Sequential consistency
-        // prevents a completion racing this check from losing the wake-up.
-        pub fn defer_frame(&self) -> bool {
-            self.waiting.store(true, Ordering::SeqCst);
-            if self.pending.load(Ordering::SeqCst) >= 2 {
-                true
-            } else {
-                self.waiting.store(false, Ordering::SeqCst);
-                false
-            }
         }
         pub fn reset(&self) {
             self.estimate.store(0, Ordering::Release);
@@ -1514,15 +1492,7 @@ mod presentation_probe {
             })
         }
         fn presented(&self, id: u64, time: f64, slot: Duration) {
-            // Skipped drawables also retire. Count callbacks independently of
-            // drawable IDs, since callbacks can run concurrently and out of order.
-            self.pending.fetch_sub(1, Ordering::SeqCst);
-            if self.waiting.swap(false, Ordering::SeqCst)
-                && let Some(shared) = self.wake_target.get().and_then(std::sync::Weak::upgrade)
-                && shared.lock().is_ok_and(|q| q.alive && q.frame)
-            {
-                shared.signal();
-            }
+            // Feedback calibrates the display clock. Surface acquisition supplies backpressure.
             if time.is_finite() && time > 0.0 {
                 let offset = seconds(time).saturating_sub(slot);
                 let bound = self.interval.load(Ordering::Acquire) * 4;
@@ -1554,31 +1524,6 @@ mod presentation_probe {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        #[test]
-        fn fifo_budget_waits_before_paint_and_retires_out_of_order() {
-            let feedback = Feedback::default();
-            feedback.acquired(0, 1_000_000_000);
-            assert!(!feedback.defer_frame());
-            feedback.acquired(1, 1_016_666_667);
-            assert!(feedback.defer_frame());
-            assert!(feedback.waiting.load(Ordering::SeqCst));
-
-            // A skipped newer drawable retires before the older displayed one.
-            // It frees one slot, rather than declaring every older ID complete.
-            feedback.presented(1, 0.0, Duration::from_nanos(1_016_666_667));
-            assert!(!feedback.waiting.load(Ordering::SeqCst));
-            assert_eq!(feedback.pending.load(Ordering::SeqCst), 1);
-            assert!(!feedback.defer_frame());
-            feedback.acquired(2, 1_033_333_334);
-            assert!(feedback.defer_frame());
-            feedback.presented(0, 1.04, Duration::from_secs(1));
-            assert!(!feedback.defer_frame());
-            feedback.presented(2, 1.06, Duration::from_nanos(1_033_333_334));
-            assert_eq!(feedback.pending.load(Ordering::SeqCst), 0);
-            assert!(!feedback.defer_frame());
-            assert!(!feedback.waiting.load(Ordering::SeqCst));
-        }
 
         #[test]
         fn delayed_feedback_keeps_original_slot_and_reports_drops() -> Result<(), String> {

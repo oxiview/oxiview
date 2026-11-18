@@ -1,10 +1,11 @@
-use crate::{Error, PixelSize, RenderContext, device, encoding};
+use crate::{Error, PixelSize, RenderContext, acquisition::Acquisition, device, encoding};
 use oxiview_base::{NativeSurfaceHandle, NativeSurfaceKind};
 use oxiview_scene::{NodeId, Scene};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::task::Poll;
 
 /// Result of a synchronous window-thread presentation attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,21 +20,25 @@ pub enum FrameOutcome {
 
 /// A per-window surface sharing the process-wide instance, adapter, and device.
 ///
-/// Create, configure, render and drop on the window thread. The platform adapter
-/// keeps presentsWithTransaction off in steady state and enables it only during
-/// the main-thread resize transaction, resetting it before commit. This adapter
-/// never changes it. wgpu-hal 30.0.2's metal/surface.rs acquire_texture snapshots
-/// the property after nextDrawable; main-thread Resized/display-link Frame event
-/// publication orders the flag update before window-thread acquisition. A resize
-/// timeout can leave a transaction-enabled drawable presenting late; the platform
-/// traces this exception.
+/// Create, configure, paint and present on the window thread. Ordinary
+/// frames may acquire one texture on a worker after their display opportunity.
+/// Resize retires an older acquisition before wgpu reconfiguration and paints
+/// synchronously inside the native resize transaction. The platform manages
+/// presentsWithTransaction and its bounded resize acknowledgement wait.
 pub struct WindowSurface {
+    acquisition: Option<Acquisition<wgpu::CurrentSurfaceTexture>>,
+    prepared: Option<wgpu::CurrentSurfaceTexture>,
     context: RenderContext,
     handle: NativeSurfaceHandle,
-    surface: wgpu::Surface<'static>,
+    surface: Arc<wgpu::Surface<'static>>,
     size: PixelSize,
     display_sync: bool,
-    generation: Option<Arc<AtomicBool>>,
+    configuration: Option<Configuration>,
+}
+
+struct Configuration {
+    generation: Arc<AtomicBool>,
+    device: wgpu::Device,
 }
 
 pub(crate) fn validate_kind(kind: NativeSurfaceKind, metal: bool) -> Result<(), Error> {
@@ -91,15 +96,17 @@ impl WindowSurface {
             create(&process.instance, handle)?
         };
         Ok(Self {
+            acquisition: None,
+            prepared: None,
             context,
             handle,
-            surface,
+            surface: Arc::new(surface),
             size: PixelSize {
                 width: 0,
                 height: 0,
             },
             display_sync: false,
-            generation: None,
+            configuration: None,
         })
     }
 
@@ -107,6 +114,19 @@ impl WindowSurface {
     /// Invalid dimensions leave the previous size intact. GPU loss is recoverable
     /// through the shared context; the next use configures the replacement device.
     pub fn configure(&mut self, size: PixelSize, display_sync: bool) -> Result<(), Error> {
+        self.prepared.take();
+        if size.width == 0 || size.height == 0 {
+            if let Some(worker) = &mut self.acquisition {
+                worker.stop();
+            }
+            self.size = size;
+            self.configuration = None;
+            return Ok(());
+        }
+        // wgpu requires all old surface textures to be released before
+        // reconfiguration. Join outside the shared device lock. Metal's
+        // acquisition timeout also applies when the old window is occluded.
+        self.acquisition.take();
         let mut process = self
             .context
             .process
@@ -117,16 +137,65 @@ impl WindowSurface {
             .gpu
             .as_ref()
             .ok_or_else(|| Error::DeviceLost("device unavailable".into()))?;
-        if !validate_size(size, gpu.device.limits().max_texture_dimension_2d)? {
-            self.size = size;
-            self.generation = None;
-            return Ok(());
-        }
-        configure(&self.surface, gpu, size, display_sync)?;
+        self.configuration = Some(configure(&self.surface, gpu, size, display_sync)?);
         self.display_sync = display_sync;
         self.size = size;
-        self.generation = Some(Arc::clone(&gpu.lost));
         Ok(())
+    }
+
+    /// Requests one actual surface texture for an ordinary frame. The
+    /// window thread can dispatch input while Metal waits for a free drawable.
+    /// The callback runs after the acquisition result is available. Synchronous
+    /// resize and recovery retain their direct path.
+    pub fn prepare_frame(
+        &mut self,
+        notify: impl FnOnce() + Send + 'static,
+    ) -> Result<Poll<()>, Error> {
+        if self.prepared.is_some() {
+            return Ok(Poll::Ready(()));
+        }
+        if let Some(worker) = &mut self.acquisition
+            && worker.pending()
+        {
+            return match worker.poll()? {
+                Poll::Ready(acquired) => {
+                    self.prepared = Some(acquired);
+                    Ok(Poll::Ready(()))
+                }
+                Poll::Pending => Ok(Poll::Pending),
+            };
+        }
+        let Some(config) = &self.configuration else {
+            return Ok(Poll::Ready(()));
+        };
+        if config.generation.load(Ordering::Acquire) {
+            return Ok(Poll::Ready(()));
+        }
+        let surface = Arc::clone(&self.surface);
+        let device = config.device.clone();
+        let lost = Arc::clone(&config.generation);
+        let worker = match &mut self.acquisition {
+            Some(worker) => worker,
+            slot @ None => slot.insert(Acquisition::new()?),
+        };
+        worker.start(
+            move || {
+                let _span = tracing::trace_span!("drawable_acquisition").entered();
+                scoped_device(&device, &lost, || surface.get_current_texture())
+            },
+            notify,
+        )?;
+        Ok(Poll::Pending)
+    }
+
+    fn take_preparation(&mut self) -> Result<Option<wgpu::CurrentSurfaceTexture>, Error> {
+        if let Some(acquired) = self.prepared.take() {
+            return Ok(Some(acquired));
+        }
+        if let Some(worker) = &mut self.acquisition {
+            return worker.take();
+        }
+        Ok(None)
     }
 
     /// Renders and presents on the window thread, or reports suspension/skipping.
@@ -136,6 +205,7 @@ impl WindowSurface {
         if self.size.width == 0 || self.size.height == 0 {
             return Ok(FrameOutcome::Suspended);
         }
+        let mut prepared = self.take_preparation()?;
         let encoded = scene
             .encode(root)
             .map_err(|e| Error::SceneEncoding(e.to_string()))?;
@@ -151,22 +221,26 @@ impl WindowSurface {
             .as_ref()
             .ok_or_else(|| Error::DeviceLost("device unavailable".into()))?;
         if !self
-            .generation
+            .configuration
             .as_ref()
-            .is_some_and(|generation| Arc::ptr_eq(generation, &gpu.lost))
+            .is_some_and(|config| Arc::ptr_eq(&config.generation, &gpu.lost))
         {
-            configure(&self.surface, gpu, self.size, self.display_sync)?;
-            self.generation = Some(Arc::clone(&gpu.lost));
+            drop(prepared.take());
+            self.configuration = Some(configure(&self.surface, gpu, self.size, self.display_sync)?);
         }
         let mut frame = None;
         for attempt in 0..2 {
-            match scoped(gpu, || self.surface.get_current_texture())? {
+            let acquired = match prepared.take() {
+                Some(acquired) => acquired,
+                None => scoped(gpu, || self.surface.get_current_texture())?,
+            };
+            match acquired {
                 wgpu::CurrentSurfaceTexture::Success(texture) => {
                     frame = Some(texture);
                     break;
                 }
                 wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                    self.generation = None;
+                    self.configuration = None;
                     frame = Some(texture);
                     break;
                 }
@@ -179,8 +253,9 @@ impl WindowSurface {
                     if attempt == 0 =>
                 {
                     // Recreating also handles Lost; no drawable is held here.
-                    self.surface = create(&process.instance, self.handle)?;
-                    configure(&self.surface, gpu, self.size, self.display_sync)?;
+                    self.surface = Arc::new(create(&process.instance, self.handle)?);
+                    self.configuration =
+                        Some(configure(&self.surface, gpu, self.size, self.display_sync)?);
                 }
                 other => {
                     if gpu.lost.load(Ordering::Acquire) {
@@ -216,9 +291,9 @@ fn configure(
     gpu: &device::Gpu,
     size: PixelSize,
     display_sync: bool,
-) -> Result<(), Error> {
+) -> Result<Configuration, Error> {
     if !validate_size(size, gpu.device.limits().max_texture_dimension_2d)? {
-        return Ok(());
+        return Err(Error::InvalidSize(size));
     }
     let capabilities = surface.get_capabilities(&gpu.adapter);
     let mut config = surface
@@ -250,20 +325,32 @@ fn configure(
     };
     // Metal maps latency N to N + 1 drawables. Keep three in both modes:
     // reducing the pool after fullscreen can make even Immediate acquisition
-    // block for an interval. The macOS scheduler bounds outstanding FIFO frames
-    // before painting, allowing input dispatch to continue while the pool is full.
+    // block for an interval. Actual drawable availability paces painting.
     config.desired_maximum_frame_latency = 2;
     config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
-    scoped(gpu, || surface.configure(&gpu.device, &config))
+    scoped(gpu, || surface.configure(&gpu.device, &config))?;
+    Ok(Configuration {
+        generation: Arc::clone(&gpu.lost),
+        device: gpu.device.clone(),
+    })
 }
 
 // Catch validation/resource errors at every native GPU operation. Resource
 // failure invalidates shared state synchronously; all surfaces notice the new
 // device identity on next use, even before wgpu delivers its loss callback.
 fn scoped<T>(gpu: &device::Gpu, operation: impl FnOnce() -> T) -> Result<T, Error> {
-    let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    scoped_device(&gpu.device, &gpu.lost, operation)
+}
+// wgpu's std-enabled error scopes are thread-local. Keep acquisition scopes
+// on the worker and leave the shared rendering mutex free during a pool wait.
+fn scoped_device<T>(
+    device: &wgpu::Device,
+    lost: &AtomicBool,
+    operation: impl FnOnce() -> T,
+) -> Result<T, Error> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let result = operation();
     let errors = [
         device::block_on(internal.pop()),
@@ -271,10 +358,10 @@ fn scoped<T>(gpu: &device::Gpu, operation: impl FnOnce() -> T) -> Result<T, Erro
         device::block_on(validation.pop()),
     ];
     if let Some(error) = errors.into_iter().flatten().next() {
-        gpu.lost.store(true, Ordering::Release);
+        lost.store(true, Ordering::Release);
         return Err(Error::DeviceLost(error.to_string()));
     }
-    if gpu.lost.load(Ordering::Acquire) {
+    if lost.load(Ordering::Acquire) {
         return Err(Error::DeviceLost(
             "device lost during surface operation".into(),
         ));

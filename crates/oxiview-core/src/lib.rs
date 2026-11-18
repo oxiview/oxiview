@@ -171,7 +171,10 @@ impl Scheduler {
     }
     /// Takes commands once. Suspended windows retain work until a nonzero resize.
     pub fn schedule(&mut self) -> Schedule {
-        let request_frame = self.dirty && !self.armed && !self.suspended;
+        self.schedule_if_available(true)
+    }
+    fn schedule_if_available(&mut self, can_arm: bool) -> Schedule {
+        let request_frame = can_arm && self.dirty && !self.armed && !self.suspended;
         self.armed |= request_frame;
         Schedule {
             request_frame,
@@ -226,6 +229,12 @@ pub enum PresentationOutcome {
 }
 /// Renderer-independent presentation boundary, used only on the window thread.
 pub trait Presenter {
+    /// Prepares one ordinary frame. A pending presenter notifies the waker
+    /// after publishing its result. Resize transactions use configure/present
+    /// directly, and configure discards any earlier preparation.
+    fn prepare_frame(&mut self, _waker: &WindowWaker) -> Result<std::task::Poll<()>, Error> {
+        Ok(std::task::Poll::Ready(()))
+    }
     /// Reconfigures or suspends for zero size before painting a resize.
     fn configure(
         &mut self,
@@ -307,11 +316,13 @@ fn window_loop_with_runtime(
     };
     let mut scale = 1.0;
     let mut pending_resize = None;
+    let mut waiting_frame: Option<FrameTiming> = None;
+    let mut closing = false;
     scheduler.resize(size);
     let waker = endpoint.waker();
     runtime.poll_ready()?;
     loop {
-        let output = scheduler.schedule();
+        let output = scheduler.schedule_if_available(waiting_frame.is_none() && !closing);
         if output.request_frame {
             endpoint.request_frame()?;
         }
@@ -330,6 +341,9 @@ fn window_loop_with_runtime(
             application.event(&event, &mut scheduler, &waker)?;
             return Ok(());
         }
+        if closing {
+            continue;
+        }
         if matches!(event, WindowEvent::Wake) {
             // Poll before application Wake handling so property bindings are ready
             // for that callback's normal UI flush and scheduler invalidation.
@@ -340,7 +354,9 @@ fn window_loop_with_runtime(
             WindowEvent::ScaleFactorChanged { scale_factor } => scale = *scale_factor,
             _ => {}
         }
-        application.event(&event, &mut scheduler, &waker)?;
+        if event != WindowEvent::PresentationReady {
+            application.event(&event, &mut scheduler, &waker)?;
+        }
         if let WindowEvent::PointerMoved { timestamp, .. }
         | WindowEvent::PointerButton { timestamp, .. }
         | WindowEvent::PointerLeft { timestamp }
@@ -351,6 +367,8 @@ fn window_loop_with_runtime(
         {
             scheduler.input(*timestamp);
         }
+        let resumed = matches!(event, WindowEvent::PresentationReady | WindowEvent::Wake);
+        let mut check_drawable = resumed;
         match event {
             WindowEvent::Resized {
                 display_sync,
@@ -361,6 +379,9 @@ fn window_loop_with_runtime(
                 refresh_interval,
             } => {
                 let _span = tracing::info_span!("resize", ?physical_size, ?token).entered();
+                // Configure retires the old acquisition before changing the surface.
+                // Its late notification can safely arrive after this transaction.
+                waiting_frame = None;
                 size = physical_size;
                 scale = scale_factor;
                 presenter.configure(size, scale, display_sync)?;
@@ -391,28 +412,50 @@ fn window_loop_with_runtime(
                 refresh_interval,
             } => {
                 if scheduler.frame() {
-                    let outcome = produce(
-                        || endpoint.now(),
-                        application,
-                        presenter,
-                        &mut scheduler,
-                        FrameTiming {
-                            predicted_presentation_timestamp,
-                            refresh_interval,
-                            kind: FrameKind::Vsync,
-                        },
-                        size,
-                        scale,
-                    )?;
-                    if outcome == PresentationOutcome::Presented {
-                        acknowledge_pending(endpoint, &mut pending_resize)?;
-                    }
+                    waiting_frame = Some(FrameTiming {
+                        predicted_presentation_timestamp,
+                        refresh_interval,
+                        kind: FrameKind::Vsync,
+                    });
+                    check_drawable = true;
                 }
             }
             WindowEvent::CloseRequested if application.should_close() => {
-                endpoint.request_close()?
+                endpoint.request_close()?;
+                closing = true;
+                waiting_frame = None;
+                scheduler.cancel_timed_request();
             }
             _ => {}
+        }
+        if check_drawable
+            && let Some(timing) = waiting_frame
+            && presenter.prepare_frame(&waker)?.is_ready()
+        {
+            waiting_frame = None;
+            if resumed
+                && !timing.refresh_interval.is_zero()
+                && endpoint
+                    .now()
+                    .saturating_sub(timing.predicted_presentation_timestamp)
+                    >= timing.refresh_interval
+            {
+                // A drawable delayed past an entire display interval can serve
+                // the next slot. Keep the invalidation and original input time.
+                continue;
+            }
+            let outcome = produce(
+                || endpoint.now(),
+                application,
+                presenter,
+                &mut scheduler,
+                timing,
+                size,
+                scale,
+            )?;
+            if outcome == PresentationOutcome::Presented {
+                acknowledge_pending(endpoint, &mut pending_resize)?;
+            }
         }
     }
 }

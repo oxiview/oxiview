@@ -26,8 +26,8 @@ trailing second with a 100 ms delay for arriving feedback.
 ## Timed measurement
 
 ```sh
-cargo run --release -p animation-fps -- --objects 32 --measure 5 --json
-cargo run --release -p animation-fps -- --objects 32 --measure 5 --fullscreen --json
+cargo run --release -p animation-fps -- --objects 128 --measure 5 --json
+cargo run --release -p animation-fps -- --objects 128 --measure 5 --fullscreen --json
 ```
 
 Each command opens its own window, warms up for one second, samples the
@@ -38,6 +38,11 @@ its display inside the measurement interval. The report includes physical
 dimensions and backing scale, observed refresh range, submitted and displayed
 frame counts, P95 display gap, P95 paint-to-submit time, and submissions which
 received a zero presentation timestamp.
+
+Fullscreen uses FIFO. In both modes the window continues dispatching input while
+the renderer waits for a drawable. Paint-to-submit measures from the subsequent
+application paint to submission. [Native frame pacing](../../docs/adr/0036-fifo-drawable-readiness.md)
+documents this measurement boundary.
 
 Keep the window visible, active and at a stable size for the timed run.
 Interrupted runs or missing display feedback return an error. Run measurements

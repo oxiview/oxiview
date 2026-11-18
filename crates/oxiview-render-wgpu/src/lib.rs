@@ -18,6 +18,7 @@
 // Native surface creation is the adapter's only unsafe boundary.
 #![allow(unsafe_code)]
 
+mod acquisition;
 mod copy;
 mod device;
 mod surface;

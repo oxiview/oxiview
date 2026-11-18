@@ -220,6 +220,9 @@ pub enum WindowEvent {
     },
     /// The system needs repainting; application code requests a frame explicitly.
     RedrawRequested,
+    /// Presenter preparation completed. The core consumes this notification
+    /// while a requested frame is waiting for its drawable.
+    PresentationReady,
     /// Cross-thread notification from a `WindowWaker`, delivered on the assigned
     /// window thread. Repeated wakes before delivery coalesce into one event.
     /// Delivery clears the pending wake so a subsequent wake can notify again.
@@ -295,6 +298,11 @@ pub trait WindowWake: Send + Sync {
     /// A wake racing destruction may succeed, but destruction may discard pending
     /// wakes; no events are delivered after the terminal `Destroyed` event.
     fn wake(&self) -> Result<(), Error>;
+    /// Signals a deferred presentation. Custom backends may use the ordinary
+    /// work wake; native and headless backends provide a distinct notification.
+    fn presentation_ready(&self) -> Result<(), Error> {
+        self.wake()
+    }
 }
 
 /// Owned, cloneable cross-thread notification handle for one window endpoint.
@@ -319,6 +327,10 @@ impl WindowWaker {
     /// that succeeded before or concurrently with destruction.
     pub fn wake(&self) -> Result<(), Error> {
         self.backend.wake()
+    }
+    /// Notifies the window thread that its pending presentation can be retried.
+    pub fn presentation_ready(&self) -> Result<(), Error> {
+        self.backend.presentation_ready()
     }
 }
 

@@ -130,11 +130,7 @@ impl Gpu {
         let row = u64::from(size.width) * 4;
         let padded_row = row.div_ceil(256) * 256;
         let readback_size = padded_row * u64::from(size.height);
-        let stack_size = u64::from(size.width)
-            .checked_mul(u64::from(size.height))
-            .and_then(|n| n.checked_mul(u64::from(commands.depth)))
-            .and_then(|n| n.checked_mul(16))
-            .ok_or(Error::InvalidSize(size))?;
+        let stack_size = commands.opacity_stack_bytes(size)?;
         let data = commands.bytes();
         if size.width == 0
             || size.height == 0

@@ -25,6 +25,81 @@ fn pixel(image: &RgbaImage, x: usize, y: usize) -> &[u8] {
 }
 
 #[test]
+fn a_flat_fullscreen_scene_needs_no_pixel_sized_opacity_stack() -> TestResult {
+    let size = PixelSize {
+        width: 3456,
+        height: 2168,
+    };
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, fill(Rect::new(0.0, 0.0, 100.0, 150.0), red()))?;
+    let commands = encoding::Commands::new(&scene.encode(root)?, size)?;
+    assert_eq!(commands.depth, 0);
+    assert_eq!(commands.opacity_stack_bytes(size)?, 16);
+    let group = scene.insert(Some(root), 0, NodeKind::Opacity(0.6))?;
+    let inner = scene.insert(Some(group), 0, NodeKind::Opacity(0.5))?;
+    scene.insert(Some(inner), 0, fill(Rect::new(2.0, 3.0, 8.0, 9.0), blue()))?;
+    let nested = encoding::Commands::new(&scene.encode(root)?, size)?;
+    assert_eq!(nested.depth, 2);
+    assert_eq!(nested.opacity_stack_bytes(size)?, 3456 * 2168 * 2 * 16);
+    Ok(())
+}
+
+#[test]
+fn solid_and_constant_gradient_agree_after_isolated_compositing() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, fill(Rect::new(0.0, 0.0, 65.0, 64.0), blue()))?;
+    let group = scene.insert(Some(root), 0, NodeKind::Opacity(0.73))?;
+    for (i, c) in [
+        Color::from_rgba8(123, 67, 194, 177),
+        Color::from_linear([0.25, 0.5, 0.85, 0.5]),
+        Color::from_srgb([1.2, -0.1, 0.6, 0.8]),
+        Color::from_rgba8(22, 99, 199, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let y = (i * 12) as f64;
+        scene.insert(
+            Some(group),
+            2 * i,
+            fill(Rect::new(0.0, y, 20.0, y + 10.0), c),
+        )?;
+        scene.insert(
+            Some(group),
+            2 * i + 1,
+            NodeKind::Draw(Primitive::Fill(
+                Rect::new(25.0, y, 45.0, y + 10.0),
+                CornerRadii::default(),
+                Brush::LinearGradient(
+                    Point::new(25.0, 0.0),
+                    Point::new(45.0, 0.0),
+                    vec![
+                        ColorStop {
+                            position: 0.0,
+                            color: c,
+                        },
+                        ColorStop {
+                            position: 1.0,
+                            color: c,
+                        },
+                    ],
+                ),
+            )),
+        )?;
+    }
+    let image = RenderContext::new()?.render(&scene, root, SIZE)?;
+    for y in [4, 16, 28, 40] {
+        assert!(
+            pixel(&image, 5, y)
+                .iter()
+                .zip(pixel(&image, 30, y))
+                .all(|(&a, &b)| a.abs_diff(b) <= 1)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn image_draw_preserves_scale_alpha_clips_and_following_paint() -> TestResult {
     let image = RgbaImage::new(
         PixelSize {

@@ -146,6 +146,17 @@ pub fn run_headless<A: Application>(
 struct SurfacePresenter(oxiview_render_wgpu::WindowSurface);
 #[cfg(target_os = "macos")]
 impl Presenter for SurfacePresenter {
+    fn prepare_frame(
+        &mut self,
+        waker: &oxiview_platform::WindowWaker,
+    ) -> Result<std::task::Poll<()>, oxiview_core::Error> {
+        let waker = waker.clone();
+        self.0
+            .prepare_frame(move || {
+                let _ = waker.presentation_ready();
+            })
+            .map_err(|e| oxiview_core::Error::Present(e.to_string()))
+    }
     fn configure(
         &mut self,
         size: PhysicalSize,

@@ -64,6 +64,9 @@ fn image_pixel(offset: u32, size: vec2<u32>, p: vec2<i32>) -> vec4<f32> {
     return vec4(value.rgb * value.a, value.a);
 }
 fn paint(offset: u32, p: vec2<f32>) -> vec4<f32> {
+    if words[offset] == 0xffffffffu {
+        return color(offset + 1u);
+    }
     let local = vec2(scalar(offset)*p.x + scalar(offset+2u)*p.y + scalar(offset+4u),
                      scalar(offset+1u)*p.x + scalar(offset+3u)*p.y + scalar(offset+5u));
     let start = point(offset+6u);

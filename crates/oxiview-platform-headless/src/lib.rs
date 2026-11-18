@@ -507,6 +507,14 @@ struct Wake {
     id: WindowId,
 }
 impl WindowWake for Wake {
+    fn presentation_ready(&self) -> std::result::Result<(), Error> {
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, self.id)?;
+        live(w)?;
+        w.events.push_back(WindowEvent::PresentationReady);
+        self.shared.changed.notify_all();
+        Ok(())
+    }
     fn wake(&self) -> std::result::Result<(), Error> {
         let mut state = self.shared.lock()?;
         let w = window(&mut state, self.id)?;

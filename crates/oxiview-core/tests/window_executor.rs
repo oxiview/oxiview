@@ -245,6 +245,142 @@ fn resize() -> WindowEvent {
     }
 }
 
+fn move_to(x: f64, millis: u64) -> Step {
+    Step::Event(WindowEvent::PointerMoved {
+        position: Point::new(x, 5.0),
+        timestamp: Duration::from_millis(millis),
+    })
+}
+fn run_deferred_drawable(
+    script: VecDeque<Step>,
+    expected: &[i32],
+    requests: usize,
+) -> Result<(), Error> {
+    use std::task::Poll;
+    struct Waiting(Rc<Cell<bool>>);
+    impl Presenter for Waiting {
+        fn prepare_frame(&mut self, _: &WindowWaker) -> Result<Poll<()>, Error> {
+            Ok(if self.0.get() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            })
+        }
+        fn configure(&mut self, _: PhysicalSize, _: f64, _: bool) -> Result<(), Error> {
+            Ok(())
+        }
+        fn present(&mut self, _: &PaintedScene) -> Result<PresentationOutcome, Error> {
+            Ok(PresentationOutcome::Presented)
+        }
+    }
+    struct Values {
+        latest: i32,
+        ready: Rc<Cell<bool>>,
+        seen: Arc<Mutex<Observed>>,
+        tree: UiTree,
+    }
+    impl Application for Values {
+        fn event(
+            &mut self,
+            event: &WindowEvent,
+            scheduler: &mut Scheduler,
+            _: &WindowWaker,
+        ) -> Result<(), Error> {
+            assert_ne!(
+                event,
+                &WindowEvent::PresentationReady,
+                "renderer notifications are private to the loop"
+            );
+            if let WindowEvent::PointerMoved { position, .. } = event {
+                self.latest = position.x() as i32;
+                self.ready.set(self.latest == 20);
+                scheduler.invalidate();
+            }
+            Ok(())
+        }
+        fn paint(
+            &mut self,
+            _: FrameTiming,
+            _: PhysicalSize,
+            scale: f64,
+        ) -> Result<PaintedScene, Error> {
+            self.seen.lock().unwrap().frames.push(self.latest);
+            Ok(self.tree.paint(Size::new(200.0, 100.0), scale)?)
+        }
+        fn frame_submitted(&mut self, frame: oxiview_core::FrameSubmission) {
+            if frame.timing.kind == oxiview_core::FrameKind::Vsync {
+                assert_eq!(
+                    frame.latency.unwrap().input_capture_timestamp,
+                    Duration::from_millis(1)
+                );
+            }
+        }
+    }
+    let observed = Arc::new(Mutex::new(Observed::default()));
+    let endpoint = Endpoint {
+        script,
+        observed: observed.clone(),
+    };
+    let ready = Rc::new(Cell::new(false));
+    run_window(Box::new(endpoint), |_| {
+        Ok((
+            Values {
+                latest: 0,
+                ready: ready.clone(),
+                tree: UiTree::new()?,
+                seen: observed.clone(),
+            },
+            Waiting(ready),
+        ))
+    })?;
+    let state = observed.lock().unwrap();
+    assert_eq!(state.frames, expected);
+    assert_eq!(state.requests, requests);
+    Ok(())
+}
+
+#[test]
+fn pending_drawable_keeps_dispatching_input_and_paints_the_latest_value_once() -> Result<(), Error>
+{
+    run_deferred_drawable(
+        VecDeque::from([
+            Step::Event(resize()),
+            move_to(10.0, 1),
+            move_to(20.0, 2),
+            Step::Event(WindowEvent::PresentationReady),
+            Step::Event(WindowEvent::PresentationReady),
+            Step::Event(WindowEvent::Destroyed),
+        ]),
+        &[0, 20],
+        1,
+    )
+}
+
+#[test]
+fn resize_suspension_and_close_retire_deferred_slots() -> Result<(), Error> {
+    let mut minimized = resize();
+    if let WindowEvent::Resized { physical_size, .. } = &mut minimized {
+        *physical_size = PhysicalSize {
+            width: 0,
+            height: 0,
+        };
+    }
+    run_deferred_drawable(
+        VecDeque::from([
+            Step::Event(resize()),
+            move_to(10.0, 1),
+            Step::Event(minimized),
+            Step::Event(WindowEvent::PresentationReady),
+            Step::Event(resize()),
+            Step::Event(WindowEvent::PresentationReady),
+            move_to(30.0, 3),
+            Step::Event(WindowEvent::CloseRequested),
+        ]),
+        &[0, 10],
+        2,
+    )
+}
+
 #[test]
 fn window_automatically_runs_woken_tasks_and_disposes_node_and_window_tasks() {
     let observed = Arc::new(Mutex::new(Observed::default()));

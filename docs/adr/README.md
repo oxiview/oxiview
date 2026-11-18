@@ -39,3 +39,4 @@ Language: **English**
 | [0033](0033-hover-lifecycle-cleanup.md) | Hover lifecycle: cleanup before removal and suppression | 6 Retained tree / invalidation / 10 IME and input |
 | [0034](0034-pointer-input-processing-order.md) | Pointer input: stable dispatch and ordered command application | 6 Retained tree / invalidation / 10 IME and input |
 | [0035](0035-node-owned-reactive-scopes.md) | Reactive ownership: node scopes follow retained subtree moves | 4 State and reactivity / 6 Retained tree / invalidation |
+| [0036](0036-fifo-drawable-readiness.md) | Pace native frames by drawable availability | 3 Frame scheduling / 11 Rendering |

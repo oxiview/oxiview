@@ -397,6 +397,15 @@ fn cross_thread_wakes_coalesce_and_unblock_both_waits() {
         });
         assert_eq!(e.poll_event().unwrap(), Some(WindowEvent::Wake));
         assert_eq!(e.poll_event().unwrap(), None);
+        w.wake().unwrap();
+        w.presentation_ready().unwrap();
+        w.wake().unwrap();
+        assert_eq!(e.poll_event().unwrap(), Some(WindowEvent::Wake));
+        assert_eq!(
+            e.poll_event().unwrap(),
+            Some(WindowEvent::PresentationReady)
+        );
+        assert_eq!(e.poll_event().unwrap(), None);
         thread::scope(|scope| {
             scope.spawn(|| {
                 d.wait_until_blocked(id, WaitKind::Event).unwrap();
@@ -409,6 +418,10 @@ fn cross_thread_wakes_coalesce_and_unblock_both_waits() {
         });
         drop(e);
         assert!(matches!(w.wake(), Err(Error::WindowDestroyed)));
+        assert!(matches!(
+            w.presentation_ready(),
+            Err(Error::WindowDestroyed)
+        ));
     });
 }
 

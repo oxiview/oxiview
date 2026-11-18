@@ -34,3 +34,6 @@ After a display/fullscreen transition, one repaint restores content even if
 AppKit discarded a transition drawable. These requests do not create an idle
 rendering loop. See the [performance conventions](../conventions/testing-performance.md)
 for the diagnostic workload and the remaining continuous-input latency overruns.
+
+The 2026-11-18 [FIFO pacing decision](0036-fifo-drawable-readiness.md) replaces
+the two-presentation limit above with asynchronous drawable acquisition.

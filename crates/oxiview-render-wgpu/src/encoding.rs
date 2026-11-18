@@ -12,7 +12,9 @@ use tiles::Bounds;
 // Bordered fill (opcode 3): outer, inner, clip count, background brush, border
 // brush, then clip offsets. Shared coverage keeps the fill/stroke edge correlated.
 // SDF shape: MAX tag, inverse affine, bounds, TL/TR/BR/BL radii, scale.
-// Polygon: vertex count then xy pairs. Brush: inverse affine, gradient endpoints,
+// Polygon: vertex count then xy pairs. A solid brush starts with MAX (which
+// cannot encode a finite affine coefficient), then four premultiplied sRGB
+// channels. Other brushes start with inverse affine, gradient endpoints,
 // stop count, then (position, premultiplied linear RGBA) stops.
 // Image brushes use MAX as the stop count, followed by width, height, and an
 // offset into shared straight-RGBA8 pixel words; repeated glyph storage is deduplicated.
@@ -23,8 +25,8 @@ pub(crate) struct Commands {
 impl Commands {
     pub(crate) fn new(scene: &EncodedScene, size: PixelSize) -> Result<Self, Error> {
         let mut result = Self {
-            words: vec![size.width, size.height, 1, 0],
-            depth: 1,
+            words: vec![size.width, size.height, 0, 0],
+            depth: 0,
         };
         let mut opacities = Vec::new();
         let mut images = HashMap::new();
@@ -115,19 +117,19 @@ impl Commands {
                         result.set(clip_start + index, offset)?;
                     }
                     result.set(start + 5, count(result.words.len())?)?;
-                    for value in inverse.coefficients() {
-                        result.float(value)?;
-                    }
                     match brush {
                         Some(Brush::Solid(color)) => {
-                            for value in [0.0, 0.0, 1.0, 0.0] {
-                                result.float(value)?;
+                            if inverse
+                                .coefficients()
+                                .into_iter()
+                                .any(|v| !(v as f32).is_finite())
+                            {
+                                return Err(invalid("non-finite or out-of-range GPU transform"));
                             }
-                            result.words.push(2);
-                            result.stop(0.0, *color)?;
-                            result.stop(1.0, *color)?;
+                            result.solid_brush(*color)?;
                         }
                         Some(Brush::LinearGradient(a, b, stops)) => {
+                            result.brush_transform(inverse)?;
                             for value in [a.x(), a.y(), b.x(), b.y()] {
                                 result.float(value)?;
                             }
@@ -137,6 +139,7 @@ impl Commands {
                             }
                         }
                         None => {
+                            result.brush_transform(inverse)?;
                             let image = image.ok_or_else(|| invalid("missing image source"))?;
                             if image.width() == 0 || image.height() == 0 {
                                 return Err(invalid("empty image source"));
@@ -169,7 +172,7 @@ impl Commands {
                         }
                     }
                     if let Some(boxed) = boxed {
-                        let offset = result.solid_brush(inverse, boxed.color)?;
+                        let offset = result.solid_brush(boxed.color)?;
                         result.set(start + 6, offset)?;
                     }
                 }
@@ -193,6 +196,16 @@ impl Commands {
             .iter()
             .flat_map(|word| word.to_le_bytes())
             .collect()
+    }
+    pub(crate) fn opacity_stack_bytes(&self, size: PixelSize) -> Result<u64, Error> {
+        // WGSL requires a binding large enough for one vec4 even when no
+        // BeginOpacity instruction can address the stack.
+        let bytes = u64::from(size.width)
+            .checked_mul(u64::from(size.height))
+            .and_then(|n| n.checked_mul(u64::from(self.depth)))
+            .and_then(|n| n.checked_mul(16))
+            .ok_or(Error::InvalidSize(size))?;
+        Ok(bytes.max(16))
     }
     // Differential-test oracle: the same GPU interpreter visits the original
     // complete ordered stream in every tile, without any spatial culling.
@@ -237,18 +250,27 @@ impl Commands {
         }
         Ok(())
     }
-    fn solid_brush(&mut self, inverse: Affine, color: Color) -> Result<u32, Error> {
-        let offset = count(self.words.len())?;
-        for value in inverse
-            .coefficients()
-            .into_iter()
-            .chain([0.0, 0.0, 1.0, 0.0])
-        {
+    fn brush_transform(&mut self, inverse: Affine) -> Result<(), Error> {
+        for value in inverse.coefficients() {
             self.float(value)?;
         }
-        self.words.push(2);
-        self.stop(0.0, color)?;
-        self.stop(1.0, color)?;
+        Ok(())
+    }
+    fn solid_brush(&mut self, color: Color) -> Result<u32, Error> {
+        let offset = count(self.words.len())?;
+        let rgba = color.to_srgb();
+        let [r, g, b, a] = color.to_linear();
+        if rgba
+            .into_iter()
+            .chain([r * a, g * a, b * a, a])
+            .any(|x| !x.is_finite())
+        {
+            return Err(invalid("non-finite or out-of-range GPU color"));
+        }
+        let [r, g, b, a] = rgba.map(|v| v.clamp(0.0, 1.0));
+        self.words.push(u32::MAX);
+        self.words
+            .extend([r * a, g * a, b * a, a].map(f32::to_bits));
         Ok(offset)
     }
     fn empty_polygon(&mut self) -> Result<u32, Error> {
