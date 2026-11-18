@@ -2,7 +2,7 @@
 # The dev-only exception lets any checked crate use test tools in tests.
 # Skip crates not yet created; new workspace members must be registered.
 # Examples are applications, so they are exempt; the xtask ban still applies to them.
-exempt = ["xtask", "window", "snake"]
+exempt = ["xtask", "window", "snake", "animation-fps"]
 forbidden = ["xtask"]
 dev-only = ["oxiview-testing"]
 

@@ -24,6 +24,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "animation-fps"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "oxiview-app",
+ "oxiview-base",
+ "oxiview-core",
+ "oxiview-platform",
+ "oxiview-platform-macos",
+ "oxiview-render-cpu",
+ "oxiview-scene",
+ "oxiview-style",
+ "oxiview-text",
+ "png",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -40,6 +40,8 @@ counts, cumulative layout/measurement/cache statistics, and logical viewport
 size/DPI. Submission timing is not GPU execution or confirmed scanout timing.
 Classic Snake normally updates at about eight frames per second because its
 initial simulation step is 125 ms; this is distinct from display refresh rate.
+The [continuous animation demo](../animation-fps/README.md) measures a scene
+that changes on every frame opportunity and includes actual Metal display feedback.
 
 The layer is disabled by default, draws above the Scene, does not participate in
 hit testing, and never changes the game's retained layout. Labels update on

@@ -29,6 +29,11 @@ Add `-- --debug-overlay` to show FPS, display cadence, CPU timings, scene/layout
 counts, and viewport scale in the top-right corner. It is off by default and
 stops refreshing after one final idle update.
 
+To measure continuous motion, run `cargo run --release -p animation-fps`.
+The [animation demo](examples/animation-fps/README.md) shows live submitted and
+displayed FPS, the latter measured from Metal presentation timestamps. Use
+`-- --measure 5 --json` for a five-second native sample.
+
 Enter starts a new game, Space pauses/resumes, and arrows or WASD steer. Mouse
 controls, selectable pace, score, session best, and recent runs are included.
 Ready/paused/finished games schedule no periodic ticks. Losing activation pauses
