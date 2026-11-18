@@ -266,7 +266,7 @@ fn builds_five_thousand_nodes_under_half_a_second() -> Result<(), Error> {
 
 #[test]
 #[allow(clippy::panic)] // Image invariants at the shared rendering port.
-fn rgba_image_validates_length_and_clears_transparent_rgb() -> Result<(), Error> {
+fn rgba_image_validates_length_and_clears_transparent_rgb() -> Result<(), oxiview_base::Error> {
     let size = PixelSize {
         width: 2,
         height: 1,

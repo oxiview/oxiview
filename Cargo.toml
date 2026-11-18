@@ -10,6 +10,17 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+oxiview-reactive = { version = "0.0.0", path = "crates/oxiview-reactive" }
+oxiview-macros = { version = "0.0.0", path = "crates/oxiview-macros" }
+oxiview-text = { version = "0.0.0", path = "crates/oxiview-text" }
+proc-macro2 = "=1.0.107"
+quote = "=1.0.47"
+syn = { version = "=2.0.119", features = ["full", "parsing"] }
+parley = { version = "=0.13.0", default-features = false, features = ["system", "complex-scripts"] }
+swash = { version = "=0.2.10", default-features = false, features = ["std", "scale", "render"] }
+taffy = { version = "=0.15.1", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "content_size"] }
+oxiview-style = { version = "0.0.0", path = "crates/oxiview-style" }
+oxiview-layout = { version = "0.0.0", path = "crates/oxiview-layout" }
 block2 = "=0.6.2"
 objc2-metal = { version = "=0.3.2", default-features = false, features = ["std", "MTLDrawable", "block2", "objc2-core-foundation"] }
 libc = "=0.2.191"
@@ -23,7 +34,7 @@ objc2-quartz-core = { version = "=0.3.2", default-features = false, features = [
 oxiview-render-wgpu = { version = "0.0.0", path = "crates/oxiview-render-wgpu" }
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSGeometry", "NSRunLoop"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSScreen", "NSWindow", "NSView", "NSEvent", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation", "objc2-quartz-core"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSScreen", "NSWindow", "NSView", "NSTrackingArea", "NSEvent", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation", "objc2-quartz-core"] }
 wgpu = { version = "=30.0.2", default-features = false, features = ["std", "metal", "vulkan", "dx12", "wgsl"] }
 oxiview-scene = { version = "0.0.0", path = "crates/oxiview-scene" }
 vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline"] }

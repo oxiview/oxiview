@@ -1,16 +1,32 @@
-//! Unstable UI-core scheduling and window-thread orchestration (M1 S3).
-//! Scenes use physical pixel coordinates. No renderer or clock is selected here.
+//! Unstable retained UI, reactive mounting, and window-thread orchestration.
+//! Trees use logical coordinates; Scenes use physical pixels. Rendering and clocks
+//! remain selected by the application composition root.
 
 use oxiview_platform::{PhysicalSize, ResizeToken, WindowEndpoint, WindowEvent, WindowWaker};
-use oxiview_scene::{NodeId, Scene};
+use oxiview_scene::{NodeId as SceneNodeId, Scene};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     time::Duration,
 };
 
+mod ui;
+mod ui_projection;
+mod window_runtime;
+pub use ui::{
+    NodeId, NodeMeasure, NodeSemantics, PointerEventKind, UiBatchReport, UiCommandOutcome,
+    UiCommandSender, UiCommands, UiDiagnostics, UiDispatchResult, UiError, UiPointerEvent, UiTree,
+    View, component, for_each, keyed_for, node, show, text,
+};
+
 /// Failures terminate this window loop; affected state is never resumed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// A window-owned reactive task or executor operation failed.
+    #[error("window reactive runtime failed: {0}")]
+    Reactive(#[from] oxiview_reactive::ReactiveError),
+    /// Retained UI tree, layout, or event handling failed.
+    #[error("UI operation failed: {0}")]
+    Ui(#[from] UiError),
     /// Platform command or event reception failed.
     #[error("platform operation failed: {0}")]
     Platform(#[from] oxiview_platform::Error),
@@ -66,6 +82,17 @@ impl LatencyRecord {
             .checked_sub(self.input_capture_timestamp)
     }
 }
+/// Backend-clock observation of a frame submitted for presentation.
+/// This is submission evidence, not confirmation that the display scanned it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSubmission {
+    /// Backend timing supplied for this frame.
+    pub timing: FrameTiming,
+    /// Endpoint clock sampled after the presenter returned Presented.
+    pub submission_timestamp: Duration,
+    /// Input attribution, absent when this frame consumed no pending input.
+    pub latency: Option<LatencyRecord>,
+}
 /// Commands to the endpoint. Taking these outputs coalesces frame arming.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Schedule {
@@ -91,6 +118,10 @@ impl Scheduler {
     /// Requests a future frame; multiple requests coalesce to the earliest instant.
     pub fn request_at(&mut self, instant: Duration) {
         self.timed = Some(self.timed.map_or(instant, |old| old.min(instant)));
+    }
+    /// Cancels the timed deadline without discarding dirty work or an armed frame.
+    pub fn cancel_timed_request(&mut self) {
+        self.timed = None;
     }
     /// System repaint request.
     pub fn redraw(&mut self) {
@@ -153,7 +184,7 @@ pub struct PaintedScene {
     /// Retained scene instructions.
     pub scene: Scene,
     /// Subtree to present.
-    pub root: NodeId,
+    pub root: SceneNodeId,
 }
 /// Application code runs only on the window thread and need not be Send.
 pub trait Application {
@@ -176,7 +207,13 @@ pub trait Application {
     fn should_close(&mut self) -> bool {
         true
     }
-    /// Receives per-frame latency data after successful presentation.
+    /// Receives each successful submission, including frames without input.
+    /// Submission does not confirm display scanout. The default preserves the
+    /// existing `presented` callback and calls it exactly once.
+    fn frame_submitted(&mut self, frame: FrameSubmission) {
+        self.presented(frame.latency);
+    }
+    /// Receives optional input latency through the default submission hook.
     fn presented(&mut self, _record: Option<LatencyRecord>) {}
 }
 /// Result of a presentation attempt, independent of the renderer.
@@ -215,8 +252,17 @@ pub fn run_window<A: Application, P: Presenter>(
     // presenter before endpoint, and no state is accessed after an unwind.
     let result = catch_unwind(AssertUnwindSafe(move || {
         let mut endpoint = endpoint;
-        let (mut application, mut presenter) = initialize(&mut *endpoint)?;
-        window_loop(&mut *endpoint, &mut application, &mut presenter)
+        let runtime = window_runtime::WindowRuntime::new(endpoint.waker())?;
+        runtime.enter(|| {
+            let (mut application, mut presenter) = initialize(&mut *endpoint)?;
+            let result = window_loop_with_runtime(
+                &mut *endpoint,
+                &mut application,
+                &mut presenter,
+                &runtime,
+            );
+            runtime.finish(result)
+        })
     }));
     match result {
         Ok(result) => {
@@ -232,10 +278,27 @@ pub fn run_window<A: Application, P: Presenter>(
         }
     }
 }
+#[cfg(test)]
 fn window_loop(
     endpoint: &mut dyn WindowEndpoint,
     application: &mut impl Application,
     presenter: &mut impl Presenter,
+) -> Result<(), Error> {
+    let runtime = window_runtime::WindowRuntime::new(endpoint.waker())?;
+    runtime.enter(|| {
+        runtime.finish(window_loop_with_runtime(
+            endpoint,
+            application,
+            presenter,
+            &runtime,
+        ))
+    })
+}
+fn window_loop_with_runtime(
+    endpoint: &mut dyn WindowEndpoint,
+    application: &mut impl Application,
+    presenter: &mut impl Presenter,
+    runtime: &window_runtime::WindowRuntime,
 ) -> Result<(), Error> {
     let mut scheduler = Scheduler::default();
     let mut size = PhysicalSize {
@@ -246,6 +309,7 @@ fn window_loop(
     let mut pending_resize = None;
     scheduler.resize(size);
     let waker = endpoint.waker();
+    runtime.poll_ready()?;
     loop {
         let output = scheduler.schedule();
         if output.request_frame {
@@ -266,6 +330,11 @@ fn window_loop(
             application.event(&event, &mut scheduler, &waker)?;
             return Ok(());
         }
+        if matches!(event, WindowEvent::Wake) {
+            // Poll before application Wake handling so property bindings are ready
+            // for that callback's normal UI flush and scheduler invalidation.
+            runtime.poll_ready()?;
+        }
         match &event {
             WindowEvent::RedrawRequested => scheduler.redraw(),
             WindowEvent::ScaleFactorChanged { scale_factor } => scale = *scale_factor,
@@ -274,6 +343,10 @@ fn window_loop(
         application.event(&event, &mut scheduler, &waker)?;
         if let WindowEvent::PointerMoved { timestamp, .. }
         | WindowEvent::PointerButton { timestamp, .. }
+        | WindowEvent::PointerLeft { timestamp }
+        | WindowEvent::ActivationChanged { timestamp, .. }
+        | WindowEvent::VisibilityChanged { timestamp, .. }
+        | WindowEvent::PointerInterrupted { timestamp }
         | WindowEvent::Key { timestamp, .. } = &event
         {
             scheduler.input(*timestamp);
@@ -373,10 +446,18 @@ fn produce(
         presenter.present(&scene)?
     };
     if outcome == PresentationOutcome::Presented {
-        application.presented(scheduler.produced(timing, now()));
+        let submission_timestamp = now();
+        let latency = scheduler.produced(timing, submission_timestamp);
+        application.frame_submitted(FrameSubmission {
+            timing,
+            submission_timestamp,
+            latency,
+        });
     }
     Ok(outcome)
 }
 
+#[cfg(test)]
+mod frame_submission_tests;
 #[cfg(test)]
 mod tests;

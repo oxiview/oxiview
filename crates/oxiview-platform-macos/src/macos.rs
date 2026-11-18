@@ -1,9 +1,10 @@
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
-use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSView,
-    NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
@@ -663,6 +664,20 @@ define_class!(
         }); }
         #[unsafe(method(mouseMoved:))]
         fn moved(&self, event: &NSEvent) { boundary(|| self.pointer(event, None)); }
+        #[unsafe(method(mouseEntered:))]
+        fn entered(&self, event: &NSEvent) { boundary(|| self.pointer(event, None)); }
+        #[unsafe(method(mouseExited:))]
+        fn exited(&self, event: &NSEvent) { boundary(|| {
+            if let Some(w) = self.ivars().id.get().and_then(find) {
+                w.shared.emit(WindowEvent::PointerLeft { timestamp: seconds(event.timestamp()) });
+            }
+        }); }
+        #[unsafe(method(cancelOperation:))]
+        fn interrupted(&self, _: Option<&objc2::runtime::AnyObject>) { boundary(|| {
+            if let Some(w) = self.ivars().id.get().and_then(find) {
+                w.shared.emit(WindowEvent::PointerInterrupted { timestamp: native_time() });
+            }
+        }); }
         #[unsafe(method(mouseDragged:))]
         fn dragged(&self, event: &NSEvent) { boundary(|| self.pointer(event, None)); }
         #[unsafe(method(rightMouseDragged:))]
@@ -735,6 +750,7 @@ impl ContentView {
 }
 struct DelegateState {
     id: WindowId,
+    visible: Cell<bool>,
 }
 define_class!(
     // SAFETY: NSObject subclass with main-thread-only callbacks and owned ivars.
@@ -746,6 +762,36 @@ define_class!(
     unsafe impl NSObjectProtocol for Delegate {}
     // SAFETY: Exact NSWindowDelegate signatures, dispatched on AppKit's main thread.
     unsafe impl NSWindowDelegate for Delegate {
+        #[unsafe(method(windowDidBecomeKey:))]
+        fn became_key(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                self.activation(true);
+            });
+        }
+        #[unsafe(method(windowDidResignKey:))]
+        fn resigned_key(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                self.activation(false);
+            });
+        }
+        #[unsafe(method(windowDidMiniaturize:))]
+        fn miniaturized(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                self.visibility();
+            });
+        }
+        #[unsafe(method(windowDidDeminiaturize:))]
+        fn deminiaturized(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                self.visibility();
+            });
+        }
+        #[unsafe(method(windowDidChangeOcclusionState:))]
+        fn occlusion_changed(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                self.visibility();
+            });
+        }
         #[unsafe(method(windowDidChangeScreen:))]
         fn changed_screen(&self, _: &objc2_foundation::NSNotification) {
             boundary(|| {
@@ -793,6 +839,32 @@ define_class!(
         }
     }
 );
+impl Delegate {
+    fn activation(&self, active: bool) {
+        if let Some(w) = find(self.ivars().id) {
+            w.shared.emit(WindowEvent::ActivationChanged {
+                active,
+                timestamp: native_time(),
+            });
+        }
+    }
+
+    fn visibility(&self) {
+        if let Some(w) = find(self.ivars().id) {
+            // Occlusion notifications are only a cue to query true visibility;
+            // another window covering this one must not interrupt a drag.
+            let visible = w.window.isVisible()
+                && !w.window.isMiniaturized()
+                && !NSApplication::sharedApplication(self.mtm()).isHidden();
+            if self.ivars().visible.replace(visible) != visible {
+                w.shared.emit(WindowEvent::VisibilityChanged {
+                    visible,
+                    timestamp: native_time(),
+                });
+            }
+        }
+    }
+}
 fn button(code: isize) -> PointerButton {
     match code {
         0 => PointerButton::Primary,
@@ -1087,6 +1159,22 @@ impl EventLoopContext for Context {
         let view = ContentView::alloc(self.mtm).set_ivars(ViewState::default());
         // SAFETY: Correct NSView initializer and finite frame for a fresh allocation.
         let view: Retained<ContentView> = unsafe { msg_send![super(view), initWithFrame: rect] };
+        // SAFETY: The main-thread ContentView implements the exact mouse-entered
+        // and mouse-exited selectors, is retained for the view's lifetime, and no
+        // userInfo pointer is supplied. NSView retains the added tracking area.
+        let tracking = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                rect,
+                NSTrackingAreaOptions::MouseEnteredAndExited
+                    | NSTrackingAreaOptions::ActiveAlways
+                    | NSTrackingAreaOptions::InVisibleRect
+                    | NSTrackingAreaOptions::EnabledDuringMouseDrag,
+                Some(&view),
+                None,
+            )
+        };
+        view.addTrackingArea(&tracking);
         let feedback = Arc::new(presentation_probe::Feedback::default());
         #[cfg(feature = "diagnostics")]
         feedback
@@ -1162,7 +1250,10 @@ impl EventLoopContext for Context {
             .map_err(|_| failure("control poisoned"))?
             .push(shared.clone());
         view.ivars().id.set(Some(id));
-        let delegate = Delegate::alloc(self.mtm).set_ivars(DelegateState { id });
+        let delegate = Delegate::alloc(self.mtm).set_ivars(DelegateState {
+            id,
+            visible: Cell::new(false),
+        });
         // SAFETY: NSObject init initializes a fresh delegate allocation.
         let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
         window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));

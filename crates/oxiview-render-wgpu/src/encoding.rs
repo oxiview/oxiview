@@ -1,6 +1,7 @@
 use crate::{Error, PixelSize};
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, Primitive};
+use std::collections::HashMap;
 
 mod tiles;
 use tiles::Bounds;
@@ -8,9 +9,13 @@ use tiles::Bounds;
 // Word-addressed private protocol, mirrored in raster.wgsl. Header: width,
 // height, stack stride, tile-table offset. Each operation starts with opcode and next.
 // Draw: outer shape, inner shape, clip count, brush, then clip offsets.
+// Bordered fill (opcode 3): outer, inner, clip count, background brush, border
+// brush, then clip offsets. Shared coverage keeps the fill/stroke edge correlated.
 // SDF shape: MAX tag, inverse affine, bounds, TL/TR/BR/BL radii, scale.
 // Polygon: vertex count then xy pairs. Brush: inverse affine, gradient endpoints,
 // stop count, then (position, premultiplied linear RGBA) stops.
+// Image brushes use MAX as the stop count, followed by width, height, and an
+// offset into shared straight-RGBA8 pixel words; repeated glyph storage is deduplicated.
 pub(crate) struct Commands {
     words: Vec<u32>,
     pub(crate) depth: u32,
@@ -22,8 +27,10 @@ impl Commands {
             depth: 1,
         };
         let mut opacities = Vec::new();
+        let mut images = HashMap::new();
         let mut operations: Vec<(u32, Bounds)> = Vec::new();
-        for node in &scene.nodes {
+        let mut nodes = scene.nodes.iter().peekable();
+        while let Some(node) = nodes.next() {
             let start = result.words.len();
             let mut bounds = Bounds::EMPTY;
             match node {
@@ -53,16 +60,34 @@ impl Commands {
                     let Ok(inverse) = transform.inverse() else {
                         continue;
                     };
-                    let (rect, radii, width, brush) = match primitive {
-                        Primitive::Fill(rect, radii, brush) => (*rect, *radii, None, brush),
+                    let boxed = bordered_fill(node, nodes.peek().copied());
+                    if boxed.is_some() {
+                        nodes.next();
+                    }
+                    let (mut rect, mut radii, mut width, brush, image) = match primitive {
+                        Primitive::Fill(rect, radii, brush) => {
+                            (*rect, *radii, None, Some(brush), None)
+                        }
                         Primitive::Stroke(rect, radii, width, brush) => {
-                            (*rect, *radii, Some(*width), brush)
+                            (*rect, *radii, Some(*width), Some(brush), None)
+                        }
+                        Primitive::Image(rect, image) => {
+                            (*rect, CornerRadii::default(), None, None, Some(image))
                         }
                     };
+                    if let Some(boxed) = &boxed {
+                        rect = boxed.rect;
+                        radii = boxed.radii;
+                        width = Some(boxed.width);
+                    }
                     if width == Some(0.0) {
                         continue;
                     }
-                    result.words.extend([0, 0, 0, 0, count(clips.len())?, 0]);
+                    if boxed.is_some() {
+                        result.words.extend([3, 0, 0, 0, count(clips.len())?, 0, 0]);
+                    } else {
+                        result.words.extend([0, 0, 0, 0, count(clips.len())?, 0]);
+                    }
                     let clip_start = result.words.len();
                     result.words.resize(clip_start + clips.len(), 0);
                     let outer = result.shape(
@@ -94,7 +119,7 @@ impl Commands {
                         result.float(value)?;
                     }
                     match brush {
-                        Brush::Solid(color) => {
+                        Some(Brush::Solid(color)) => {
                             for value in [0.0, 0.0, 1.0, 0.0] {
                                 result.float(value)?;
                             }
@@ -102,7 +127,7 @@ impl Commands {
                             result.stop(0.0, *color)?;
                             result.stop(1.0, *color)?;
                         }
-                        Brush::LinearGradient(a, b, stops) => {
+                        Some(Brush::LinearGradient(a, b, stops)) => {
                             for value in [a.x(), a.y(), b.x(), b.y()] {
                                 result.float(value)?;
                             }
@@ -111,6 +136,41 @@ impl Commands {
                                 result.stop(stop.position, stop.color)?;
                             }
                         }
+                        None => {
+                            let image = image.ok_or_else(|| invalid("missing image source"))?;
+                            if image.width() == 0 || image.height() == 0 {
+                                return Err(invalid("empty image source"));
+                            }
+                            for value in rect.edges() {
+                                result.float(value)?;
+                            }
+                            result
+                                .words
+                                .extend([u32::MAX, image.width(), image.height(), 0]);
+                            let source_word = result.words.len() - 1;
+                            let key = (
+                                image.pixels().as_ptr().addr(),
+                                image.width(),
+                                image.height(),
+                            );
+                            let image_offset = if let Some(offset) = images.get(&key) {
+                                *offset
+                            } else {
+                                let offset = count(result.words.len())?;
+                                for pixel in image.pixels().chunks_exact(4) {
+                                    if let [r, g, b, a] = pixel {
+                                        result.words.push(u32::from_le_bytes([*r, *g, *b, *a]));
+                                    }
+                                }
+                                images.insert(key, offset);
+                                offset
+                            };
+                            result.set(source_word, image_offset)?;
+                        }
+                    }
+                    if let Some(boxed) = boxed {
+                        let offset = result.solid_brush(inverse, boxed.color)?;
+                        result.set(start + 6, offset)?;
                     }
                 }
             }
@@ -176,6 +236,20 @@ impl Commands {
             self.float(f64::from(value))?;
         }
         Ok(())
+    }
+    fn solid_brush(&mut self, inverse: Affine, color: Color) -> Result<u32, Error> {
+        let offset = count(self.words.len())?;
+        for value in inverse
+            .coefficients()
+            .into_iter()
+            .chain([0.0, 0.0, 1.0, 0.0])
+        {
+            self.float(value)?;
+        }
+        self.words.push(2);
+        self.stop(0.0, color)?;
+        self.stop(1.0, color)?;
+        Ok(offset)
     }
     fn empty_polygon(&mut self) -> Result<u32, Error> {
         let offset = count(self.words.len())?;
@@ -300,6 +374,83 @@ impl Commands {
         self.set(offset as usize, vertices)?;
         Ok(offset)
     }
+}
+
+struct BorderedFill {
+    rect: Rect,
+    radii: CornerRadii,
+    width: f64,
+    color: Color,
+}
+
+// A filled box followed immediately by its inside border represents correlated
+// coverage at the same outer edge. Averaging each draw independently and then
+// applying source-over twice makes that edge too opaque. Fuse only an exact
+// geometric match in the same opacity/clip scope; all other draws stay separate.
+fn bordered_fill(first: &EncodedNode, next: Option<&EncodedNode>) -> Option<BorderedFill> {
+    let EncodedNode::Draw {
+        primitive: Primitive::Fill(outer, outer_radii, Brush::Solid(_)),
+        transform,
+        clips,
+    } = first
+    else {
+        return None;
+    };
+    let EncodedNode::Draw {
+        primitive: Primitive::Stroke(rect, radii, width, Brush::Solid(color)),
+        transform: border_transform,
+        clips: border_clips,
+    } = next?
+    else {
+        return None;
+    };
+    if transform != border_transform
+        || !width.is_finite()
+        || *width <= 0.0
+        || rect.size().width() <= 0.0
+        || rect.size().height() <= 0.0
+    {
+        return None;
+    }
+    let inherited = border_clips == clips;
+    let own_clip = border_clips.len() == clips.len() + 1
+        && border_clips.get(..clips.len()) == Some(clips.as_slice())
+        && border_clips.last().is_some_and(|clip| {
+            clip.transform == *transform && clip.shape == Clip::RoundedRect(*outer, *outer_radii)
+        });
+    if !inherited && !own_clip {
+        return None;
+    }
+    let half = *width / 2.0;
+    let [left, top, right, bottom] = rect.edges();
+    let close = |a: f64, b: f64| (a - b).abs() <= 1.0e-9;
+    if !outer
+        .edges()
+        .into_iter()
+        .zip([left - half, top - half, right + half, bottom + half])
+        .all(|(a, b)| close(a, b))
+    {
+        return None;
+    }
+    let limit = rect.size().width().min(rect.size().height()) * 0.5;
+    if !radii
+        .values()
+        .into_iter()
+        .zip(outer_radii.values())
+        .all(|(inner, outer)| {
+            inner >= 0.0
+                && inner <= limit
+                && close(if inner == 0.0 { 0.0 } else { inner + half }, outer)
+        })
+    {
+        return None;
+    }
+    Some(BorderedFill {
+        rect: *rect,
+        radii: *radii,
+        width: *width,
+        color: *color,
+    })
 }
 fn count(value: usize) -> Result<u32, Error> {
     u32::try_from(value).map_err(|_| invalid("encoded scene exceeds GPU address space"))

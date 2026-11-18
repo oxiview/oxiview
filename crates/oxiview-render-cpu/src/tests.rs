@@ -19,6 +19,48 @@ fn pixel(image: &RgbaImage, x: usize, y: usize) -> &[u8] {
 }
 
 #[test]
+fn image_draw_preserves_scale_alpha_clips_and_following_paint() -> TestResult {
+    let image = RgbaImage::new(
+        PixelSize {
+            width: 2,
+            height: 1,
+        },
+        vec![255, 0, 0, 128, 0, 255, 0, 255],
+    )?;
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Transform(Affine::new([2.0, 0.0, 0.0, 2.0, 0.0, 0.0])),
+    )?;
+    let group = scene.insert(Some(root), 0, NodeKind::Opacity(0.5))?;
+    let clip = scene.insert(
+        Some(group),
+        0,
+        NodeKind::Clip(Clip::Rect(Rect::new(8.0, 8.0, 12.0, 12.0))),
+    )?;
+    scene.insert(
+        Some(clip),
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(8.0, 8.0, 16.0, 12.0), image)),
+    )?;
+    scene.insert(
+        Some(root),
+        1,
+        NodeKind::Draw(Primitive::Fill(
+            Rect::new(20.0, 8.0, 24.0, 12.0),
+            CornerRadii::default(),
+            Brush::Solid(blue()),
+        )),
+    )?;
+    let rendered = CpuRenderer.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 19, 19), [255, 0, 0, 64]);
+    assert_eq!(pixel(&rendered, 29, 19), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 43, 19), [0, 0, 255, 255]);
+    Ok(())
+}
+
+#[test]
 #[allow(clippy::panic)] // Assertions report test failures only.
 fn straight_alpha_and_group_compositing() -> TestResult {
     let image = render("opacity")?;

@@ -601,6 +601,42 @@ impl Driver {
             timestamp: timestamp.unwrap_or(now),
         })
     }
+    /// Injects a content-area pointer exit without canceling capture in the backend.
+    pub fn pointer_left(&self, id: WindowId, timestamp: Option<Duration>) -> Result<()> {
+        self.inject(id, |now| WindowEvent::PointerLeft {
+            timestamp: timestamp.unwrap_or(now),
+        })
+    }
+    /// Injects a window activation change in FIFO order.
+    pub fn activation_changed(
+        &self,
+        id: WindowId,
+        active: bool,
+        timestamp: Option<Duration>,
+    ) -> Result<()> {
+        self.inject(id, |now| WindowEvent::ActivationChanged {
+            active,
+            timestamp: timestamp.unwrap_or(now),
+        })
+    }
+    /// Injects a visibility change without changing virtual presentation policy.
+    pub fn visibility_changed(
+        &self,
+        id: WindowId,
+        visible: bool,
+        timestamp: Option<Duration>,
+    ) -> Result<()> {
+        self.inject(id, |now| WindowEvent::VisibilityChanged {
+            visible,
+            timestamp: timestamp.unwrap_or(now),
+        })
+    }
+    /// Injects an interruption without synthesizing a button release.
+    pub fn pointer_interrupted(&self, id: WindowId, timestamp: Option<Duration>) -> Result<()> {
+        self.inject(id, |now| WindowEvent::PointerInterrupted {
+            timestamp: timestamp.unwrap_or(now),
+        })
+    }
     /// Injects a raw key transition in FIFO order.
     pub fn key(
         &self,

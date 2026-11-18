@@ -1,4 +1,6 @@
-/// Integer output dimensions in physical pixels.
+use std::sync::Arc;
+
+/// Shared integer image dimensions in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PixelSize {
     /// Width in physical pixels; each adapter validates its own limits.
@@ -11,7 +13,7 @@ pub struct PixelSize {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RgbaImage {
     size: PixelSize,
-    pixels: Vec<u8>,
+    pixels: Arc<[u8]>,
 }
 impl RgbaImage {
     /// Validates byte length and normalizes transparent pixels to zero RGB.
@@ -29,7 +31,10 @@ impl RgbaImage {
                 *b = 0;
             }
         }
-        Ok(Self { size, pixels })
+        Ok(Self {
+            size,
+            pixels: pixels.into(),
+        })
     }
 
     /// Output width in pixels.

@@ -69,8 +69,11 @@ A reactive value whose dependencies can be tracked. Changes directly notify depe
 _Avoid_: State, Observable, Atom
 
 **Scope**:
-The owner of signals and effects. Destroying it releases all reactive resources it owns.
-_Avoid_: Owner, Context
+The owner of signals, effects, and local tasks. Destroying it releases the resources it owns.
+_Avoid_: Owner (for the owning scope), Context
+
+**Scope handle**:
+A non-owning reference to a reactive scope, represented by the `Owner` API.
 
 **Structural reconciliation**:
 Adding, removing, and moving nodes by key when view structure changes, such as in conditionals or lists. This is the framework's only update path that changes tree shape.
@@ -88,6 +91,21 @@ The input parameter struct of a component.
 **Node**:
 An element in the retained tree with style, layout results, and painting content, identified by `NodeId`.
 _Avoid_: Element, RenderObject
+
+**Node identity**:
+The opaque framework-owned `NodeId` value identifying a UI node within its owning tree.
+
+**Reserved node identity**:
+A `NodeId` assigned to a queued creation whose node does not yet exist.
+
+**Root node**:
+The unique top-level node of a window's retained UI tree.
+
+**Node mounting**:
+The attachment of a UI node to its parent in the retained tree.
+
+**Reparenting**:
+Changing the parent of an existing node together with its subtree.
 
 **Layout boundary**:
 A node whose size does not depend on its content, preventing layout changes in its subtree from propagating outward.
@@ -133,6 +151,25 @@ _Avoid_: text box, TextInput (these are widgets)
 Uncommitted IME composition text displayed inline at the cursor.
 _Avoid_: composition, candidate text
 
+**Pointer capture**:
+The temporary assignment of a pointer's move and button events and effective hover target to one node, independently of geometric hit testing.
+_Avoid_: capture phase, pointer lock
+
+**Event dispatch**:
+Delivery of one event to its target and any other recipients selected by its propagation rules.
+
+**Mutation command**:
+A queued request to change framework-owned node structure, styles, or pointer capture.
+
+**Command batch report**:
+An ordered record of the outcomes of mutation commands in one completed batch.
+
+**Hover path**:
+The structural ancestor chain from the window root to the node currently treated as hovered by a pointer.
+
+**Hover notification batch**:
+The ordered enter/leave notifications associated with one transition between hover paths.
+
 **Action**:
 A named user command independent of keys, triggered by shortcuts, menus, or code.
 _Avoid_: Command (to avoid confusion with the platform Cmd key), shortcut
@@ -149,6 +186,10 @@ _Avoid_: Display List, rendering commands
 
 **SDF fast path**:
 A dedicated rendering path that analytically draws common UI primitives, such as rounded rectangles, borders, and shadows, in shaders.
+
+**Stacking context**:
+A group of node content with internal painting order, treated as one atomic unit in its containing stacking context.
+_Avoid_: compositing layer, repaint boundary
 
 **Compositing layer**:
 A painting unit that can update independently and then compose with other layers. External textures also enter as layers.

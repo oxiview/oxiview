@@ -126,6 +126,81 @@ fn injected_events_preserve_capture_time_and_fifo() {
 }
 
 #[test]
+fn pointer_exit_and_interruption_remain_distinct_and_preserve_fifo() {
+    run(|mut endpoint, driver| {
+        let id = endpoint.id();
+        let outside = Point::new(-24.0, 85.0);
+        driver.advance_to(ms(20)).unwrap();
+        driver.pointer_left(id, Some(ms(4))).unwrap();
+        driver.pointer_moved(id, outside, Some(ms(5))).unwrap();
+        driver
+            .pointer_button(id, PointerButton::Primary, false, outside, Some(ms(6)))
+            .unwrap();
+        driver.activation_changed(id, false, Some(ms(7))).unwrap();
+        driver.visibility_changed(id, false, Some(ms(8))).unwrap();
+        driver.pointer_interrupted(id, None).unwrap();
+        driver.visibility_changed(id, true, None).unwrap();
+        driver.activation_changed(id, true, None).unwrap();
+
+        let expected = [
+            WindowEvent::PointerLeft { timestamp: ms(4) },
+            WindowEvent::PointerMoved {
+                position: outside,
+                timestamp: ms(5),
+            },
+            WindowEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed: false,
+                position: outside,
+                timestamp: ms(6),
+            },
+            WindowEvent::ActivationChanged {
+                active: false,
+                timestamp: ms(7),
+            },
+            WindowEvent::VisibilityChanged {
+                visible: false,
+                timestamp: ms(8),
+            },
+            WindowEvent::PointerInterrupted { timestamp: ms(20) },
+            WindowEvent::VisibilityChanged {
+                visible: true,
+                timestamp: ms(20),
+            },
+            WindowEvent::ActivationChanged {
+                active: true,
+                timestamp: ms(20),
+            },
+        ];
+        for event in expected {
+            assert_eq!(endpoint.wait_event().unwrap(), event);
+        }
+        assert_eq!(endpoint.poll_event().unwrap(), None);
+        assert_eq!(driver.counters(id).unwrap().frames, 0);
+    });
+}
+
+#[test]
+fn lifecycle_input_is_rejected_after_window_destruction() {
+    run(|mut endpoint, driver| {
+        let id = endpoint.id();
+        endpoint.request_close().unwrap();
+        assert_eq!(endpoint.wait_event().unwrap(), WindowEvent::Destroyed);
+        for result in [
+            driver.pointer_left(id, None),
+            driver.activation_changed(id, false, None),
+            driver.visibility_changed(id, false, None),
+            driver.pointer_interrupted(id, None),
+        ] {
+            assert!(matches!(
+                result,
+                Err(DriverError::Platform(Error::WindowDestroyed))
+            ));
+        }
+    });
+}
+
+#[test]
 fn resize_ack_supersession_zero_size_and_main_thread_wait() {
     let (platform, d) = HeadlessPlatform::new(ms(10)).unwrap();
     thread::scope(|scope| {

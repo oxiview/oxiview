@@ -30,3 +30,12 @@ Language: **English**
 | [0024](0024-project-name-oxiview.md) | Project name: oxiview | Engineering |
 | [0025](0025-owned-native-surface-handle.md) | Owned native surface handle and one unsafe constructor declaration in oxiview-base | 2 Platform abstraction |
 | [0026](0026-m1-native-latency-gates.md) | M1 native latency gates: one-interval submission and actual presentation within a human-recorded baseline margin | Performance |
+| [0027](0027-z-index-stacking-contexts.md) | Z-index: CSS stacking contexts for supported typed properties | 7 Styling and themes / 11 Rendering |
+| [0028](0028-pointer-capture-ownership-and-lifecycle.md) | Pointer capture: explicit ownership, lifecycle, and hover | 10 IME and input |
+| [0029](0029-deferred-event-handler-mutations.md) | Event handlers: deferred mutations and command validation | 6 Retained tree / invalidation / 10 IME and input |
+| [0030](0030-stationary-pointer-hover-updates.md) | Stationary pointer hover: explicit style opt-in | 7 Styling and themes / 10 IME and input |
+| [0031](0031-hover-transition-notification-batches.md) | Hover transitions: ordered notifications with deferred mutation | 6 Retained tree / invalidation / 10 IME and input |
+| [0032](0032-owned-generational-ui-node-identity.md) | UI nodes: identity, lifecycle, and structural edits | 6 Retained tree / invalidation |
+| [0033](0033-hover-lifecycle-cleanup.md) | Hover lifecycle: cleanup before removal and suppression | 6 Retained tree / invalidation / 10 IME and input |
+| [0034](0034-pointer-input-processing-order.md) | Pointer input: stable dispatch and ordered command application | 6 Retained tree / invalidation / 10 IME and input |
+| [0035](0035-node-owned-reactive-scopes.md) | Reactive ownership: node scopes follow retained subtree moves | 4 State and reactivity / 6 Retained tree / invalidation |

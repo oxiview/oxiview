@@ -1,6 +1,6 @@
 # oxiview engineering conventions
 
-oxiview is a self-drawn Rust UI framework exclusively for native macOS / Windows / Linux desktop platforms. Milestones M-1 through M1 are complete. M2, node trees and layout, is next.
+oxiview is a self-drawn Rust UI framework exclusively for native macOS / Windows / Linux desktop platforms. Milestones M-1 through M1 are complete. M2-M4 implementation is in progress, with a real-font Snake demo integrating retained nodes, reactive components, and optional view! syntax. Consult the milestone plans for implemented scope and outstanding acceptance.
 
 ## Hard rules
 

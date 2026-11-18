@@ -1,6 +1,8 @@
 // Coverage-weighted ordered compositing runs once at each pixel center.
 // Each invocation owns one pixel and its opacity stack. Only polygon coverage
 // uses sixteen subpixel inside tests; paint and compositing are not supersampled.
+// A matched filled box and inside border share one outer/inner coverage result
+// so their common antialiased boundary is not composited twice.
 @group(0) @binding(0) var<storage, read> words: array<u32>;
 @group(0) @binding(1) var<storage, read_write> layers: array<vec4<f32>>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
@@ -52,11 +54,30 @@ fn srgb(v: vec3<f32>) -> vec3<f32> {
     let c = max(v, vec3(0.0));
     return select(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, 12.92 * c, c <= vec3(0.0031308));
 }
+// Shared straight-sRGB image data lives once in the command-buffer atlas.
+// Filter premultiplied colors so transparent pixels cannot introduce fringes.
+fn image_pixel(offset: u32, size: vec2<u32>, p: vec2<i32>) -> vec4<f32> {
+    let xy = vec2<u32>(clamp(p, vec2<i32>(0), vec2<i32>(size) - vec2<i32>(1)));
+    let packed = words[offset + xy.y * size.x + xy.x];
+    let value = vec4<f32>(f32(packed & 255u), f32((packed >> 8u) & 255u),
+                          f32((packed >> 16u) & 255u), f32(packed >> 24u)) / 255.0;
+    return vec4(value.rgb * value.a, value.a);
+}
 fn paint(offset: u32, p: vec2<f32>) -> vec4<f32> {
     let local = vec2(scalar(offset)*p.x + scalar(offset+2u)*p.y + scalar(offset+4u),
                      scalar(offset+1u)*p.x + scalar(offset+3u)*p.y + scalar(offset+5u));
     let start = point(offset+6u);
     let delta = point(offset+8u) - start;
+    if words[offset+10u] == 0xffffffffu {
+        let size = vec2<u32>(words[offset+11u], words[offset+12u]);
+        let data = words[offset+13u];
+        let uv = (local - start) / delta * vec2<f32>(size) - vec2(0.5);
+        let base = vec2<i32>(floor(uv));
+        let weight = fract(uv);
+        let a = mix(image_pixel(data,size,base), image_pixel(data,size,base+vec2<i32>(1,0)), weight.x);
+        let b = mix(image_pixel(data,size,base+vec2<i32>(0,1)), image_pixel(data,size,base+vec2<i32>(1,1)), weight.x);
+        return mix(a,b,weight.y);
+    }
     let length2 = dot(delta, delta);
     var t = 0.0;
     if length2 > 0.0 { t = dot(local-start, delta) / length2; }
@@ -99,6 +120,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             depth--;
             accumulated *= scalar(command+2u);
             accumulated += layers[base+depth] * (1.0-accumulated.a);
+        } else if op == 3u {
+            var outer = coverage(words[command+2u], p);
+            var inner = min(outer, coverage(words[command+3u], p));
+            for (var clip = 0u; clip < words[command+4u] && outer > 0.0; clip++) {
+                let covered = coverage(words[command+7u+clip], p);
+                outer = min(outer, covered);
+                inner = min(inner, covered);
+            }
+            if outer > 0.0 {
+                let background = paint(words[command+5u], p);
+                let border = paint(words[command+6u], p);
+                let border_over_background = border + background * (1.0-border.a);
+                let source = background * inner + border_over_background * (outer-inner);
+                accumulated = source + accumulated*(1.0-source.a);
+            }
         } else {
             var covered = max(coverage(words[command+2u], p) - coverage(words[command+3u], p), 0.0);
             for (var clip = 0u; clip < words[command+4u] && covered > 0.0; clip++) {

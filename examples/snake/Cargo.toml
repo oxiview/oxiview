@@ -1,0 +1,32 @@
+[package]
+name = "snake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxiview-base.workspace = true
+oxiview-app.workspace = true
+oxiview-core.workspace = true
+oxiview-platform.workspace = true
+oxiview-platform-headless.workspace = true
+oxiview-platform-macos.workspace = true
+oxiview-reactive.workspace = true
+oxiview-macros.workspace = true
+oxiview-style.workspace = true
+oxiview-text.workspace = true
+oxiview-scene.workspace = true
+oxiview-render-cpu.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+png.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+oxiview-render-wgpu.workspace = true

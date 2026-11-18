@@ -17,3 +17,22 @@ Each node maintains separate **style, layout, and paint** dirty flags. Style cha
 
 - Node types must be openly extensible: custom widgets define measurement, painting, and event handling, potentially through trait objects attached to arena nodes.
 - Derive the accessibility tree (decision 13) directly from this node tree instead of building a separate semantic tree.
+
+## M2 identity and lifecycle refinement
+
+[ADR-0032](0032-owned-generational-ui-node-identity.md) defines the opaque UI
+`NodeId` contract: tree ownership, reusable slots distinguished by generation,
+permanent stale-ID rejection, checked exhaustion, and a separate type from
+Scene identity. It also defines stable root identity, clearing descendants while
+preserving root styles/handlers, subtree removal, and whole-tree destruction.
+It also defines delayed creation with mounting on successful execution, ordered
+insertion, and same-tree movement using post-removal indices, preserving subtree
+identity and rejecting invalid edits atomically. Data or creation functions may
+precede live nodes without introducing another retained tree; every live node
+remains reachable from the root, with no independent live-node detach operation.
+Enqueueing actual creation reserves its `NodeId` without creating a live node;
+reads report "not yet created" until success, and creation failure permanently
+invalidates that ID. Deferred command validation and reporting remain unchanged.
+Node-owned resources are released in child-list-ordered postorder with an
+explicit stack, preserving parent resources through descendant cleanup.
+These contracts refine the node tree without replacing this arena-tree decision.

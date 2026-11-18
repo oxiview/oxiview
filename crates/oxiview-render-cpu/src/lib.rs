@@ -8,6 +8,7 @@
 use kurbo::Shape;
 use oxiview_base::{Color, CornerRadii, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, NodeId, Primitive, Scene};
+use std::{collections::HashMap, sync::Arc};
 use vello_cpu::{Pixmap, RenderContext, Resources, color, kurbo, peniko};
 
 pub use oxiview_scene::{PixelSize, RgbaImage};
@@ -40,7 +41,7 @@ impl Renderer for CpuRenderer {
             .encode(root)
             .map_err(|error| Error::SceneEncoding(error.to_string()))?;
         let mut context = RenderContext::new(width, height);
-        paint_scene(&mut context, &encoded);
+        paint_scene(&mut context, &encoded)?;
         let mut pixmap = Pixmap::new(width, height);
         context.render(&mut pixmap, &mut Resources::new());
         let pixels = pixmap
@@ -102,7 +103,8 @@ fn paint(context: &mut RenderContext, brush: &Brush) {
     }
 }
 
-fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) {
+fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) -> Result<(), Error> {
+    let mut images = HashMap::new();
     for node in &scene.nodes {
         match node {
             EncodedNode::BeginOpacity(opacity) => context.push_opacity_layer(*opacity as f32),
@@ -132,6 +134,55 @@ fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) {
                         context.set_stroke(kurbo::Stroke::new(*width));
                         context.stroke_path(&path(*rect, *radii));
                     }
+                    Primitive::Image(rect, image) => {
+                        let key = (
+                            image.pixels().as_ptr().addr(),
+                            image.width(),
+                            image.height(),
+                        );
+                        let pixmap = if let Some(pixmap) = images.get(&key) {
+                            Arc::clone(pixmap)
+                        } else {
+                            let (width, height) = dimensions(PixelSize {
+                                width: image.width(),
+                                height: image.height(),
+                            })?;
+                            let mut pixmap = Pixmap::new(width, height);
+                            for (destination, source) in pixmap
+                                .data_as_u8_slice_mut()
+                                .chunks_exact_mut(4)
+                                .zip(image.pixels().chunks_exact(4))
+                            {
+                                if let ([r, g, b, a], [dr, dg, db, da]) = (source, destination) {
+                                    let premultiply = |channel: u8| {
+                                        ((u16::from(channel) * u16::from(*a) + 127) / 255) as u8
+                                    };
+                                    *dr = premultiply(*r);
+                                    *dg = premultiply(*g);
+                                    *db = premultiply(*b);
+                                    *da = *a;
+                                }
+                            }
+                            let pixmap = Arc::new(pixmap);
+                            images.insert(key, Arc::clone(&pixmap));
+                            pixmap
+                        };
+                        context.set_paint(vello_cpu::Image {
+                            image: vello_cpu::ImageSource::Pixmap(pixmap),
+                            sampler: peniko::ImageSampler::default(),
+                        });
+                        let [left, top, right, bottom] = rect.edges();
+                        context.set_paint_transform(kurbo::Affine::new([
+                            (right - left) / f64::from(image.width()),
+                            0.0,
+                            0.0,
+                            (bottom - top) / f64::from(image.height()),
+                            left,
+                            top,
+                        ]));
+                        context.fill_path(&path(*rect, CornerRadii::default()));
+                        context.reset_paint_transform();
+                    }
                 }
                 for _ in clips {
                     context.pop_clip();
@@ -140,6 +191,7 @@ fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) {
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,5 +1,105 @@
 # Dependency management
 
+## M4 static font text (2026-11-17)
+
+The text port pins `parley =0.13.0` and `swash =0.2.10`, implementing the
+previously selected Rust shaping/rasterization direction in ADR-0010. Both
+offer MIT or Apache-2.0 license branches accepted by this workspace.
+[Parley release metadata](https://docs.rs/crate/parley/0.13.0) records the
+2026-11-12 release and Rust 1.88 minimum; its recent 0.11/0.12/0.13 releases
+and the [maintained upstream repository](https://github.com/linebender/parley)
+establish current development activity.
+[Swash metadata](https://docs.rs/crate/swash/0.2.10) records the 2026-07-17
+release and the [upstream scaling implementation](https://github.com/dfrg/swash)
+supplies hinting and grayscale/color glyph rasterization. The selected build
+compiles on this workspace's Rust 1.97 toolchain. The packages are approximately
+597 kB and 1.3 MB of source respectively, before transitive dependencies.
+
+Parley disables defaults and explicitly enables `system` and `complex-scripts`;
+the latter enables the ICU-backed complex-script/segmentation path used by the
+Unicode tests. Fontique 0.13.0 discovers and resolves fonts, HarfRust 0.15.0
+shapes glyphs, and Parley supplies line breaking, bidi ordering, and metrics.
+Swash enables only `std`, `scale`, and `render`. Shaping, paragraph layout, and
+glyph rasterization operate on font bytes in Rust. Fontique's system discovery
+uses platform bindings: CoreText for font discovery on macOS, and Fontconfig
+bindings/system availability on Linux. The implementation does not ask CoreText
+to shape or lay out text. No font server, browser, or external rendering process
+is introduced.
+
+The initial resolution added 39 packages across all targets, including the
+ICU data crates, Fontique/Parley/HarfRust, Swash/Zeno/Yazi, and platform font
+discovery support. Parley reuses existing Peniko/resource-handle dependencies.
+Swash currently needs Skrifa 0.44/read-fonts 0.41 while the existing graph uses
+Skrifa 0.49/read-fonts 0.46; these duplicate versions are retained deliberately
+instead of an unreviewed patch or rasterizer substitution. The standard library
+and existing workspace provided neither shaping/fallback nor glyph masks.
+All direct text dependencies stay in `oxiview-text`; public text/layout/image
+APIs expose only framework-owned or standard-library types. Advisory and full
+license validation remain the normal integrated `cargo xtask deps` gate.
+
+`PixelSize` and immutable `RgbaImage` now belong to `oxiview-base`, shared by
+the text and Scene contexts; Scene reexports preserve existing renderer imports.
+Raw RGBA validation uses the foundation's owned `Error::InvalidImage`. Text
+returns owned positioned `GlyphImage { rect, image }` records, and core converts
+them into Scene primitives. This preserves the existing text-to-base dependency
+boundary without a text-to-Scene dependency or duplicate pixel storage.
+The Scene image primitive references that shared straight-sRGB RGBA8 data. Both renderers
+convert/filter premultiplied pixels; the GPU interpreter samples a deduplicated
+command-buffer image atlas and composites text with existing clips and opacity.
+It does not CPU-rasterize the whole frame. The glyph cache is bounded and DPI
+aware. Large-text vector glyphs, full COLRv1 painting, and a Vello GPU backend
+migration are not claimed by this initial text implementation.
+
+Unmodified Noto Sans and Noto Sans Arabic test fonts are vendored under SIL OFL
+1.1 with their license texts, pinned source URLs, and SHA-256 hashes in the
+[font fixture manifest](../../crates/oxiview-text/tests/fonts/README.md). They
+are test assets, not Cargo dependencies; their redistribution terms are carried
+with the files. Tests can register them without system font discovery, a display
+session, or network access. No snapshot baseline was accepted as part of adding
+these fixtures.
+
+## M2 layout adapter (2026-11-17)
+
+`taffy =0.15.1` implements the previously selected layout backend in ADR-0009.
+It is pure Rust, licensed MIT, and declares Rust 1.71 as its minimum version;
+the selected build is checked with this workspace's Rust 1.97 toolchain.
+[Release metadata](https://docs.rs/crate/taffy/0.15.1) records the 2026-10-25
+release, following several 2026 releases, and the
+[upstream release history](https://github.com/DioxusLabs/taffy/releases)
+documents continued fixes to layout and positioning. Advisory status is checked
+by the existing local `cargo xtask deps` gate rather than inferred from release
+activity.
+
+Enable only `std`, `flexbox`, `grid`, `block_layout`, and `content_size` with
+default features disabled. The selected normal dependency graph adds Taffy
+itself and reuses the already resolved `smallvec 1.16.5`; it does not add native
+build tools, a parser, a second slotmap, or a duplicate geometry dependency.
+The source package is approximately 1.4 MB according to release metadata.
+The standard library and existing workspace crates do not provide Flex/Grid/
+Block algorithms. The dependency remains confined to `oxiview-layout` behind
+owned style inputs, geometry, errors, and traversal/measurement interfaces.
+The adapter borrows the core tree and disables `taffy_tree`; it maintains no
+second authoritative parent/child topology. Parsing, float layout, calc values,
+balanced flex lines, and detailed grid diagnostics are disabled.
+
+The first preview used Taffy's cache only within each compute pass. The adapter
+now retains private per-node caches across successful passes, keyed by owned
+layout inputs, parent/ordered-child identities, and measurement revisions.
+Changes invalidate their ancestors; reparenting and display/positioning changes
+conservatively invalidate affected descendants. Private stable Taffy IDs keep
+cached out-of-flow candidates valid when traversal indices change. No second
+authoritative topology is introduced. Failure preserves previous geometry and
+caches. Core continues to skip clean and paint-only layout passes. Numerical
+fresh-versus-cached tests and per-branch measurement counters cover the supported
+cases; full benchmark and milestone acceptance remain separate.
+
+The preview supports 64 node levels including the root. A 256-level Block
+fixture overflowed the default Rust test-thread stack; lowering the bound to
+64 passed fixed-size deep-tree fixtures for Flex, Grid, and Block without
+increasing thread stack sizes. Structural validation and the adapter reject
+excessive depth before mutation or Taffy traversal. This is a measured preview
+bound, not a claim of arbitrary-depth layout support.
+
 ## Adding and upgrading dependencies
 
 Record the following assessments before adding a dependency. Recheck when an upgrade changes sources, licenses, or the dependency tree:

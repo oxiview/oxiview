@@ -4,6 +4,7 @@
 
 mod color;
 mod geometry;
+mod image;
 mod services;
 mod surface;
 #[cfg(test)]
@@ -13,12 +14,16 @@ mod tests;
 
 pub use color::Color;
 pub use geometry::{Affine, CornerRadii, Point, Rect, Size};
+pub use image::{PixelSize, RgbaImage};
 pub use services::{Clock, ManualClock, ManualRng, ManualScheduler, Rng, Scheduler};
 pub use surface::{NativeSurfaceHandle, NativeSurfaceKind};
 
 /// Recoverable foundation failures, independent of implementation libraries.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// Image dimensions and RGBA byte length disagree or overflow.
+    #[error("invalid image dimensions or RGBA byte length")]
+    InvalidImage,
     /// An affine matrix has no finite inverse.
     #[error("affine transform has no finite inverse")]
     NonInvertibleTransform,

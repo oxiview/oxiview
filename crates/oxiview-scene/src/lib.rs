@@ -11,8 +11,7 @@
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
 use std::collections::{BTreeMap, BTreeSet};
 
-mod image;
-pub use image::{PixelSize, RgbaImage};
+pub use oxiview_base::{PixelSize, RgbaImage};
 
 mod encoding;
 pub use encoding::{EncodedNode, EncodedScene, ResolvedClip};
@@ -57,6 +56,9 @@ pub enum Primitive {
     Fill(Rect, CornerRadii, Brush),
     /// Rounded rectangle with a centered stroke of the given width.
     Stroke(Rect, CornerRadii, f64, Brush),
+    /// Straight-sRGB image sampled into a logical destination rectangle.
+    /// Image storage is shared by clones; adapters filter premultiplied pixels.
+    Image(Rect, RgbaImage),
 }
 
 /// Content of a subtree node. Children are supported by every variant.
@@ -292,6 +294,17 @@ impl Scene {
                             return Err(Error::InvalidStrokeWidth);
                         }
                         brush
+                    }
+                    Primitive::Image(rect, image) => {
+                        if image.width() == 0
+                            || image.height() == 0
+                            || !rect.edges().iter().all(|value| value.is_finite())
+                            || rect.size().width() <= 0.0
+                            || rect.size().height() <= 0.0
+                        {
+                            return Err(Error::InvalidImage);
+                        }
+                        return Ok(());
                     }
                 };
                 if let Brush::LinearGradient(_, _, stops) = brush

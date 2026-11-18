@@ -1,4 +1,4 @@
-//! M1 native, on-demand pointer-following rectangle demo.
+//! Native on-demand M1 diagnostics and the interactive M2 layout preview.
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect, Size};
 use oxiview_core::{Application, FrameTiming, LatencyRecord, PaintedScene, Scheduler};
 use oxiview_platform::{PhysicalSize, WindowAttributes, WindowEvent, WindowWaker};
@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 
+mod layout_demo;
 #[cfg(target_os = "macos")]
 mod measurement;
 mod overlay;
@@ -160,12 +161,18 @@ fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
     let mut json = false;
     let mut debug_overlay = false;
     let mut fullscreen_check = false;
+    // The standalone preview bundle uses this executable name as its default mode.
+    let mut layout_demo = std::env::current_exe().ok().is_some_and(|path| {
+        path.file_name()
+            .is_some_and(|name| name == "oxiview-layout-lab")
+    });
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" => json = true,
             "--debug-overlay" => debug_overlay = true,
             "--fullscreen-check" => fullscreen_check = true,
+            "--layout-demo" => layout_demo = true,
             "--measure-latency" => {
                 let count: usize = args.next().ok_or("missing sample count")?.parse()?;
                 if count == 0 || count > 100_000 {
@@ -184,11 +191,17 @@ fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument: {arg}; usage: window [--headless | --idle-check seconds [--json] | --measure-latency samples [--json] | --fullscreen-check [--debug-overlay] [--json]]"
+                    "unknown argument: {arg}; usage: window [--layout-demo [--headless] | --headless | --idle-check seconds [--json] | --measure-latency samples [--json] | --fullscreen-check [--debug-overlay] [--json]]"
                 )
                 .into());
             }
         }
+    }
+    if layout_demo {
+        if idle.is_some() || samples.is_some() || json || fullscreen_check || debug_overlay {
+            return Err("--layout-demo supports only --headless; M1 measurement and overlay modes keep their original workload".into());
+        }
+        return layout_demo::run(headless, presents);
     }
     if debug_overlay && (idle.is_some() || samples.is_some() || headless) {
         return Err("--debug-overlay requires a native window and is supported only interactively or with --fullscreen-check".into());

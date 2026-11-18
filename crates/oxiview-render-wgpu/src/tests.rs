@@ -25,6 +25,189 @@ fn pixel(image: &RgbaImage, x: usize, y: usize) -> &[u8] {
 }
 
 #[test]
+fn image_draw_preserves_scale_alpha_clips_and_following_paint() -> TestResult {
+    let image = RgbaImage::new(
+        PixelSize {
+            width: 2,
+            height: 1,
+        },
+        vec![255, 0, 0, 128, 0, 255, 0, 255],
+    )?;
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Transform(Affine::new([2.0, 0.0, 0.0, 2.0, 0.0, 0.0])),
+    )?;
+    let group = scene.insert(Some(root), 0, NodeKind::Opacity(0.5))?;
+    let clip = scene.insert(
+        Some(group),
+        0,
+        NodeKind::Clip(Clip::Rect(Rect::new(8.0, 8.0, 12.0, 12.0))),
+    )?;
+    scene.insert(
+        Some(clip),
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(8.0, 8.0, 16.0, 12.0), image)),
+    )?;
+    scene.insert(
+        Some(root),
+        1,
+        fill(Rect::new(20.0, 8.0, 24.0, 12.0), blue()),
+    )?;
+    let rendered = RenderContext::new()?.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 19, 19), [255, 0, 0, 64]);
+    assert_eq!(pixel(&rendered, 29, 19), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 43, 19), [0, 0, 255, 255]);
+    Ok(())
+}
+
+#[test]
+fn repeated_image_draws_share_gpu_pixel_storage() -> TestResult {
+    let image = RgbaImage::new(
+        PixelSize {
+            width: 64,
+            height: 64,
+        },
+        vec![255; 64 * 64 * 4],
+    )?;
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Transform(Affine::IDENTITY))?;
+    scene.insert(
+        Some(root),
+        0,
+        NodeKind::Draw(Primitive::Image(
+            Rect::new(0.0, 0.0, 16.0, 16.0),
+            image.clone(),
+        )),
+    )?;
+    let once = encoding::Commands::new(&scene.encode(root)?, SIZE)?
+        .bytes()
+        .len();
+    scene.insert(
+        Some(root),
+        1,
+        NodeKind::Draw(Primitive::Image(
+            Rect::new(24.0, 0.0, 40.0, 16.0),
+            image.clone(),
+        )),
+    )?;
+    let twice = encoding::Commands::new(&scene.encode(root)?, SIZE)?
+        .bytes()
+        .len();
+    assert!(twice - once < image.pixels().len());
+    Ok(())
+}
+
+#[test]
+fn filled_box_border_shares_outer_edge_coverage() -> TestResult {
+    let gpu = RenderContext::new()?;
+    let outer = Rect::new(4.0, 4.0, 60.0, 60.0);
+    let radii = CornerRadii::uniform(24.0);
+    let background = Color::from_rgba8(18, 35, 30, 255);
+    let paper = Color::from_rgba8(245, 246, 239, 255);
+    for border in [
+        Color::from_rgba8(38, 61, 46, 255),
+        Color::from_rgba8(255, 0, 0, 128),
+    ] {
+        let mut scene = Scene::new();
+        let root = scene.insert(None, 0, fill(Rect::new(0.0, 0.0, 65.0, 64.0), paper))?;
+        scene.insert(
+            Some(root),
+            0,
+            NodeKind::Draw(Primitive::Fill(outer, radii, Brush::Solid(background))),
+        )?;
+        let clip = scene.insert(
+            Some(root),
+            1,
+            NodeKind::Clip(Clip::RoundedRect(outer, radii)),
+        )?;
+        scene.insert(
+            Some(clip),
+            0,
+            NodeKind::Draw(Primitive::Stroke(
+                Rect::new(4.5, 4.5, 59.5, 59.5),
+                CornerRadii::uniform(23.5),
+                1.0,
+                Brush::Solid(border),
+            )),
+        )?;
+        let actual = gpu.render(&scene, root, SIZE)?;
+
+        // At this outer-edge pixel, the inside border fully replaces the box
+        // background wherever the shape covers. Compare with the corresponding
+        // single fill, rather than accepting opacity from two averaged edges.
+        let foreground = border.to_srgb();
+        let behind = background.to_srgb();
+        let effective = [
+            foreground[0] * foreground[3] + behind[0] * (1.0 - foreground[3]),
+            foreground[1] * foreground[3] + behind[1] * (1.0 - foreground[3]),
+            foreground[2] * foreground[3] + behind[2] * (1.0 - foreground[3]),
+        ]
+        .map(|value| (value * 255.0).round() as u8);
+        let mut reference = Scene::new();
+        let reference_root =
+            reference.insert(None, 0, fill(Rect::new(0.0, 0.0, 65.0, 64.0), paper))?;
+        reference.insert(
+            Some(reference_root),
+            0,
+            NodeKind::Draw(Primitive::Fill(
+                outer,
+                radii,
+                Brush::Solid(Color::from_rgba8(
+                    effective[0],
+                    effective[1],
+                    effective[2],
+                    255,
+                )),
+            )),
+        )?;
+        let expected = gpu.render(&reference, reference_root, SIZE)?;
+        for (actual, expected) in pixel(&actual, 12, 9).iter().zip(pixel(&expected, 12, 9)) {
+            assert!(
+                actual.abs_diff(*expected) <= 1,
+                "correlated outer edge differs: {actual} vs {expected}"
+            );
+        }
+        assert_eq!(pixel(&actual, 32, 32), [18, 35, 30, 255]);
+    }
+    Ok(())
+}
+
+#[test]
+fn differently_clipped_border_does_not_replace_background_coverage() -> TestResult {
+    let gpu = RenderContext::new()?;
+    let outer = Rect::new(4.0, 4.0, 60.0, 60.0);
+    let radii = CornerRadii::uniform(24.0);
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Draw(Primitive::Fill(outer, radii, Brush::Solid(blue()))),
+    )?;
+    let before = gpu.render(&scene, root, SIZE)?;
+    let clip = scene.insert(
+        Some(root),
+        0,
+        NodeKind::Clip(Clip::Rect(Rect::new(32.0, 0.0, 65.0, 64.0))),
+    )?;
+    scene.insert(
+        Some(clip),
+        0,
+        NodeKind::Draw(Primitive::Stroke(
+            Rect::new(4.5, 4.5, 59.5, 59.5),
+            CornerRadii::uniform(23.5),
+            1.0,
+            Brush::Solid(red()),
+        )),
+    )?;
+    let after = gpu.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&before, 12, 9), pixel(&after, 12, 9));
+    assert_ne!(pixel(&before, 51, 9), pixel(&after, 51, 9));
+    Ok(())
+}
+
+#[test]
 fn tiled_render_matches_unculled_scene_at_edges_and_nested_groups() -> TestResult {
     let context = RenderContext::new()?;
     let mut scene = Scene::new();

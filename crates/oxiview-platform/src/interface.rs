@@ -144,6 +144,33 @@ pub enum WindowEvent {
         /// Monotonic input capture time.
         timestamp: Duration,
     },
+    /// The pointer left the window's content area. This does not cancel capture:
+    /// a captured drag can continue receiving movement and release outside it.
+    PointerLeft {
+        /// Monotonic boundary-event capture time.
+        timestamp: Duration,
+    },
+    /// The window gained or lost input activation. Losing activation interrupts
+    /// pointer interactions independently of an ordinary pointer exit.
+    ActivationChanged {
+        /// Whether the window now has input activation.
+        active: bool,
+        /// Monotonic lifecycle-event capture time.
+        timestamp: Duration,
+    },
+    /// The window became visible or hidden/minimized. This reports window
+    /// visibility, not whether another window visually covers it.
+    VisibilityChanged {
+        /// Whether the window is visible and not minimized.
+        visible: bool,
+        /// Monotonic lifecycle-event capture time.
+        timestamp: Duration,
+    },
+    /// The system interrupted pointer delivery without a normal button release.
+    PointerInterrupted {
+        /// Monotonic interruption capture time.
+        timestamp: Duration,
+    },
     /// Raw physical key transition, without IME or key mapping.
     Key {
         /// Physical key.

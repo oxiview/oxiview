@@ -349,3 +349,21 @@ fn resize_token_waits_for_a_presented_retry() {
     assert_eq!(endpoint.requests, 1);
     assert_eq!(observed.lock().unwrap().acknowledgements, vec![token]);
 }
+#[test]
+fn cancel_timed_request_preserves_dirty_and_armed_work() {
+    let mut scheduler = Scheduler::default();
+    scheduler.request_at(Duration::from_millis(20));
+    scheduler.cancel_timed_request();
+    assert_eq!(scheduler.schedule().deadline, None);
+    scheduler.deadline_reached(Duration::from_millis(20));
+    assert!(!scheduler.schedule().request_frame);
+
+    scheduler.invalidate();
+    scheduler.request_at(Duration::from_millis(40));
+    assert!(scheduler.schedule().request_frame);
+    scheduler.cancel_timed_request();
+    let schedule = scheduler.schedule();
+    assert!(!schedule.request_frame);
+    assert_eq!(schedule.deadline, None);
+    assert!(scheduler.frame());
+}
