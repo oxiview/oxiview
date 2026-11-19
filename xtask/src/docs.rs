@@ -30,6 +30,11 @@ impl Check for DocsCheck {
             failures.push(format!("Cannot read documentation: {error}"));
             return (Status::Error, failures.join("\n"));
         }
+        if root.join("docs/performance").is_dir()
+            && let Err(error) = crate::perf_report::check(root)
+        {
+            failures.push(error);
+        }
         if failures.is_empty() {
             (
                 Status::Pass,

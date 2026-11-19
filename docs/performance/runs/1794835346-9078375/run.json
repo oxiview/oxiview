@@ -1,0 +1,12 @@
+{
+  "measured_at": 1794835346,
+  "head": "907837576282e331b14cf1f99dc97dae5099b2c0",
+  "dirty": true,
+  "implementation": "857e3d78f1ec00aebf0830d7c53a99000f29144c",
+  "label": [
+    "Recorded baseline",
+    "记录基线"
+  ],
+  "machine": "Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)",
+  "latency_decimals": 3
+}

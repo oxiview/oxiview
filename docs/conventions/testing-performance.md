@@ -20,6 +20,45 @@ Reports go to `target/xtask/report.json`. `performance.metrics` includes each cu
 
 ## Recording and updating
 
+### Publishing measurements in the READMEs
+
+The English and Chinese READMEs show the latest **five measurement
+campaigns in total**, ordered by measurement time. A campaign can include
+native benchmarks, animation samples, or both. Multiple samples at one
+resolution and duration produce one median. Keep independent before/after
+code states in separate campaigns, even when they share a Git HEAD.
+The [project history](../performance/history.md) retains every archived run,
+its full revision and its measurement artifacts.
+
+Capture the source revision **before** building and running the workload.
+Use an empty directory on each run and describe the actual machine, OS,
+toolchain and display. For example, from the repository root:
+
+```sh
+cargo xtask perf-report --start target/perf-run --machine "Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)"
+cargo xtask bench
+cp target/xtask/bench-results.json target/perf-run/bench.json
+cargo run --release -p animation-fps -- --objects 128 --measure 5 --json > target/perf-run/animation-windowed-1.json
+cargo run --release -p animation-fps -- --objects 128 --measure 5 --fullscreen --json > target/perf-run/animation-fullscreen-1.json
+cargo xtask perf-report --add target/perf-run
+cargo xtask perf-report --check
+```
+
+Include the workloads you measured. Save each animation repeat or longer
+observation under its own `animation-*.json` filename in that directory.
+`run.json` captures the full HEAD, its clean/dirty state and the measurement
+start time. Its `label` holds an English and a Chinese caption. The optional
+`implementation` field identifies the later commit that landed a measured
+working-tree change. The archive keeps distinct campaigns at the same HEAD.
+
+`--add` copies the reviewed inputs into `docs/performance/runs/` and refreshes
+the Markdown. Repeating the import with identical files is safe. To regenerate
+from existing records, run `cargo xtask perf-report`. Ordinary verification
+checks that both README excerpts and the archive match those records. Performance
+baseline updates still use the separate human-confirmed `bench --record` workflow.
+
+### Updating the regression baseline
+
 1. Close heavy workloads and confirm the current code and benchmark inputs are as intended.
 2. Run `cargo xtask bench --record` **only after human confirmation**. The command explicitly reports creation or replacement of `perf/baselines/<machine-id>.json`, which must be reviewed and committed. Default bench and verify never write baselines.
 3. Immediately run `cargo xtask bench` to confirm reproducibility. Investigate code and environment on regression; do not repeatedly record to hide failures.

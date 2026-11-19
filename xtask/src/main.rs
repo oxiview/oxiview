@@ -8,6 +8,7 @@ mod check;
 mod deps;
 mod docs;
 mod hooks;
+mod perf_report;
 mod report;
 mod scaffold;
 mod snapshot;
@@ -63,6 +64,26 @@ enum Task {
         #[arg(long)]
         record: bool,
     },
+    /// Refresh the bilingual README excerpts and complete performance history.
+    PerfReport {
+        /// Verify generated Markdown without updating files.
+        #[arg(long, conflicts_with_all = ["add", "start"])]
+        check: bool,
+        /// Archive a directory containing run.json and completed measurement artifacts.
+        #[arg(long, value_name = "RUN_DIRECTORY")]
+        add: Option<std::path::PathBuf>,
+        /// Capture the current Git HEAD and working-tree state before measuring.
+        #[arg(
+            long,
+            value_name = "RUN_DIRECTORY",
+            conflicts_with = "add",
+            requires = "machine"
+        )]
+        start: Option<std::path::PathBuf>,
+        /// Hardware, software and display configuration used for this run.
+        #[arg(long, requires = "start")]
+        machine: Option<String>,
+    },
     /// Create a crate registered in layers.toml without overwriting existing directories.
     NewCrate {
         /// Crate name.
@@ -115,6 +136,24 @@ fn doctor(root: &Path, report: &mut Report) {
 }
 
 fn run(task: Task, root: &Path, report: &mut Report) {
+    if let Task::PerfReport {
+        check,
+        add,
+        start,
+        machine,
+    } = task
+    {
+        report.checks.push(execute(
+            &perf_report::PerfReport {
+                check,
+                add,
+                start,
+                machine,
+            },
+            root,
+        ));
+        return;
+    }
     if let Task::InstallHooks { force, uninstall } = task {
         report
             .checks
@@ -177,6 +216,7 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         | Task::Deps
         | Task::Snapshot { .. }
         | Task::Bench { .. }
+        | Task::PerfReport { .. }
         | Task::InstallHooks { .. }
         | Task::NewCrate { .. } => Vec::new(),
     };

@@ -1,0 +1,24 @@
+{
+  "measured_at": 1794988411,
+  "head": "82a83254254c6eb4910604c303343c5dc14c02be",
+  "dirty": true,
+  "implementation": "4f78e14736a54a6ea6d9564371ed99558afff0b4",
+  "label": [
+    "Full retest after pacing fix",
+    "帧调度修复后完整复测"
+  ],
+  "machine": "Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)",
+  "pointer_probes": [
+    {
+      "visible": 56,
+      "inputs": 56,
+      "display_p95_ms": 39.997541
+    },
+    {
+      "visible": 55,
+      "inputs": 55,
+      "display_p95_ms": 42.35
+    }
+  ],
+  "continuous_submit_ms": 10.668542
+}

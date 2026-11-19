@@ -34,6 +34,7 @@ Prefix every command below with `cargo xtask`. Tools are never installed automat
 | `snapshot --review` | List pending snapshots for human review of actual / diff images |
 | `snapshot --accept <name\|crate/name\|all>` | Update snapshot baselines after human confirmation |
 | `bench` / `bench --record` | Compare this machine's performance baseline / record it after human confirmation |
+| `perf-report` / `perf-report --check` | Render or check the latest five measurement campaigns in both READMEs and the complete [performance history](docs/performance/history.md). Use `--start` and `--add` for [new measurements](docs/conventions/testing-performance.md). |
 | `new-crate <name> --context <context>` | Create a registered crate with inherited workspace settings; refuse overwrites |
 | `install-hooks` / `install-hooks --uninstall` | Optionally install a pre-push verify hook; `--force` backs up before overwriting; uninstall removes only matching hooks |
 | `doctor` | Check Rust 1.97 stable and cargo-deny; suggest installation commands for missing tools |

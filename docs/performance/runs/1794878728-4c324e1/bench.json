@@ -1,0 +1,232 @@
+{
+  "machine_id": "macos-8a09e0b60732277a",
+  "metrics": [
+    {
+      "baseline_value": 2854000.0,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": null,
+        "unit": "ns",
+        "value": 2807000.0
+      },
+      "details": null,
+      "hard_check_pass": null,
+      "name": "compare/image_compare/1024",
+      "status": "pass"
+    },
+    {
+      "baseline_value": 179600.0,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": null,
+        "unit": "ns",
+        "value": 174900.0
+      },
+      "details": null,
+      "hard_check_pass": null,
+      "name": "compare/image_compare/256",
+      "status": "pass"
+    },
+    {
+      "baseline_value": 0.0245752521067472,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": 0.1,
+        "unit": "%",
+        "value": 0.009365361759594827
+      },
+      "details": {
+        "cpu_percent": 0.009365361759594827,
+        "display_link_events": 0,
+        "frames": 0,
+        "interval_seconds": 30.00418,
+        "pass": true,
+        "submitted_frames": 0
+      },
+      "hard_check_pass": true,
+      "name": "idle_cpu_percent",
+      "status": "pass"
+    },
+    {
+      "baseline_value": 30.262043,
+      "current": {
+        "direction": "lower",
+        "refresh_interval_ms": 8.333333,
+        "regression_percent": 15.0,
+        "target": 34.80134945,
+        "unit": "ms",
+        "value": 27.303667
+      },
+      "details": {
+        "aggregation": "median of three p95 values",
+        "rounds": [
+          {
+            "compositor_offset_ms": 15.141678,
+            "max_ms": 34.275833999999996,
+            "p50_ms": 19.965335,
+            "p95_frames": 3.344920093796804,
+            "p95_ms": 27.874333,
+            "pass": true,
+            "pixel_gate": "requires human-recorded baseline; checked by xtask bench",
+            "refresh_interval_ms": 8.333333,
+            "samples": 120,
+            "submit_max_ms": 5.825167,
+            "submit_p50_ms": 2.163125,
+            "submit_p95_ms": 4.603335
+          },
+          {
+            "compositor_offset_ms": 14.398624,
+            "max_ms": 29.1485,
+            "p50_ms": 20.453083,
+            "p95_frames": 3.276440171057607,
+            "p95_ms": 27.303667,
+            "pass": true,
+            "pixel_gate": "requires human-recorded baseline; checked by xtask bench",
+            "refresh_interval_ms": 8.333333,
+            "samples": 120,
+            "submit_max_ms": 5.976959,
+            "submit_p50_ms": 2.684625,
+            "submit_p95_ms": 4.619542
+          },
+          {
+            "compositor_offset_ms": 14.119088,
+            "max_ms": 34.717834,
+            "p50_ms": 20.441459,
+            "p95_frames": 3.2438750497550024,
+            "p95_ms": 27.032291,
+            "pass": true,
+            "pixel_gate": "requires human-recorded baseline; checked by xtask bench",
+            "refresh_interval_ms": 8.333333,
+            "samples": 120,
+            "submit_max_ms": 6.572166,
+            "submit_p50_ms": 2.0295,
+            "submit_p95_ms": 4.679
+          }
+        ]
+      },
+      "hard_check_pass": true,
+      "name": "input_to_pixel_ms",
+      "status": "pass"
+    },
+    {
+      "baseline_value": 4.573207999999999,
+      "current": {
+        "direction": "lower",
+        "refresh_interval_ms": 8.333333,
+        "regression_percent": 10.0,
+        "target": 8.333333,
+        "unit": "ms",
+        "value": 4.619542
+      },
+      "details": {
+        "aggregation": "median of three p95 values",
+        "rounds": [
+          {
+            "compositor_offset_ms": 15.141678,
+            "max_ms": 34.275833999999996,
+            "p50_ms": 19.965335,
+            "p95_frames": 3.344920093796804,
+            "p95_ms": 27.874333,
+            "pass": true,
+            "pixel_gate": "requires human-recorded baseline; checked by xtask bench",
+            "refresh_interval_ms": 8.333333,
+            "samples": 120,
+            "submit_max_ms": 5.825167,
+            "submit_p50_ms": 2.163125,
+            "submit_p95_ms": 4.603335
+          },
+          {
+            "compositor_offset_ms": 14.398624,
+            "max_ms": 29.1485,
+            "p50_ms": 20.453083,
+            "p95_frames": 3.276440171057607,
+            "p95_ms": 27.303667,
+            "pass": true,
+            "pixel_gate": "requires human-recorded baseline; checked by xtask bench",
+            "refresh_interval_ms": 8.333333,
+            "samples": 120,
+            "submit_max_ms": 5.976959,
+            "submit_p50_ms": 2.684625,
+            "submit_p95_ms": 4.619542
+          },
+          {
+            "compositor_offset_ms": 14.119088,
+            "max_ms": 34.717834,
+            "p50_ms": 20.441459,
+            "p95_frames": 3.2438750497550024,
+            "p95_ms": 27.032291,
+            "pass": true,
+            "pixel_gate": "requires human-recorded baseline; checked by xtask bench",
+            "refresh_interval_ms": 8.333333,
+            "samples": 120,
+            "submit_max_ms": 6.572166,
+            "submit_p50_ms": 2.0295,
+            "submit_p95_ms": 4.679
+          }
+        ]
+      },
+      "hard_check_pass": true,
+      "name": "input_to_submit_ms",
+      "status": "pass"
+    },
+    {
+      "baseline_value": null,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": 0.0,
+        "unit": "frames",
+        "value": null
+      },
+      "details": null,
+      "hard_check_pass": null,
+      "name": "list_100k_scroll_dropped_frames",
+      "status": "pending"
+    },
+    {
+      "baseline_value": 4130000.0,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": null,
+        "unit": "ns",
+        "value": 2511000.0
+      },
+      "details": null,
+      "hard_check_pass": null,
+      "name": "render/sparse_ui/1",
+      "status": "pass"
+    },
+    {
+      "baseline_value": 7465000.0,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": null,
+        "unit": "ns",
+        "value": 4394000.0
+      },
+      "details": null,
+      "hard_check_pass": null,
+      "name": "render/sparse_ui/1000",
+      "status": "pass"
+    },
+    {
+      "baseline_value": 2842000.0,
+      "current": {
+        "direction": "lower",
+        "regression_percent": 10.0,
+        "target": null,
+        "unit": "ns",
+        "value": 2742000.0
+      },
+      "details": null,
+      "hard_check_pass": null,
+      "name": "render/sparse_ui/128",
+      "status": "pass"
+    }
+  ]
+}

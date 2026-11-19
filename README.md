@@ -55,7 +55,48 @@ Artifacts and the pass/fail manifest are written to `target/xtask/snake/`.
 bundle there. See the [M3 plan](docs/plans/m3-reactivity-and-components.md) and
 [M4 text/Snake plan](docs/plans/m4-text-and-snake.md) for scope and pending gates.
 
-## Continuous animation FPS
+## Performance
+
+<!-- oxiview-perf:start -->
+
+**Test system** · Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)
+
+### Window latency, idle CPU and offscreen rendering
+
+The macOS probe starts timing just before each synthetic AppKit pointer event is posted. It measures 120 events per round and reports the median of three round P95s. Submission ends when the presenter returns. Display latency ends at Metal’s actual presentation timestamp. The 1280 × 840 offscreen test includes scene encoding, GPU completion and RGBA readback.
+
+| Metric | Recorded baseline `9078375`\* | M1 acceptance `4c324e1`\* | Full retest after pacing fix `82a8325`\* |
+| --- | ---: | ---: | ---: |
+| Windowed input to submission, P95 | 4.573 ms | 4.620 ms | 4.3136 ms |
+| Windowed input to display, P95 | 30.262 ms | 27.304 ms | 27.1255 ms |
+| Idle process CPU (observation length) | 0.02458% (5 s) | 0.00937% (30 s) | 0.00820% (30 s) |
+| Idle frames submitted / presented / display-link events | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| Offscreen GPU, 1 sparse rounded rectangle | 4.130 ms | 2.511 ms | 2.267 ms |
+| Offscreen GPU, 128 sparse rounded rectangles | 2.842 ms | 2.742 ms | 2.487 ms |
+| Offscreen GPU, 1,000 sparse rounded rectangles | 7.465 ms | 4.394 ms | 4.272 ms |
+
+### Continuous animation and input latency
+
+The release build rendered 128 moving objects and the metrics panel at 2× scale after a 1 s warm-up. Displayed FPS counts Metal-confirmed presentations. Repeated runs are summarized by their median.
+
+| Run | Mode and physical pixels | Samples | Displayed FPS | Display gap P95 | Longer observation |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Before pacing fix `82a8325`\* | Windowed · 1920 × 1200 | 1 × 5 s | 119.6 | 8.34 ms | — |
+| Full retest after pacing fix `82a8325`\* | Windowed · 1920 × 1200 | 3 × 5 s | 119.6 | 8.34 ms | 119.35 FPS (1 × 20 s) |
+| Before pacing fix `82a8325`\* | Fullscreen FIFO · 3456 × 2168 | 1 × 5 s | 53.6 | 33.33 ms | — |
+| Full retest after pacing fix `82a8325`\* | Fullscreen FIFO · 3456 × 2168 | 3 × 5 s | 119.6 | 8.34 ms | 119.95 FPS (1 × 20 s) |
+
+Fullscreen pointer probes for Before pacing fix `82a8325`\* measured capture-to-display P95 at 50.2 ms and 50.4 ms. Metal presented 112 of 112 input markers.
+
+Fullscreen pointer probes for Full retest after pacing fix `82a8325`\* measured capture-to-display P95 at 40.0 ms and 42.4 ms. Metal presented 111 of 111 input markers. A separate sustained-input run measured input-to-submit P95 at 10.67 ms.
+
+An asterisk marks a measurement taken with local changes on top of the displayed Git HEAD. The archive identifies the commits that subsequently landed the measured changes.
+
+<!-- oxiview-perf:end -->
+
+[Full performance history](docs/performance/history.md) · [Measurement and update procedure](docs/conventions/testing-performance.md)
+
+### Reproduce the animation measurements
 
 Run `cargo run --release -p animation-fps` for the live panel. For a repeatable
 comparison, run these commands separately on the same display.

@@ -1,0 +1,20 @@
+{
+  "conditions": {
+    "objects": 128,
+    "pixel_width": 3456,
+    "pixel_height": 2168,
+    "scale": 2.0,
+    "fullscreen": true
+  },
+  "sample_seconds": 5.0,
+  "warmup_seconds": 1.0,
+  "refresh_hz_min": 120.0000048000002,
+  "refresh_hz_max": 120.0000048000002,
+  "submitted_frames": 598,
+  "displayed_frames": 598,
+  "submitted_fps": 119.6,
+  "displayed_fps": 119.6,
+  "display_gap_p95_ms": 8.335,
+  "paint_to_submit_p95_ms": 1.881833,
+  "submissions_not_displayed": 0
+}

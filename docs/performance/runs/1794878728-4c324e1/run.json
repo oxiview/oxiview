@@ -1,0 +1,12 @@
+{
+  "measured_at": 1794878728,
+  "head": "4c324e1bafd5a6a00c64f089cb81f5ab7fecddcb",
+  "dirty": true,
+  "implementation": "197da5edeea5369c293a1d09e11edd3c8c5a1a06",
+  "label": [
+    "M1 acceptance",
+    "M1 验收"
+  ],
+  "machine": "Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)",
+  "latency_decimals": 3
+}
