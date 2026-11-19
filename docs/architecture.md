@@ -41,6 +41,15 @@ in optional `.oxi` files. The procedural macro crate uses `oxiview-syntax` for
 file and inline views. The standalone `oxiview-lsp` uses the same grammar and
 keeps editor indexes outside the application runtime. [M3+1 sources](plans/m3-plus-1-oxi.md)
 
+The [view abstract syntax tree (AST)](../crates/oxiview-syntax/src/view/ast.rs)
+represents element tags, attributes, children and embedded Rust expressions.
+The parser builds it for both inline and external views. The compiler lowers
+it to Builders, while the [source binding pass](../crates/oxiview-syntax/src/bindings.rs)
+retains the original token ranges for navigation. For example, the `style`
+attribute selects the inherent method on the value returned by the current
+node factory. Component declarations and ordinary Rust items use syn's Rust
+syntax nodes during module compilation.
+
 For text, core uses `oxiview-text` to measure paragraphs and obtain positioned
 glyph images. Core adds these images to the Scene consumed by both renderers.
 The shared `RgbaImage` and `PixelSize` types live in `oxiview-base`.

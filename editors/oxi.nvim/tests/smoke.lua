@@ -68,7 +68,7 @@ local function check()
 
   local client, screen = attached()
   assert(client.offset_encoding == "utf-16")
-  for _, key in ipairs({ "gd", "gr", "K" }) do
+  for _, key in ipairs({ "gd", "gr", "gI", "gD", "gy", "K" }) do
     assert(not vim.tbl_isempty(vim.fn.maparg(key, "n", false, true)), "missing LazyVim mapping " .. key)
   end
   local call = position(screen, "<game_panel", 2)
@@ -91,6 +91,36 @@ local function check()
   assert(vim.wait(10000, function()
     return vim.api.nvim_buf_get_name(0) == base .. "/board.oxi"
   end), "gd did not open the board component")
+  local board = vim.api.nvim_get_current_buf()
+  local style = position(board, "style={overlay_surface()}", 1)
+  local function board_key(key)
+    vim.cmd.buffer(board)
+    vim.api.nvim_win_set_cursor(0, { style.line + 1, style.character })
+    vim.api.nvim_feedkeys(key, "mx", false)
+  end
+  for _, key in ipairs({ "gd", "gI", "gD", "gy" }) do
+    board_key(key)
+    assert(vim.wait(5000, function()
+      local path = vim.api.nvim_buf_get_name(0)
+      local text = vim.api.nvim_get_current_line()
+      if key == "gy" then return path:match("oxiview%-style/src/lib%.rs$") and text:find("struct Style", 1, true) end
+      return path:match("oxiview%-core/src/ui/view%.rs$") and text:find("fn style(", 1, true)
+    end), key .. " returned the wrong target for Node.style")
+  end
+  board_key("gr")
+  assert(vim.wait(10000, function()
+    for _, picker in ipairs(Snacks.picker.get()) do
+      for _, item in ipairs(picker:items()) do
+        if item.file == base .. "/board.oxi" then return true end
+      end
+    end
+    for _, item in ipairs(vim.fn.getqflist()) do
+      if vim.api.nvim_buf_get_name(item.bufnr) == base .. "/board.oxi" then return true end
+    end
+    return false
+  end), "gr did not list the Node.style references")
+  for _, picker in ipairs(Snacks.picker.get()) do picker:close() end
+  vim.cmd.cclose()
   vim.cmd.edit(vim.fn.fnameescape(base .. "/button_face.oxi"))
   local fragment_client, fragment = attached()
   assert(fragment_client.id == client.id, "expected one client per Cargo project")
@@ -107,7 +137,7 @@ local function check()
   vim.api.nvim_buf_set_lines(fragment, 0, -1, false, { "<Node/>" })
   assert(vim.wait(5000, function() return #vim.diagnostic.get(fragment) == 0 end), "stale diagnostic")
   check_icons(base)
-  print(("LazyVim .oxi acceptance passed (%s): explorer icons, highlighting, gd, hover, references, completion, symbols, captures and live diagnostics"):format(client.config.cmd[1]))
+  print(("LazyVim .oxi acceptance passed (%s): explorer icons, Node.style gd/gr/gI/gD/gy, component navigation, hover, completion, symbols, captures and live diagnostics"):format(client.config.cmd[1]))
 end
 
 local ok, err = xpcall(check, debug.traceback)

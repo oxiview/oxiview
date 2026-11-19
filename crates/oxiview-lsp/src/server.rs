@@ -170,11 +170,24 @@ fn query(ws: &mut Workspace, method: &str, args: Value) -> Result<Value, (ErrorC
             )
             .unwrap_or(Value::Null))
         }
-        "textDocument/definition" | "textDocument/completion" | "textDocument/hover" => {
+        "textDocument/definition"
+        | "textDocument/declaration"
+        | "textDocument/implementation"
+        | "textDocument/typeDefinition"
+        | "textDocument/completion"
+        | "textDocument/hover" => {
             let at = params::<CursorParams>(args).map_err(invalid)?;
             let path = path(&at.text_document).map_err(invalid)?;
             Ok(match method {
-                "textDocument/definition" => features::definition(ws, &path, at.position),
+                "textDocument/definition" | "textDocument/declaration" => {
+                    features::navigate(ws, &path, at.position, features::Navigation::Definition)
+                }
+                "textDocument/implementation" => {
+                    features::navigate(ws, &path, at.position, features::Navigation::Implementation)
+                }
+                "textDocument/typeDefinition" => {
+                    features::navigate(ws, &path, at.position, features::Navigation::Type)
+                }
                 "textDocument/completion" => features::completion(ws, &path, at.position),
                 _ => features::hover(ws, &path, at.position),
             }
@@ -213,7 +226,8 @@ fn request(ws: &mut Workspace, state: &mut State, req: Request) -> Response {
                     "capabilities":{"positionEncoding":"utf-16",
                     "textDocumentSync":{"openClose":true,"change":2,"save":true},
                     "completionProvider":{"triggerCharacters":["<"," ",":"]},"hoverProvider":true,
-                    "definitionProvider":true,"referencesProvider":true,
+                    "definitionProvider":true,"declarationProvider":true,"implementationProvider":true,
+                    "typeDefinitionProvider":true,"referencesProvider":true,
                     "documentSymbolProvider":true,"workspaceSymbolProvider":true}})
             }),
         (_, State::Starting) => Err((

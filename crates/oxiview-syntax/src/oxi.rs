@@ -63,6 +63,13 @@ fn expand_file(name: &LitStr, kind: Source) -> Result<TokenStream> {
 }
 
 pub(crate) fn module(input: ParseStream<'_>) -> Result<TokenStream> {
+    module_with_views(input, &mut |_| {})
+}
+
+pub(crate) fn module_with_views(
+    input: ParseStream<'_>,
+    observe: &mut impl FnMut(&ViewInput),
+) -> Result<TokenStream> {
     let mut items = TokenStream::new();
     while !input.is_empty() {
         let ahead = input.fork();
@@ -85,7 +92,7 @@ pub(crate) fn module(input: ParseStream<'_>) -> Result<TokenStream> {
         let body;
         let braces = braced!(body in input);
         let (ty, expression) = if is_view {
-            (quote!(::oxiview_core::View), view_body(&body)?)
+            (quote!(::oxiview_core::View), view_body(&body, observe)?)
         } else {
             (quote!(::oxiview_style::Style), style_body(&body)?)
         };
@@ -98,7 +105,7 @@ pub(crate) fn module(input: ParseStream<'_>) -> Result<TokenStream> {
     Ok(items)
 }
 
-fn view_body(body: ParseStream<'_>) -> Result<TokenStream> {
+fn view_body(body: ParseStream<'_>, observe: &mut impl FnMut(&ViewInput)) -> Result<TokenStream> {
     let mut setup = TokenStream::new();
     while !body.is_empty() {
         // A block statement or a qualified Rust call can start like a view root.
@@ -107,7 +114,9 @@ fn view_body(body: ParseStream<'_>) -> Result<TokenStream> {
         if (body.peek(Token![<]) || body.peek(syn::token::Brace))
             && (statement.is_err() || ahead.is_empty())
         {
-            let root = view::expand(body.parse::<ViewInput>()?)?;
+            let input = body.parse::<ViewInput>()?;
+            observe(&input);
+            let root = view::expand(input)?;
             return Ok(quote!(#setup #root));
         }
         statement?.to_tokens(&mut setup);

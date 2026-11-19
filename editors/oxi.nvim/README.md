@@ -35,15 +35,24 @@ The default command is `oxiview-lsp` on PATH.
 2. In [button_face.oxi](../../examples/snake-oxi/src/button_face.oxi), use
    `gd` on `title` or `pointer`. The server follows the embedding macro to
    the local binding in [controls.rs](../../examples/snake-oxi/src/controls.rs).
-3. Request completion after `<Node ` to see Builder attributes. Component
-   tags offer `props`. Named styles offer typed Style fields.
+3. In [board.oxi](../../examples/snake-oxi/src/board.oxi), put the cursor on
+   `style` in `<Node style={overlay_surface()}>`. Use `gd`, `gD` or `gI` to
+   open the concrete Rust `View::style` method, `gy` to open its `Style`
+   argument type, and `gr` to list references across external views, Rust
+   `view!` expressions and Rust calls with a resolvable receiver. On
+   `overlay_surface` itself, `gd` opens the local style function.
+   Completion after `<Node ` lists the Builder attributes.
 4. Change a closing tag to `</Wrong>`. The diagnostic points at the name as
    you type and clears when the tag matches again.
 
 Document and workspace symbols include named views, styles and Rust module
 items. The editor uses open buffer text, UTF-16 positions and the compiler's
-grammar. It indexes local Cargo workspace sources for definitions, imported
-aliases and captured names. Full Rust type inference, borrow checking and
+grammar. It indexes local Cargo workspace sources and path dependencies for
+definitions, imported aliases and captured names. The view AST supplies the
+binding between a markup token and its Rust target. Both `<Node>` and
+`</Node>` refer to the node factory. A component's `props` attribute refers
+to its input parameter, and a named style's fields refer to Rust struct
+fields. Full Rust type inference, borrow checking and
 trait method resolution belong to the Rust toolchain. Use
 `cargo check -p snake-oxi` for the compiler's type diagnostics.
 

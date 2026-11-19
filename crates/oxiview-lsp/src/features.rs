@@ -128,6 +128,8 @@ fn cursor(prefix: &str) -> Cursor<'_> {
 fn symbol_kind(kind: Kind) -> u32 {
     match kind {
         Kind::View | Kind::Function => 12,
+        Kind::Method => 6,
+        Kind::Field => 8,
         Kind::Style | Kind::Type => 23,
         Kind::Constant => 14,
         Kind::Module => 2,
@@ -173,18 +175,36 @@ pub fn workspace_symbols(ws: &Workspace, query: &str) -> Value {
     json!(result)
 }
 
-pub fn definition(ws: &Workspace, path: &Path, position: Position) -> Option<Value> {
+pub enum Navigation {
+    Definition,
+    Implementation,
+    Type,
+}
+
+pub fn navigate(
+    ws: &Workspace,
+    path: &Path,
+    position: Position,
+    kind: Navigation,
+) -> Option<Value> {
     let doc = &ws.files.get(path)?.doc;
     let pos = doc.byte(position)?;
-    if let Some(target) = ws.included_file(path, pos) {
+    if matches!(kind, Navigation::Definition)
+        && let Some(target) = ws.included_file(path, pos)
+    {
         let start = Position {
             line: 0,
             character: 0,
         };
         return Some(json!([{"uri":file_uri(&target),"range":{"start":start,"end":start}}]));
     }
-    let word = doc.name_at(pos)?;
-    let targets = ws.resolve(path, pos, &doc.path_at(&word));
+    let mut targets = match kind {
+        Navigation::Definition => ws.targets_at(path, pos),
+        Navigation::Implementation => ws.implementations_at(path, pos),
+        Navigation::Type => ws.types_at(path, pos),
+    };
+    targets.sort_by_key(|(p, _, d)| (*p, d.selection.start));
+    targets.dedup_by_key(|(p, _, d)| (*p, d.selection.start));
     (!targets.is_empty()).then(|| {
         json!(
             targets
@@ -198,7 +218,10 @@ pub fn definition(ws: &Workspace, path: &Path, position: Position) -> Option<Val
 pub fn hover(ws: &Workspace, path: &Path, position: Position) -> Option<Value> {
     let doc = &ws.files.get(path)?.doc;
     let pos = doc.byte(position)?;
-    let word = doc.name_at(pos)?;
+    let word = ws
+        .binding_at(path, pos)
+        .map(|b| b.range.clone())
+        .or_else(|| doc.name_at(pos))?;
     let name = doc.text.get(word.clone())?;
     let builtin = match cursor(doc.text.get(..word.start)?) {
         Cursor::Attribute("Node" | "node") => {
@@ -212,11 +235,15 @@ pub fn hover(ws: &Workspace, path: &Path, position: Position) -> Option<Value> {
         }
         _ => None,
     };
-    let locations = ws.resolve(path, pos, &doc.path_at(&word));
-    let value = if let Some(text) = builtin {
+    let locations = ws.targets_at(path, pos);
+    let value = if let Some((_, _, d)) = locations.first() {
+        let signature = format!("```rust\n{}\n```", d.detail);
+        builtin.map_or_else(
+            || signature.clone(),
+            |text| format!("{signature}\n\n{text}"),
+        )
+    } else if let Some(text) = builtin {
         format!("`{name}`\n\n{text}")
-    } else if let Some((_, _, d)) = locations.first() {
-        format!("```rust\n{}\n```", d.detail)
     } else if doc
         .facts
         .declarations
@@ -290,6 +317,8 @@ pub fn completion(ws: &Workspace, path: &Path, position: Position) -> Option<Val
                     }
                     let kind = match d.kind {
                         Kind::View | Kind::Style | Kind::Function => 3,
+                        Kind::Method => 2,
+                        Kind::Field => 5,
                         Kind::Constant => 21,
                         Kind::Local => 6,
                         Kind::Module => 9,
@@ -313,8 +342,7 @@ pub fn references(
 ) -> Option<Value> {
     let doc = &ws.files.get(path)?.doc;
     let at = doc.byte(position)?;
-    let word = doc.name_at(at)?;
-    let targets = ws.resolve(path, at, &doc.path_at(&word));
+    let targets = ws.targets_at(path, at);
     if targets.is_empty() {
         return None;
     }
@@ -323,6 +351,12 @@ pub fn references(
         .map(|(p, _, d)| (*p, d.selection.start))
         .collect();
     let mut names: BTreeSet<_> = targets.iter().map(|(_, _, d)| d.name.as_str()).collect();
+    if names.contains("node") {
+        names.insert("Node");
+    }
+    if targets.iter().any(|(_, _, d)| d.kind == Kind::Local) {
+        names.insert("props");
+    }
     loop {
         let count = names.len();
         for entry in ws.files.values() {
@@ -347,16 +381,13 @@ pub fn references(
             for bytes in entry.doc.facts.identifiers.get(*name).into_iter().flatten() {
                 let offset = bytes.end.saturating_sub(1);
                 let offset = entry.doc.text.floor_char_boundary(offset);
-                let Some(word) = entry.doc.name_at(offset) else {
-                    continue;
-                };
                 let is_definition = definitions.contains(&(file, bytes.start));
                 if is_definition && !declarations {
                     continue;
                 }
                 if is_definition
                     || ws
-                        .resolve(file, offset, &entry.doc.path_at(&word))
+                        .targets_at(file, offset)
                         .iter()
                         .any(|(p, _, d)| definitions.contains(&(*p, d.selection.start)))
                 {

@@ -3,10 +3,12 @@
 extern crate proc_macro;
 
 mod analysis;
+mod bindings;
 mod oxi;
 mod view;
 
 pub use analysis::{Analysis, Declaration, Import, Inclusion, Kind, Problem, analyze};
+pub use bindings::{Binding, BoundUse, MemberUse, SourcePath, ValueSource};
 pub use oxi::{Source, include};
 
 /// Releases standalone lexer source maps on a dedicated editor analysis thread.

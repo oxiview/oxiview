@@ -25,8 +25,13 @@ fn normalize(path: &Path) -> PathBuf {
 pub(crate) struct Workspace {
     roots: BTreeMap<PathBuf, bool>,
     packages: BTreeMap<PathBuf, String>,
+    cargo: cargo::Cargo,
     pub files: BTreeMap<PathBuf, Entry>,
     sites: BTreeMap<PathBuf, Vec<Site>>,
+    exports: BTreeMap<(Context, String), Vec<Slot>>,
+    aliases: BTreeMap<(Context, String), Vec<(Context, String)>>,
+    externs: BTreeMap<(Context, String), String>,
+    members: BTreeMap<String, Vec<Slot>>,
     refreshed: Option<Instant>,
 }
 
@@ -48,9 +53,14 @@ struct Site {
 struct Context {
     package: PathBuf,
     module: Vec<String>,
+    root_len: usize,
 }
 
 pub(crate) type Target<'a> = (&'a Path, &'a Document, &'a Declaration);
+type Slot = (PathBuf, usize);
+
+mod cargo;
+mod navigation;
 
 fn manifest(path: &Path) -> Option<toml::Value> {
     toml::from_str(&fs::read_to_string(path.join("Cargo.toml")).ok()?).ok()
@@ -89,6 +99,7 @@ impl Workspace {
         for (root, recursive) in &self.roots {
             collect(root, *recursive, &mut paths, &mut packages);
         }
+        self.cargo = cargo::discover(&mut paths, &mut packages);
         self.packages = packages;
         self.files
             .retain(|path, entry| entry.version.is_some() || paths.contains(path));
@@ -138,6 +149,77 @@ impl Workspace {
             }
         }
         self.sites = sites;
+        self.index_declarations();
+    }
+
+    fn index_declarations(&mut self) {
+        let mut exports = BTreeMap::<_, Vec<_>>::new();
+        let mut aliases = BTreeMap::<_, Vec<_>>::new();
+        let mut members = BTreeMap::<_, Vec<_>>::new();
+        self.externs.clear();
+        for (path, entry) in &self.files {
+            let externs: Vec<_> = entry
+                .doc
+                .facts
+                .imports
+                .iter()
+                .filter(|i| i.extern_crate && i.module.is_empty())
+                .collect();
+            if externs.is_empty() {
+                continue;
+            }
+            for ctx in self.contexts(path, &mut BTreeSet::new()) {
+                for i in &externs {
+                    if let Some(source) = i.path.first() {
+                        self.externs
+                            .insert((ctx.clone(), i.name.clone()), source.clone());
+                    }
+                }
+            }
+        }
+        for (path, entry) in &self.files {
+            let contexts = self.contexts(path, &mut BTreeSet::new());
+            for (i, decl) in entry.doc.facts.declarations.iter().enumerate() {
+                if decl.owner.is_some() {
+                    members
+                        .entry(decl.name.clone())
+                        .or_default()
+                        .push((path.clone(), i));
+                } else if decl.kind != Kind::Local && decl.scope == (0..entry.doc.text.len()) {
+                    for ctx in &contexts {
+                        let mut ctx = ctx.clone();
+                        ctx.module.extend_from_slice(&decl.module);
+                        exports
+                            .entry((ctx, decl.name.clone()))
+                            .or_default()
+                            .push((path.clone(), i));
+                    }
+                }
+            }
+            for import in &entry.doc.facts.imports {
+                if import.scope != (0..entry.doc.text.len()) || import.name == "*" {
+                    continue;
+                }
+                for ctx in &contexts {
+                    let mut ctx = ctx.clone();
+                    ctx.module.extend_from_slice(&import.module);
+                    if let Some(target) = self.qualify(ctx.clone(), &import.path) {
+                        aliases
+                            .entry((ctx, import.name.clone()))
+                            .or_default()
+                            .push(target);
+                    }
+                }
+            }
+        }
+        self.exports = exports;
+        self.aliases = aliases;
+        self.members = members;
+    }
+
+    fn target(&self, slot: &Slot) -> Option<Target<'_>> {
+        let (path, entry) = self.files.get_key_value(&slot.0)?;
+        Some((path, &entry.doc, entry.doc.facts.declarations.get(slot.1)?))
     }
 
     fn mode(&self, path: &Path) -> Option<Source> {
@@ -190,10 +272,15 @@ impl Workspace {
         visited.remove(path);
         if result.is_empty() {
             let package = self.package(path);
-            let relative = path
-                .strip_prefix(package.join("src"))
-                .or_else(|_| path.strip_prefix(package))
-                .unwrap_or(path);
+            let file = path.strip_prefix(package).unwrap_or(path);
+            let library = self.cargo.library_roots.get(package);
+            let relative = if library.is_some_and(|entry| entry == path) {
+                Path::new("")
+            } else {
+                library
+                    .and_then(|entry| path.strip_prefix(entry.parent()?).ok())
+                    .unwrap_or_else(|| file.strip_prefix("src").unwrap_or(file))
+            };
             let mut module: Vec<_> = relative
                 .with_extension("")
                 .iter()
@@ -205,9 +292,19 @@ impl Workspace {
             {
                 module.pop();
             }
+            let root_len = if file.starts_with("tests")
+                || file.starts_with("examples")
+                || file.starts_with("benches")
+                || file.starts_with("src/bin")
+            {
+                2.min(module.len())
+            } else {
+                0
+            };
             result.push(Context {
                 package: package.into(),
                 module,
+                root_len,
             });
         }
         result
@@ -231,12 +328,30 @@ impl Workspace {
         let (name, prefix) = path.split_last()?;
         let mut segments = prefix.iter().peekable();
         if let Some(first) = segments.peek() {
-            if first.as_str() == "crate" {
-                context.module.clear();
+            let mut root = context.clone();
+            root.module.truncate(root.root_len);
+            let external = self
+                .externs
+                .get(&(root.clone(), first.to_string()))
+                .unwrap_or(first);
+            if external == "crate" {
+                context = root;
                 segments.next();
-            } else if let Some((package, _)) = self.packages.iter().find(|(_, n)| *n == *first) {
+            } else if let Some(package) = self
+                .cargo
+                .dependencies
+                .get(&context.package)
+                .and_then(|deps| deps.get(external))
+                .or_else(|| {
+                    self.packages
+                        .iter()
+                        .find(|(_, n)| *n == external)
+                        .map(|(p, _)| p)
+                })
+            {
                 context.package = package.clone();
                 context.module.clear();
+                context.root_len = 0;
                 segments.next();
             }
         }
@@ -244,6 +359,9 @@ impl Workspace {
             match segment.as_str() {
                 "self" => {}
                 "super" => {
+                    if context.module.len() == context.root_len {
+                        return None;
+                    }
                     context.module.pop()?;
                 }
                 _ => context.module.push(segment.clone()),
@@ -258,37 +376,19 @@ impl Workspace {
         name: &str,
         seen: &mut BTreeSet<(Context, String)>,
     ) -> Vec<Target<'a>> {
-        if !seen.insert((context.clone(), name.into())) {
+        let key = (context.clone(), name.to_owned());
+        if !seen.insert(key.clone()) {
             return Vec::new();
         }
-        let mut targets = Vec::new();
-        for (path, entry) in &self.files {
-            for base in self.contexts(path, &mut BTreeSet::new()) {
-                if base.package != context.package {
-                    continue;
-                }
-                let Some(tail) = context.module.strip_prefix(base.module.as_slice()) else {
-                    continue;
-                };
-                for d in &entry.doc.facts.declarations {
-                    if d.kind != Kind::Local
-                        && d.scope == (0..entry.doc.text.len())
-                        && d.name == name
-                        && d.module == tail
-                    {
-                        targets.push((path.as_path(), &entry.doc, d));
-                    }
-                }
-                for import in &entry.doc.facts.imports {
-                    if import.module == tail
-                        && import.name == name
-                        && import.scope == (0..entry.doc.text.len())
-                        && let Some((next, leaf)) = self.qualify(context.clone(), &import.path)
-                    {
-                        targets.extend(self.exported(&next, &leaf, seen));
-                    }
-                }
-            }
+        let mut targets: Vec<_> = self
+            .exports
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter_map(|s| self.target(s))
+            .collect();
+        for (next, leaf) in self.aliases.get(&key).into_iter().flatten() {
+            targets.extend(self.exported(next, leaf, seen));
         }
         targets
     }
@@ -325,7 +425,9 @@ impl Workspace {
                 .filter(|d| {
                     d.name == *head
                         && (d.selection.contains(&pos)
-                            || (d.scope != (0..doc.text.len()) && d.scope.contains(&pos)))
+                            || (d.owner.is_none()
+                                && d.scope != (0..doc.text.len())
+                                && d.scope.contains(&pos)))
                 })
                 .max_by_key(|d| (d.selection.contains(&pos), d.scope.start, d.selection.start));
             if let Some(d) = local {
@@ -399,7 +501,8 @@ impl Workspace {
                         .declarations
                         .iter()
                         .filter(|d| {
-                            d.module == module
+                            d.owner.is_none()
+                                && d.module == module
                                 && (d.scope == (0..entry.doc.text.len()) || d.scope.contains(&pos))
                         })
                         .map(|d| d.name.clone()),
@@ -443,11 +546,7 @@ fn collect(
     packages: &mut BTreeMap<PathBuf, String>,
 ) {
     if let Some(cargo) = manifest(dir)
-        && let Some(name) = cargo
-            .get("lib")
-            .and_then(|lib| lib.get("name"))
-            .or_else(|| cargo.get("package")?.get("name"))
-            .and_then(|n| n.as_str())
+        && let Some(name) = cargo::package_name(&cargo)
     {
         packages.insert(dir.to_owned(), name.replace('-', "_"));
     }

@@ -7,22 +7,10 @@ use syn::{
     spanned::Spanned,
 };
 
-pub(crate) struct ViewInput {
-    core: Path,
-    root: Node,
-}
-struct Attribute {
-    name: Ident,
-    value: Expr,
-}
-enum Node {
-    Element {
-        tag: Path,
-        attributes: Vec<Attribute>,
-        children: Vec<Node>,
-    },
-    Expression(Box<Expr>),
-}
+pub(crate) mod ast;
+pub(crate) use ast::ViewInput;
+use ast::{Attribute, Node, builtin};
+
 impl Parse for ViewInput {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let core = if input.peek(Token![crate]) {
@@ -92,13 +80,14 @@ fn parse_node(input: ParseStream<'_>, depth: usize) -> Result<Node> {
         input.parse::<Token![>]>()?;
         return Ok(Node::Element {
             tag,
+            closing: None,
             attributes,
             children: Vec::new(),
         });
     }
     input.parse::<Token![>]>()?;
     let mut children = Vec::new();
-    loop {
+    let closing = loop {
         if input.is_empty() {
             return Err(syn::Error::new_spanned(
                 &tag,
@@ -117,12 +106,13 @@ fn parse_node(input: ParseStream<'_>, depth: usize) -> Result<Node> {
                 ));
             }
             input.parse::<Token![>]>()?;
-            break;
+            break closing.span();
         }
         children.push(parse_node(input, depth + 1)?);
-    }
+    };
     Ok(Node::Element {
         tag,
+        closing: Some(closing),
         attributes,
         children,
     })
@@ -137,13 +127,9 @@ fn expand_node(node: Node, core: &Path) -> Result<TokenStream> {
             tag,
             attributes,
             children,
+            ..
         } => {
-            let builtin = tag.segments.len() == 1
-                && tag
-                    .segments
-                    .first()
-                    .is_some_and(|segment| segment.ident == "Node" || segment.ident == "node");
-            let mut result = if builtin {
+            let mut result = if builtin(&tag) {
                 let mut result = quote_spanned!(tag.span()=>#core::node());
                 for attribute in attributes {
                     let method = attribute.name;
