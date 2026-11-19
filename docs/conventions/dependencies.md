@@ -60,6 +60,18 @@ these fixtures.
 
 ## M3 view macros
 
+M3+1 editor tooling shares the existing parser pins through `oxiview-syntax`.
+Source analysis uses proc-macro2 span locations and syn's visitor to retain
+original byte ranges. The native server uses `lsp-server =0.10.0` from
+rust-analyzer for LSP framing, requests and errors, and `url =2.5.8` for
+platform file paths and escaped file URIs. Both are pure Rust and offer MIT
+or Apache-2.0. Rust's standard library supplies neither protocol. The
+unpacked sources inspected locally were approximately 100 KiB and 616 KiB.
+The lockfile adds eight packages including the channels and URL/IDNA
+adapters. These dependencies belong only to the editor binary. Workspace
+verification checks their licenses and current advisories.
+[rust-analyzer LSP transport](https://github.com/rust-lang/rust-analyzer/tree/master/lib/lsp-server) · [rust-url](https://github.com/servo/rust-url)
+
 `oxiview-macros` uses the workspace pins for `syn =2.0.119`,
 `quote =1.0.47` and `proc-macro2 =1.0.107`. All three versions were already
 present in the M1 lockfile. They run at compile time to parse Rust expressions

@@ -85,7 +85,17 @@ allow = ["oxiview-base", "oxiview-reactive", "oxiview-scene", "oxiview-text", "o
 [crates.oxiview-macros]
 context = "procedural-macros"
 role = "tooling"
+allow = ["oxiview-syntax"]
+
+[crates.oxiview-syntax]
+context = "language-tooling"
+role = "tooling"
 allow = []
+
+[crates.oxiview-lsp]
+context = "language-tooling"
+role = "tooling"
+allow = ["oxiview-syntax"]
 
 [crates.oxiview-testing]
 context = "testing"

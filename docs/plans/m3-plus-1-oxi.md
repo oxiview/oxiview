@@ -84,3 +84,23 @@ mounts, 105 board updates, zero rejected commands and a session best of 30.
 The [parity test](../../examples/snake-oxi/tests/parity.rs) compares both full
 reports and every image in workspace verification. The local macOS bundle also
 passed the headless replay at seed 42 with its debug overlay enabled.
+
+## Editor support
+
+The owner subsequently requested a language server and a local LazyVim
+integration. `oxiview-syntax` now owns the grammar used by the file macros
+and the editor. `oxiview-lsp` indexes source declarations, Rust imports and
+explicit macro embedding sites. It maintains unsaved buffer revisions and
+publishes positioned grammar diagnostics. Completions, hover, go to
+definition, references and symbols operate on the local workspace.
+
+The [Neovim plugin](../../editors/oxi.nvim/README.md) supplies file detection,
+syntax highlighting and a native LSP configuration. Its headless acceptance
+opens the mixed Snake example in LazyVim and checks navigation across files,
+an embedded fragment's Rust captures, completion, hover and diagnostic recovery.
+
+On 2026-11-19 the installed release server passed that acceptance in the
+owner's Neovim 0.12.6 LazyVim configuration. The actual `gd` mapping opened
+the board component, references included its declaration, and a mismatched
+closing tag appeared and cleared through unsaved buffer edits. The explorer
+rendered `.oxi` rows with a sage-green circled O beside the Rust file icon.

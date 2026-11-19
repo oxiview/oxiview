@@ -1,0 +1,15 @@
+[package]
+name = "oxiview-syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+quote.workspace = true
+syn = { workspace = true, features = ["visit"] }

@@ -40,7 +40,8 @@ in progress, the table names what is already usable and what remains open.
 The [Layout Lab](../examples/window/README.md) exercises the M2 tree and
 [Snake](../examples/snake/README.md) integrates M3 views with M4 text.
 [Snake in .oxi](../examples/snake-oxi/README.md) pairs Rust application logic
-with M3+1 views and styles.
+with M3+1 views and styles. The [language server and Neovim plugin](../editors/oxi.nvim/README.md)
+support editing and navigating these files.
 The [continuous animation demo](../examples/animation-fps/README.md) measures
 the native presenter by requesting each successive frame through the on-demand
 scheduler. The animation API remains in M8 and continuous window/layer frame

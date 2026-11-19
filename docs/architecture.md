@@ -37,8 +37,9 @@ updates. The Taffy adapter reads typed layout inputs from the tree.
 [M2 layout](plans/m2-node-tree-and-layout.md) · [M3 views](plans/m3-reactivity-and-components.md)
 
 M3+1 adds precompiled view fragments and named view, style and Rust declarations
-in optional `.oxi` files. The macro crate expands both file and inline views
-through the same Builder generator. [M3+1 sources](plans/m3-plus-1-oxi.md)
+in optional `.oxi` files. The procedural macro crate uses `oxiview-syntax` for
+file and inline views. The standalone `oxiview-lsp` uses the same grammar and
+keeps editor indexes outside the application runtime. [M3+1 sources](plans/m3-plus-1-oxi.md)
 
 For text, core uses `oxiview-text` to measure paragraphs and obtain positioned
 glyph images. Core adds these images to the Scene consumed by both renderers.

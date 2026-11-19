@@ -5,9 +5,7 @@
 
 use proc_macro::TokenStream;
 
-mod oxi;
 mod props;
-mod view;
 
 /// Lowers nested tags to ordinary `node()`, component, property, and child calls.
 ///
@@ -34,10 +32,7 @@ mod view;
 /// ```
 #[proc_macro]
 pub fn view(input: TokenStream) -> TokenStream {
-    match syn::parse::<view::ViewInput>(input).and_then(view::expand) {
-        Ok(tokens) => tokens.into(),
-        Err(error) => error.into_compile_error().into(),
-    }
+    oxiview_syntax::inline(input)
 }
 
 /// Precompiles a package-relative `.oxi` file into Rust items in this module.
@@ -46,7 +41,7 @@ pub fn view(input: TokenStream) -> TokenStream {
 /// to give the exports a separate namespace.
 #[proc_macro]
 pub fn oxi_module(input: TokenStream) -> TokenStream {
-    oxi::include(input, oxi::Source::Module)
+    oxiview_syntax::include(input, oxiview_syntax::Source::Module)
 }
 
 /// Embeds a package-relative `.oxi` view fragment as a Builder expression.
@@ -54,7 +49,7 @@ pub fn oxi_module(input: TokenStream) -> TokenStream {
 /// Uses the same tag and Rust-expression grammar and expansion as `view!`.
 #[proc_macro]
 pub fn oxi_view(input: TokenStream) -> TokenStream {
-    oxi::include(input, oxi::Source::Fragment)
+    oxiview_syntax::include(input, oxiview_syntax::Source::Fragment)
 }
 
 /// Generates a Builder for a named props struct without rerunning components.

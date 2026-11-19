@@ -1,6 +1,6 @@
 use crate::view::{self, ViewInput};
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, quote, quote_spanned};
 use std::{env, fs, path::PathBuf};
 use syn::{
     Attribute, ExprStruct, FnArg, Generics, Ident, Item, LitStr, Result, Stmt, Token, Visibility,
@@ -14,12 +14,17 @@ mod keyword {
     syn::custom_keyword!(style);
 }
 
-pub(crate) enum Source {
+/// Grammar selected by the importing file macro.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// Named Rust, view and style items.
     Module,
+    /// A single root view embedded at its use site.
     Fragment,
 }
 
-pub(crate) fn include(input: proc_macro::TokenStream, kind: Source) -> proc_macro::TokenStream {
+/// Expands a file literal at a procedural macro invocation.
+pub fn include(input: proc_macro::TokenStream, kind: Source) -> proc_macro::TokenStream {
     syn::parse::<LitStr>(input)
         .and_then(|name| expand_file(&name, kind))
         .unwrap_or_else(syn::Error::into_compile_error)
@@ -57,7 +62,7 @@ fn expand_file(name: &LitStr, kind: Source) -> Result<TokenStream> {
     })
 }
 
-fn module(input: ParseStream<'_>) -> Result<TokenStream> {
+pub(crate) fn module(input: ParseStream<'_>) -> Result<TokenStream> {
     let mut items = TokenStream::new();
     while !input.is_empty() {
         let ahead = input.fork();
@@ -69,7 +74,8 @@ fn module(input: ParseStream<'_>) -> Result<TokenStream> {
             continue;
         }
         input.advance_to(&ahead);
-        let _: Ident = input.parse()?;
+        let keyword: Ident = input.parse()?;
+        let function = quote_spanned!(keyword.span()=> fn);
         let name: Ident = input.parse()?;
         let generics: Generics = input.parse()?;
         let args;
@@ -77,16 +83,16 @@ fn module(input: ParseStream<'_>) -> Result<TokenStream> {
         let args = Punctuated::<FnArg, Token![,]>::parse_terminated(&args)?;
         let where_clause: Option<syn::WhereClause> = input.parse()?;
         let body;
-        braced!(body in input);
+        let braces = braced!(body in input);
         let (ty, expression) = if is_view {
             (quote!(::oxiview_core::View), view_body(&body)?)
         } else {
             (quote!(::oxiview_style::Style), style_body(&body)?)
         };
+        let mut block = TokenStream::new();
+        braces.surround(&mut block, |tokens| tokens.extend(expression));
         items.extend(quote! {
-            #(#attrs)* #visibility fn #name #generics(#args) -> #ty #where_clause {
-                #expression
-            }
+            #(#attrs)* #visibility #function #name #generics(#args) -> #ty #where_clause #block
         });
     }
     Ok(items)
