@@ -207,6 +207,27 @@
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
+    },
+    "text_editing/cached_wrapped_geometry_32_lines": {
+      "value": 1876.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "text_editing/preedit_16_updates_then_commit": {
+      "value": 1571.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "text_editing/replace_and_undo_4k": {
+      "value": 201.5,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
     }
   }
 }

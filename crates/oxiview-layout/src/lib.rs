@@ -17,7 +17,7 @@ pub type LayoutInput = LayoutStyle;
 /// Available space on one axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AvailableSpace {
-    /// A finite logical size.
+    /// A finite, nonnegative logical size.
     Definite(f64),
     /// The smallest intrinsic contribution.
     MinContent,

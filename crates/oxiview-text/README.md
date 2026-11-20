@@ -48,3 +48,23 @@ The original color fixture exercises color gradients, clipping, blending and
 embedded strikes. The application-level specimen exercises styled Latin and
 Arabic text at three display scales. [Font fixtures](tests/fonts/README.md) ·
 [M4 display tests](../oxiview-app/tests/m4_text_display.rs)
+
+## Editable text
+
+`Editor` tracks UTF-8 source, selection affinity, undo history, and an optional
+native input session. `source` and `committed_revision` feed preview and file
+consumers. `presentation` includes inline preedit and has its own revision.
+Retained fields use `TextSystem::layout_editable` for paragraph shaping,
+selection rectangles, visual navigation, and glyph drawing. Updating a layout
+reuses unchanged paragraph shapes. [Editor model](src/edit.rs) ·
+[Retained editor](../oxiview-core/src/ui/editable.rs)
+
+M6 reuses the already-resolved ICU4X `icu_segmenter =2.3.0` as a direct text-port
+dependency. Extended grapheme and dictionary word boundaries support editing
+before a font or layout exists, while Parley supplies the geometry for shaped
+text. The pure Rust segmenter requires Rust 1.88 and uses the workspace's
+existing Unicode-3.0 license branch. The crate inherits the exact pin with
+default features disabled and compiled data enabled. The lockfile reuses the
+version brought in by Parley and adds no new ICU package. The APIs expose byte
+offsets and owned geometry. [Published manifest](https://docs.rs/crate/icu_segmenter/2.3.0/source/Cargo.toml) ·
+[ICU4X release history](https://github.com/unicode-org/icu4x/releases)

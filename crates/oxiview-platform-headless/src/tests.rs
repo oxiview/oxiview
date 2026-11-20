@@ -773,3 +773,125 @@ fn resize_prediction_between_and_on_boundaries() {
         }
     });
 }
+
+#[test]
+fn editor_services_inject_reordered_replies_and_stale_input() {
+    run(|mut endpoint, driver| {
+        use oxiview_base::Rect;
+
+        let id = endpoint.id();
+        let paste = RequestId(1);
+        let cut = RequestId(2);
+        let open = RequestId(3);
+        let save = RequestId(4);
+        let snapshot = TextInputSnapshot {
+            session: TextInputSession(19),
+            revision: 2,
+            acknowledged: 0,
+            text: "你😀".into(),
+            selection: 3..7,
+            marked: None,
+            caret: Rect::new(30.0, 2.0, 31.0, 18.0),
+            geometry: Vec::new(),
+        };
+        let read = ClipboardRequest::Read { id: paste };
+        let write = ClipboardRequest::Write {
+            id: cut,
+            text: "😀".into(),
+        };
+        let open_request = FilePanelRequest {
+            id: open,
+            kind: FilePanelKind::Open,
+        };
+        let save_request = FilePanelRequest {
+            id: save,
+            kind: FilePanelKind::Save {
+                suggested_name: Some("你好.md".into()),
+            },
+        };
+        endpoint
+            .flush_platform(vec![
+                PlatformCommand::TextInput(Some(snapshot.clone())),
+                PlatformCommand::Clipboard(read.clone()),
+                PlatformCommand::Clipboard(write.clone()),
+                PlatformCommand::FilePanel(open_request.clone()),
+                PlatformCommand::FilePanel(save_request.clone()),
+            ])
+            .unwrap();
+        assert_eq!(endpoint.editor_capabilities(), EditorCapabilities::all());
+        assert_eq!(driver.text_input_snapshot(id).unwrap(), Some(snapshot));
+        assert_eq!(driver.clipboard_requests(id).unwrap(), [read, write]);
+        assert_eq!(
+            driver.file_panel_requests(id).unwrap(),
+            [open_request, save_request]
+        );
+
+        let late_edit = TextInputEvent {
+            session: TextInputSession(13),
+            revision: 1,
+            sequence: 5,
+            timestamp: ms(7),
+            edit: TextInputEdit::Commit {
+                range: 1..2,
+                text: "stale".into(),
+                kind: TextCommitKind::Composition,
+            },
+        };
+        let position = Point::new(4.0, 5.0);
+        driver.text_input(id, late_edit.clone()).unwrap();
+        driver
+            .wheel(id, position, -12.0, 24.0, Some(ms(8)))
+            .unwrap();
+        driver
+            .clipboard_reply(id, cut, Err("board changed".into()))
+            .unwrap();
+        driver.file_panel_reply(id, save, Ok(None)).unwrap();
+        driver
+            .file_panel_reply(id, open, Ok(Some(PathBuf::from("/notes/你好.md"))))
+            .unwrap();
+        driver
+            .clipboard_reply(
+                id,
+                paste,
+                Ok(ClipboardResponse::Read(Some("中文 😀".into()))),
+            )
+            .unwrap();
+        driver
+            .clipboard_reply(id, paste, Ok(ClipboardResponse::Read(None)))
+            .expect_err("identity is retired after its reply");
+
+        let expected = [
+            WindowEvent::TextInput(late_edit),
+            WindowEvent::Wheel {
+                position,
+                delta_x: -12.0,
+                delta_y: 24.0,
+                timestamp: ms(8),
+            },
+            WindowEvent::Clipboard {
+                id: cut,
+                result: Err("board changed".into()),
+            },
+            WindowEvent::FilePanel {
+                id: save,
+                result: Ok(None),
+            },
+            WindowEvent::FilePanel {
+                id: open,
+                result: Ok(Some(PathBuf::from("/notes/你好.md"))),
+            },
+            WindowEvent::Clipboard {
+                id: paste,
+                result: Ok(ClipboardResponse::Read(Some("中文 😀".into()))),
+            },
+        ];
+        for event in expected {
+            assert_eq!(endpoint.wait_event().unwrap(), event);
+        }
+        assert_eq!(driver.counters(id).unwrap().frames, 0);
+        endpoint
+            .flush_platform(vec![PlatformCommand::TextInput(None)])
+            .unwrap();
+        assert_eq!(driver.text_input_snapshot(id).unwrap(), None);
+    });
+}

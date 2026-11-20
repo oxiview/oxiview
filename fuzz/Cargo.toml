@@ -1,0 +1,28 @@
+[package]
+name = "oxiview-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oxiview-text = { path = "../crates/oxiview-text" }
+
+[[bin]]
+name = "editing"
+path = "fuzz_targets/editing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "input_session"
+path = "fuzz_targets/input_session.rs"
+test = false
+doc = false
+bench = false

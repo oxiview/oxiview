@@ -1,5 +1,9 @@
-use crate::{Error, KeyCode, KeyModifiers, LogicalKey};
+use crate::{
+    ClipboardResponse, EditorCapabilities, Error, KeyCode, KeyModifiers, LogicalKey,
+    PlatformCommand, RequestId, TextInputEvent,
+};
 use oxiview_base::{Color, NativeSurfaceHandle, Point, Size};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -160,6 +164,17 @@ pub enum WindowEvent {
         /// Monotonic boundary-event capture time.
         timestamp: Duration,
     },
+    /// Wheel or trackpad scroll in logical content coordinates.
+    Wheel {
+        /// Pointer position in logical units.
+        position: Point,
+        /// Logical distance, positive when scrolling toward the right.
+        delta_x: f64,
+        /// Logical distance, positive when scrolling toward the bottom.
+        delta_y: f64,
+        /// Monotonic input capture time.
+        timestamp: Duration,
+    },
     /// The window gained or lost input activation. Losing activation interrupts
     /// pointer interactions independently of an ordinary pointer exit.
     ActivationChanged {
@@ -195,6 +210,23 @@ pub enum WindowEvent {
         repeat: bool,
         /// Monotonic input capture time.
         timestamp: Duration,
+    },
+    /// Native mark, commit, cancel, or editing command for one focused session.
+    TextInput(TextInputEvent),
+    /// Reply to a plain-text clipboard request. The caller checks that a queued
+    /// paste or cut still belongs to the same field, selection and revision.
+    Clipboard {
+        /// Identity supplied with the request.
+        id: RequestId,
+        /// Clipboard result or an owned failure description.
+        result: Result<ClipboardResponse, String>,
+    },
+    /// Reply to a single-file panel request.
+    FilePanel {
+        /// Identity supplied with the request.
+        id: RequestId,
+        /// Selected path, cancellation, or an owned failure description.
+        result: Result<Option<PathBuf>, String>,
     },
     /// A system preference snapshot delivered on the assigned window thread.
     PreferencesChanged {
@@ -366,6 +398,10 @@ pub trait WindowEndpoint: Send {
     fn id(&self) -> WindowId;
     /// Queries window support on the assigned window thread.
     fn capabilities(&self) -> Capabilities;
+    /// Returns the editor services this endpoint provides, independently of presentation.
+    fn editor_capabilities(&self) -> EditorCapabilities {
+        EditorCapabilities::default()
+    }
     /// Returns the snapshot captured at window creation. Any later changes,
     /// including ones before the first resize, arrive in the event queue.
     fn preferences(&self) -> SystemPreferences {
@@ -408,6 +444,24 @@ pub trait WindowEndpoint: Send {
     /// Gets the owned surface description on the window thread. Headless returns
     /// None. After destruction returns `Error::WindowDestroyed`.
     fn native_surface_handle(&mut self) -> Result<Option<NativeSurfaceHandle>, Error>;
+    /// Publishes editor state and queues desktop requests in command order.
+    /// Call after processing a received event, even when no commands were
+    /// generated. Native backends can use the turn boundary to release input
+    /// captured while the application determines the current focus.
+    fn flush_platform(&mut self, commands: Vec<PlatformCommand>) -> Result<(), Error> {
+        for command in commands {
+            match command {
+                PlatformCommand::Close => self.request_close()?,
+                PlatformCommand::TextInput(None) => {}
+                _ => {
+                    return Err(Error::OperationFailed(
+                        "platform editor command is unsupported".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
     /// Requests destruction on the window thread; repeated requests are harmless.
     /// Continue receiving until `Destroyed`, release surfaces, then drop this side.
     fn request_close(&mut self) -> Result<(), Error>;

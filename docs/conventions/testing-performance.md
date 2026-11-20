@@ -121,6 +121,16 @@ the CPU. GPU residency is checked separately by rendering repeated frames.
 
 The scoped report is `target/xtask/bench-m5-results.json`. Recording updates these three metrics on the current machine after owner approval. [M5 plan and acceptance](../plans/m5-focus-keyboard-and-themes.md)
 
+## M6 editing workloads
+
+`cargo xtask bench --m6` runs the editor workloads in `oxiview-text` without opening a window. The scoped result is `target/xtask/bench-m6-results.json`. It uses the median of three Divan medians and the workspace 10% comparison threshold. [Workload source](../../benches/text_editing.rs)
+
+| Metric under `text_editing/` | Timed operation |
+| --- | --- |
+| `replace_and_undo_4k` | Replace a selection in a 4 KiB mixed-script document and undo the replacement. |
+| `cached_wrapped_geometry_32_lines` | Hit-test and resolve selection rectangles on a cached 32-line layout. |
+| `preedit_16_updates_then_commit` | Apply sixteen marked-text updates and commit one candidate. |
+
 ## Recording and updating
 
 ### Publishing measurements in the READMEs

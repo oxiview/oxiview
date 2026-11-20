@@ -1,0 +1,13 @@
+/// Mounts the two document panes once for the window lifetime.
+pub(crate) view screen(ui: Ui) {
+    <Node style={shell_style()}>
+        {toolbar(&ui)}
+        {prompt(&ui)}
+        {find_bar(&ui)}
+        <Node style={horizontal()}>
+            {pane(&ui, true)}
+            {pane(&ui, false)}
+        </Node>
+        {footer(&ui)}
+    </Node>
+}

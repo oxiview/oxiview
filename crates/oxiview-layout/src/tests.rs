@@ -291,6 +291,30 @@ fn hidden_branch_edits_and_restoration_do_not_reuse_stale_geometry() -> Result<(
 }
 
 #[test]
+fn padded_leaf_with_no_room_measures_at_zero_available_width() -> Result<(), LayoutError> {
+    let mut leaf = fixed(0.0, 0.0);
+    leaf.padding = Edges {
+        left: Length::Points(16.0),
+        right: Length::Points(16.0),
+        top: Length::Points(10.0),
+        bottom: Length::Points(10.0),
+    };
+    let mut tree = Tree::new(vec![leaf], vec![vec![]]);
+    tree.nodes[0].wrap = true;
+    tree.nodes[0].intrinsic = Dimensions {
+        width: 40.0,
+        height: 18.0,
+    };
+
+    TaffyLayout::new().compute(&mut tree, 0, Size::new(100.0, 100.0))?;
+
+    assert_eq!(tree.nodes[0].measure_calls, 1);
+    assert_eq!(tree.geometry(0).size, Size::new(32.0, 20.0));
+    assert_eq!(tree.geometry(0).content_size.width(), 16.0);
+    Ok(())
+}
+
+#[test]
 fn failed_cached_pass_preserves_geometry_and_cache_for_recovery() -> Result<(), LayoutError> {
     let mut tree = branch_fixture();
     let mut engine = TaffyLayout::new();

@@ -72,6 +72,9 @@ enum Task {
         /// Run the M5 focus, Action and theme workloads without a native window.
         #[arg(long, conflicts_with_all = ["m2", "m3", "m4"])]
         m5: bool,
+        /// Run the three M6 editing workloads without a native window.
+        #[arg(long, conflicts_with_all = ["m2", "m3", "m4", "m5"])]
+        m6: bool,
         /// Record the selected scope in the repository baseline. Run only after human confirmation.
         #[arg(long)]
         record: bool,
@@ -183,6 +186,7 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         m3,
         m4,
         m5,
+        m6,
         record,
     } = task
     {
@@ -194,6 +198,8 @@ fn run(task: Task, root: &Path, report: &mut Report) {
             bench::Scope::M4
         } else if m5 {
             bench::Scope::M5
+        } else if m6 {
+            bench::Scope::M6
         } else {
             bench::Scope::Full
         };
@@ -354,7 +360,14 @@ mod tests {
 
     #[test]
     fn bench_accepts_each_flag_once_in_either_order() {
-        for scope in [None, Some("--m2"), Some("--m3"), Some("--m4"), Some("--m5")] {
+        for scope in [
+            None,
+            Some("--m2"),
+            Some("--m3"),
+            Some("--m4"),
+            Some("--m5"),
+            Some("--m6"),
+        ] {
             for flags in [
                 [scope, None],
                 [scope, Some("--record")],
@@ -366,11 +379,12 @@ mod tests {
                 let cli = Cli::try_parse_from(args).expect("valid bench flags");
                 assert!(matches!(
                     cli.command,
-                    Task::Bench { m2, m3, m4, m5, record }
+                    Task::Bench { m2, m3, m4, m5, m6, record }
                         if m2 == (scope == Some("--m2"))
                            && m3 == (scope == Some("--m3"))
                            && m4 == (scope == Some("--m4"))
                            && m5 == (scope == Some("--m5"))
+                           && m6 == (scope == Some("--m6"))
                            && record == flags.contains(&Some("--record"))
                 ));
             }
@@ -386,7 +400,9 @@ mod tests {
             (&["--m3", "--m4"][..], ErrorKind::ArgumentConflict),
             (&["--m5", "--m5"][..], ErrorKind::ArgumentConflict),
             (&["--m5", "--m4"][..], ErrorKind::ArgumentConflict),
-            (&["--m6"][..], ErrorKind::UnknownArgument),
+            (&["--m6", "--m5"][..], ErrorKind::ArgumentConflict),
+            (&["--m6", "--m6"][..], ErrorKind::ArgumentConflict),
+            (&["--m7"][..], ErrorKind::UnknownArgument),
             (&["--m2=true"][..], ErrorKind::TooManyValues),
             (&["layout"][..], ErrorKind::UnknownArgument),
         ] {

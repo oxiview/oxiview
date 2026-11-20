@@ -7,9 +7,11 @@
 //! clock, or a coalesced cross-thread `WindowWaker` notification. Headless deadline
 //! waits respond to virtual-clock advancement rather than wall-clock sleeping.
 
+mod editor;
 mod interface;
 mod keyboard;
 
+pub use editor::*;
 pub use interface::*;
 pub use keyboard::{KeyCode, KeyModifiers, LogicalKey, ShortcutPlatform};
 

@@ -45,3 +45,5 @@ Language: **English**
 | [0039](0039-keymap-prefix-conflicts.md) | Reject ambiguous shortcut prefixes within a focus context | 10 IME and input |
 | [0040](0040-local-style-over-theme-states.md) | Give explicit local properties precedence over theme state rules | 7 Styling and themes |
 | [0041](0041-focus-recovery-in-tab-order.md) | Recover focus at the next eligible Tab stop | 6 Retained tree / 10 IME and input |
+| [0042](0042-publish-committed-editor-text.md) | Publish committed editor text separately from inline preedit | 9 Text stack / 10 IME and input |
+| [0043](0043-native-text-input-session-snapshots.md) | Answer native text-input queries from a session snapshot | 2 Platform abstraction / 10 IME and input |

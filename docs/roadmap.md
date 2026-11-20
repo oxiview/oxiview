@@ -26,10 +26,10 @@ in progress, the table names what is already usable and what remains open.
 | M3+1 | [Precompiled .oxi sources and Snake](plans/m3-plus-1-oxi.md) ✅ | Optional view fragments, named views, typed styles and reusable Rust logic. The `snake-oxi` example reproduces Snake through the same Builders and replay. | 0006, 0008, 0037 |
 | M4 | [Real text and Snake](plans/m4-text-and-snake.md) ✅ | Rich text, Flex/Grid text baselines, hybrid glyph rendering, COLRv1 and the Vello GPU glyph atlas. Snake passed native text review. The owner accepted eight snapshots and four performance baselines. | 0010, 0012, 0038 |
 | M5 | [Focus, keyboard, and themes](plans/m5-focus-keyboard-and-themes.md) ✅ | Focus traversal and recovery, layered Keymaps, state variants, theme hot reload and system preferences. Snake M5 passed native settings review and persistent rebinding replay. Three snapshots and three benchmark baselines were accepted. | 0008, 0011, 0017, 0039–0041 |
-| M6 | Text editing | Editing core; IME preedit; selection; undo; fuzzing | 0010, 0011 |
+| M6 | [Text editing and the Markdown editor](plans/m6-text-editing-and-markdown.md) ✅ | Unicode editing, inline IME, selection, undo and fuzzing. The two-pane Markdown editor passed native macOS review and release replay with diagrams, math, clipboard and file panels. Three editor snapshots and three performance baselines were accepted. | 0010, 0011, 0042, 0043 |
 | M7 | Basic widgets and scrolling | Basic widgets; scrolling and inertia; virtual lists and tables | 0001 |
 | M8 | Animation | Springs/easing; interruption; compositing fast path; timeline orchestration | 0015 |
-| M9 | Multiple windows and system integration | Multiple windows and shared-thread mode; menus, dialogs, clipboard, drag and drop; title bars and materials | 0003, 0017 |
+| M9 | Multiple windows and system integration | Multiple windows and shared-thread mode, menus, broader dialog and clipboard support, drag and drop, title bars and materials. M6 is scheduled to introduce single-file Open and Save panels and the plain-text clipboard. | 0003, 0017 |
 | M10 | Compositing and external content | Compositing layers; continuous rendering at window/layer level; 3D textures; native child views | 0004, 0013 |
 | M11 | Developer tools | Inspector; signal dependency graph; code hot patching; event recording/replay | 0016 |
 | M12 | Accessibility | AccessKit and macOS adapter | 0014 |

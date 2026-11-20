@@ -5,7 +5,7 @@ use super::{
 use oxiview_base::{
     Affine, BezierPath, Color, Glyph, GlyphFont, GlyphKind, PathCommand, Point, Rect,
 };
-use parley::{GlyphRun, PositionedLayoutItem, fontique::Synthesis};
+use parley::{GlyphRun, Line, PositionedLayoutItem, fontique::Synthesis};
 use skrifa::{
     GlyphId, MetadataProvider,
     raw::{
@@ -13,7 +13,7 @@ use skrifa::{
         tables::{bitmap::BitmapSize, sbix::Sbix},
     },
 };
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 use swash::{
     FontRef,
     zeno::{Command, PathData},
@@ -161,6 +161,27 @@ impl TextSystem {
         origin: Point,
         local_to_device: Affine,
     ) -> Result<Vec<GlyphDraw>, Error> {
+        self.glyph_draws_for(layout, origin, local_to_device, layout.layout.lines())
+    }
+
+    pub(super) fn glyph_draws_in_lines(
+        &mut self,
+        layout: &TextLayout,
+        origin: Point,
+        local_to_device: Affine,
+        lines: Range<usize>,
+    ) -> Result<Vec<GlyphDraw>, Error> {
+        let selected = layout.layout.lines().skip(lines.start).take(lines.len());
+        self.glyph_draws_for(layout, origin, local_to_device, selected)
+    }
+
+    fn glyph_draws_for<'a>(
+        &mut self,
+        layout: &TextLayout,
+        origin: Point,
+        local_to_device: Affine,
+        lines: impl Iterator<Item = Line<'a, TextBrush>>,
+    ) -> Result<Vec<GlyphDraw>, Error> {
         let [a, b, c, d, x, y] = local_to_device.coefficients();
         if ![a, b, c, d, x, y].into_iter().all(f64::is_finite) {
             return Err(Error::InvalidInput);
@@ -169,7 +190,7 @@ impl TextSystem {
         let scale = ((a + d).hypot(b - c) + (a - d).hypot(b + c)) * 0.5;
         let complex = b != 0.0 || c != 0.0 || a != d || a <= 0.0;
         self.collect_draws(
-            layout,
+            layout.glyphs,
             origin,
             Placement {
                 scale,
@@ -181,6 +202,7 @@ impl TextSystem {
                 complex,
                 hybrid: true,
             },
+            lines,
         )
     }
 
@@ -199,7 +221,7 @@ impl TextSystem {
             return Err(Error::InvalidInput);
         }
         let draws = self.collect_draws(
-            layout,
+            layout.glyphs,
             origin,
             Placement {
                 scale,
@@ -207,6 +229,7 @@ impl TextSystem {
                 complex: false,
                 hybrid: false,
             },
+            layout.layout.lines(),
         )?;
         Ok(draws
             .into_iter()
@@ -217,11 +240,12 @@ impl TextSystem {
             .collect())
     }
 
-    fn collect_draws(
+    fn collect_draws<'a>(
         &mut self,
-        layout: &TextLayout,
+        glyphs: usize,
         origin: Point,
         placement: Placement,
+        lines: impl Iterator<Item = Line<'a, TextBrush>>,
     ) -> Result<Vec<GlyphDraw>, Error> {
         let Placement {
             scale,
@@ -242,10 +266,9 @@ impl TextSystem {
         {
             return Err(Error::InvalidInput);
         }
-        let _span =
-            tracing::info_span!("text_draw", glyphs = layout.glyphs, scale, hybrid).entered();
+        let _span = tracing::info_span!("text_draw", glyphs, scale, hybrid).entered();
         let mut output = Vec::new();
-        for line in layout.layout.lines() {
+        for line in lines {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;

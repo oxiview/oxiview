@@ -16,6 +16,7 @@ use std::{
 
 mod action;
 mod diagnostics;
+mod editable;
 mod focus;
 mod input;
 mod interaction;
@@ -28,6 +29,7 @@ mod theme;
 mod view;
 pub use action::{Action, ActionEvent, ActionSource};
 pub use diagnostics::UiDiagnostics;
+pub use editable::{Editable, EditorInputError, EditorWindowState, editable_text};
 pub use focus::{FocusEvent, FocusEventKind, FocusPolicy};
 pub use input::{
     PointerEventKind, UiBatchReport, UiCommandOutcome, UiCommands, UiDispatchResult, UiPointerEvent,
@@ -361,6 +363,7 @@ pub struct UiTree {
     paint_cache: Option<paint::PaintCache>,
     diagnostics: UiDiagnostics,
     theme: theme::ThemeState,
+    editors: HashMap<NodeId, editable::EditorNode>,
     pointer: input::PointerState,
     interaction: interaction::Interaction,
     queue: VecDeque<input::Batch>,
@@ -428,6 +431,7 @@ impl UiTree {
             paint_cache: None,
             diagnostics: UiDiagnostics::default(),
             theme,
+            editors: HashMap::new(),
             pointer: input::PointerState::default(),
             interaction: interaction::Interaction::default(),
             queue: VecDeque::new(),
@@ -1001,6 +1005,9 @@ impl UiTree {
                 self.pointer.capture = None;
             }
             self.untrack_node_styles(current)?;
+            if !self.editors.is_empty() {
+                self.editors.remove(&current);
+            }
             let node = self.nodes.get_mut(current.slot).and_then(Option::take);
             self.identities
                 .try_borrow_mut()

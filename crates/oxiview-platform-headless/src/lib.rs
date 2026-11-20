@@ -24,6 +24,7 @@ use oxiview_platform::*;
 use std::{
     collections::VecDeque,
     marker::PhantomData,
+    path::PathBuf,
     rc::Rc,
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread::{self, ThreadId},
@@ -104,6 +105,9 @@ struct Window {
     counters: Counters,
     event_waiters: usize,
     resize_waiters: usize,
+    text_input: Option<TextInputSnapshot>,
+    clipboard_requests: Vec<ClipboardRequest>,
+    file_panel_requests: Vec<FilePanelRequest>,
 }
 struct State {
     clock: ManualClock,
@@ -159,6 +163,9 @@ fn destroy(w: &mut Window) {
         w.frame = None;
         w.wake = false;
         w.events.clear();
+        w.text_input = None;
+        w.clipboard_requests.clear();
+        w.file_panel_requests.clear();
         w.events.push_back(WindowEvent::Destroyed);
         for resize in &mut w.resizes {
             if resize.outcome.is_none() {
@@ -367,6 +374,9 @@ impl EventLoopContext for Context {
             counters: Counters::default(),
             event_waiters: 0,
             resize_waiters: 0,
+            text_input: None,
+            clipboard_requests: Vec::new(),
+            file_panel_requests: Vec::new(),
         });
         Ok(CreatedWindow {
             main: Box::new(Main {
@@ -475,6 +485,9 @@ impl WindowEndpoint for Endpoint {
     fn capabilities(&self) -> Capabilities {
         capabilities()
     }
+    fn editor_capabilities(&self) -> EditorCapabilities {
+        EditorCapabilities::all()
+    }
     fn preferences(&self) -> SystemPreferences {
         self.initial_preferences
     }
@@ -538,6 +551,39 @@ impl WindowEndpoint for Endpoint {
         let mut state = self.shared.lock()?;
         live(window(&mut state, self.id)?)?;
         Ok(None)
+    }
+    fn flush_platform(&mut self, commands: Vec<PlatformCommand>) -> std::result::Result<(), Error> {
+        if commands.is_empty() {
+            return Ok(());
+        }
+        if commands.iter().any(|command| {
+            matches!(command, PlatformCommand::TextInput(Some(snapshot)) if !snapshot.is_valid())
+        }) {
+            return Err(Error::OperationFailed("invalid text input snapshot".into()));
+        }
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, self.id)?;
+        live(w)?;
+        for command in commands {
+            match command {
+                PlatformCommand::TextInput(snapshot) => {
+                    w.text_input = snapshot;
+                }
+                PlatformCommand::Clipboard(request) => w.clipboard_requests.push(request),
+                PlatformCommand::FilePanel(request) => w.file_panel_requests.push(request),
+                PlatformCommand::Close => {
+                    destroy(w);
+                    break;
+                }
+                _ => {
+                    return Err(Error::OperationFailed(
+                        "platform editor command is unsupported".into(),
+                    ));
+                }
+            }
+        }
+        self.shared.changed.notify_all();
+        Ok(())
     }
     fn request_close(&mut self) -> std::result::Result<(), Error> {
         Ok(close(&self.shared, self.id)?)
@@ -655,6 +701,100 @@ impl Driver {
         self.inject(id, |now| WindowEvent::PointerLeft {
             timestamp: timestamp.unwrap_or(now),
         })
+    }
+    /// Injects a wheel event. Positive distances scroll right and down.
+    pub fn wheel(
+        &self,
+        id: WindowId,
+        position: Point,
+        delta_x: f64,
+        delta_y: f64,
+        timestamp: Option<Duration>,
+    ) -> Result<()> {
+        if ![position.x(), position.y(), delta_x, delta_y]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return Err(DriverError::Invalid("non-finite wheel coordinates"));
+        }
+        self.inject(id, |now| WindowEvent::Wheel {
+            position,
+            delta_x,
+            delta_y,
+            timestamp: timestamp.unwrap_or(now),
+        })
+    }
+    /// Injects an explicit text event, including stale sessions, revisions, or
+    /// invalid replacements used to exercise the editor's rejection paths.
+    pub fn text_input(&self, id: WindowId, event: TextInputEvent) -> Result<()> {
+        self.inject(id, |_| WindowEvent::TextInput(event))
+    }
+    /// Reads the latest text input snapshot published by the window thread.
+    pub fn text_input_snapshot(&self, id: WindowId) -> Result<Option<TextInputSnapshot>> {
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, id)?;
+        live(w)?;
+        Ok(w.text_input.clone())
+    }
+    /// Reads unfinished clipboard requests in arrival order.
+    pub fn clipboard_requests(&self, id: WindowId) -> Result<Vec<ClipboardRequest>> {
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, id)?;
+        live(w)?;
+        Ok(w.clipboard_requests.clone())
+    }
+    /// Completes a pending clipboard request with injected contents or a failure.
+    pub fn clipboard_reply(
+        &self,
+        id: WindowId,
+        request: RequestId,
+        result: std::result::Result<ClipboardResponse, String>,
+    ) -> Result<()> {
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, id)?;
+        live(w)?;
+        let index = w
+            .clipboard_requests
+            .iter()
+            .position(|pending| pending.id() == request)
+            .ok_or(DriverError::Invalid("unknown clipboard request"))?;
+        w.clipboard_requests.remove(index);
+        w.events.push_back(WindowEvent::Clipboard {
+            id: request,
+            result,
+        });
+        self.shared.changed.notify_all();
+        Ok(())
+    }
+    /// Reads unfinished file panel requests in arrival order.
+    pub fn file_panel_requests(&self, id: WindowId) -> Result<Vec<FilePanelRequest>> {
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, id)?;
+        live(w)?;
+        Ok(w.file_panel_requests.clone())
+    }
+    /// Completes a pending panel with a selected path, cancellation, or failure.
+    pub fn file_panel_reply(
+        &self,
+        id: WindowId,
+        request: RequestId,
+        result: std::result::Result<Option<PathBuf>, String>,
+    ) -> Result<()> {
+        let mut state = self.shared.lock()?;
+        let w = window(&mut state, id)?;
+        live(w)?;
+        let index = w
+            .file_panel_requests
+            .iter()
+            .position(|pending| pending.id == request)
+            .ok_or(DriverError::Invalid("unknown file panel request"))?;
+        w.file_panel_requests.remove(index);
+        w.events.push_back(WindowEvent::FilePanel {
+            id: request,
+            result,
+        });
+        self.shared.changed.notify_all();
+        Ok(())
     }
     /// Injects a window activation change in FIFO order.
     pub fn activation_changed(

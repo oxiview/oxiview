@@ -59,6 +59,8 @@ rendering share a Vello adapter and device-owned glyph atlas.
 
 Each window tree owns its focus, state variants, Action registrations and layered Keymaps. Platform adapters supply physical and logical key identities and an initial preference snapshot followed by ordered changes. The styling port validates typed theme files. Core resolves them against the window's preferences, active states and local declarations. A development file watcher in the composition root publishes a valid revision to the window thread. Snake persists the player's settings separately from framework state. [M5 contracts](plans/m5-focus-keyboard-and-themes.md) · [Runnable demo](../examples/snake-m5-oxi/README.md)
 
+The text port owns the Unicode editing model, range validation, preedit, history and paragraph geometry. Core mounts the model on a focusable node and uses the same layout for drawing, pointer selection and candidate rectangles. The window endpoint exchanges session-tagged input and owned snapshots with AppKit or the headless driver. The Markdown example owns file revisions, search, preview compilation and the conversion from document graphics to Scene primitives. [M6 design](plans/m6-text-editing-and-markdown.md) · [Committed text and preedit](adr/0042-publish-committed-editor-text.md)
+
 On macOS, the window thread owns input dispatch, painting and submission.
 For an ordinary native frame, a worker waits for a surface texture and wakes
 the window thread when it is available. The window can process input during

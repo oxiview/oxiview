@@ -315,6 +315,9 @@ impl UiTree {
         if old == next && self.interaction.keyboard_visible == visible {
             return Ok(());
         }
+        if old != next && !self.editors.is_empty() {
+            self.editor_focus_transition(old, next.filter(|_| self.accepts_input()))?;
+        }
         self.interaction.keyboard_visible = visible;
         self.interaction.focused = next;
         let mut canceled = None;

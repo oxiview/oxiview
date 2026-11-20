@@ -205,17 +205,24 @@ impl UiTree {
         visible: Option<bool>,
     ) -> Result<(), UiError> {
         let was_active = self.accepts_input();
-        if let Some(active) = active {
-            self.interaction.active = active;
+        let active = active.unwrap_or(self.interaction.active);
+        let visible = visible.unwrap_or(self.interaction.visible);
+        let accepts_input = active && visible;
+        if was_active != accepts_input && !self.editors.is_empty() {
+            let focused = self.focused_node();
+            if accepts_input {
+                self.editor_focus_transition(None, focused)?;
+            } else {
+                self.editor_focus_transition(focused, None)?;
+            }
         }
-        if let Some(visible) = visible {
-            self.interaction.visible = visible;
-        }
-        if was_active == self.accepts_input() {
+        self.interaction.active = active;
+        self.interaction.visible = visible;
+        if was_active == accepts_input {
             return Ok(());
         }
         let mut canceled = None;
-        if !self.accepts_input() {
+        if !accepts_input {
             canceled = self.interaction.armed.take().map(|press| press.target);
             self.interaction.keyboard.clear_sequence();
         }

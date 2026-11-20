@@ -1526,7 +1526,9 @@ impl<T: LayoutTree> taffy::LayoutBlockContainer for Adapter<'_, T> {
 
 fn available_space(v: taffy::AvailableSpace) -> AvailableSpace {
     match v {
-        taffy::AvailableSpace::Definite(v) => AvailableSpace::Definite(f64::from(v)),
+        // Taffy subtracts the content box insets before measurement. If the
+        // insets exceed the available size, the content has no room on that axis.
+        taffy::AvailableSpace::Definite(v) => AvailableSpace::Definite(f64::from(v.max(0.0))),
         taffy::AvailableSpace::MinContent => AvailableSpace::MinContent,
         taffy::AvailableSpace::MaxContent => AvailableSpace::MaxContent,
     }

@@ -2,13 +2,13 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewLayerContentsRedrawPolicy, NSWindow, NSWindowDelegate,
-    NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSTextInputContext,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSViewLayerContentsRedrawPolicy, NSWindow,
+    NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
-    NSString, ns_string,
+    MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
+    ns_string,
 };
 use objc2_quartz_core::{CADisplayLink, CAMetalLayer, CATransaction};
 use oxiview_base::{NativeSurfaceHandle, Point};
@@ -26,13 +26,22 @@ use std::{
     time::Duration,
 };
 
+mod desktop_services;
+mod input_dispatch;
 mod keyboard;
 #[cfg(feature = "diagnostics")]
 mod m5_input_probe;
+#[cfg(feature = "diagnostics")]
+mod m6_input_probe;
 mod preferences;
+mod text_input;
+mod text_state;
+mod utf16;
 
 #[cfg(feature = "diagnostics")]
 pub use m5_input_probe::diagnostic_m5_input_probe;
+#[cfg(feature = "diagnostics")]
+pub use m6_input_probe::diagnostic_m6_input_probe;
 
 // Core Foundation's source is explicitly registered in both the ordinary common
 // modes and our resize-only mode. The latter services commands/display links
@@ -106,7 +115,9 @@ struct DiagnosticInput {
     delivered: std::sync::mpsc::SyncSender<Option<Duration>>,
 }
 struct Queue {
-    events: VecDeque<WindowEvent>,
+    events: VecDeque<(WindowEvent, Option<u64>)>,
+    input_sequence: u64,
+    platform_flushes: VecDeque<PlatformFlush>,
     alive: bool,
     endpoint: bool,
     wake: bool,
@@ -122,6 +133,11 @@ struct Queue {
     next_input_number: isize,
     close: bool,
     resize: Option<(ResizeToken, Duration)>,
+}
+
+struct PlatformFlush {
+    commands: Vec<PlatformCommand>,
+    completed_input: Option<u64>,
 }
 struct Shared {
     frames: AtomicU64,
@@ -150,8 +166,26 @@ impl Shared {
         if let Ok(mut q) = self.lock()
             && q.alive
         {
-            q.events.push_back(event);
+            q.events.push_back((event, None));
             self.changed.notify_all();
+        }
+    }
+    fn emit_input(&self, events: impl IntoIterator<Item = WindowEvent>) {
+        if let Ok(mut q) = self.lock()
+            && q.alive
+        {
+            let mut delivered = false;
+            for event in events {
+                let Some(sequence) = q.input_sequence.checked_add(1) else {
+                    std::process::abort();
+                };
+                q.input_sequence = sequence;
+                q.events.push_back((event, Some(sequence)));
+                delivered = true;
+            }
+            if delivered {
+                self.changed.notify_all();
+            }
         }
     }
     fn close(&self) -> Result<(), Error> {
@@ -166,6 +200,7 @@ struct Endpoint {
     shared: Arc<Shared>,
     terminal: bool,
     initial_preferences: SystemPreferences,
+    completed_input: Option<u64>,
 }
 impl Endpoint {
     fn receive(
@@ -178,7 +213,10 @@ impl Endpoint {
         }
         let mut q = self.shared.lock()?;
         loop {
-            if let Some(event) = q.events.pop_front() {
+            if let Some((event, input)) = q.events.pop_front() {
+                if let Some(input) = input {
+                    self.completed_input = Some(input);
+                }
                 if event == WindowEvent::Wake {
                     q.wake = false;
                 }
@@ -227,7 +265,7 @@ impl WindowWake for Shared {
         if !q.alive || !q.endpoint {
             return Err(Error::WindowDestroyed);
         }
-        q.events.push_back(WindowEvent::PresentationReady);
+        q.events.push_back((WindowEvent::PresentationReady, None));
         self.changed.notify_all();
         Ok(())
     }
@@ -238,7 +276,7 @@ impl WindowWake for Shared {
         }
         if !q.wake {
             q.wake = true;
-            q.events.push_back(WindowEvent::Wake);
+            q.events.push_back((WindowEvent::Wake, None));
             self.changed.notify_all();
         }
         Ok(())
@@ -250,6 +288,9 @@ impl WindowEndpoint for Endpoint {
     }
     fn capabilities(&self) -> Capabilities {
         capabilities()
+    }
+    fn editor_capabilities(&self) -> EditorCapabilities {
+        EditorCapabilities::all()
     }
     fn preferences(&self) -> SystemPreferences {
         self.initial_preferences
@@ -307,6 +348,27 @@ impl WindowEndpoint for Endpoint {
         }
         Ok(Some(self.shared.handle))
     }
+    fn flush_platform(&mut self, commands: Vec<PlatformCommand>) -> Result<(), Error> {
+        if commands.is_empty() && self.completed_input.is_none() {
+            return Ok(());
+        }
+        if commands.iter().any(|command| {
+            matches!(command, PlatformCommand::TextInput(Some(snapshot)) if !snapshot.is_valid())
+        }) {
+            return Err(failure("invalid text input snapshot"));
+        }
+        let mut q = self.shared.lock()?;
+        if !q.alive {
+            return Err(Error::WindowDestroyed);
+        }
+        q.platform_flushes.push_back(PlatformFlush {
+            commands,
+            completed_input: self.completed_input.take(),
+        });
+        drop(q);
+        self.shared.signal();
+        Ok(())
+    }
     fn request_close(&mut self) -> Result<(), Error> {
         self.shared.close()
     }
@@ -341,6 +403,8 @@ struct Native {
     target: Cell<Duration>,
     used_slot: Cell<Duration>,
     closed: Cell<bool>,
+    input: input_dispatch::Dispatch,
+    panels: desktop_services::Panels,
 }
 impl Native {
     fn refresh_preferences(&self) {
@@ -353,7 +417,10 @@ impl Native {
         }
     }
 }
-thread_local! { static WINDOWS: RefCell<Vec<Rc<Native>>> = const { RefCell::new(Vec::new()) }; }
+thread_local! {
+    static WINDOWS: RefCell<Vec<Rc<Native>>> = const { RefCell::new(Vec::new()) };
+    static RESIZE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
 fn natives() -> Vec<Rc<Native>> {
     WINDOWS.with(|w| w.borrow().clone())
 }
@@ -363,10 +430,13 @@ fn find(id: WindowId) -> Option<Rc<Native>> {
 fn service() {
     let windows = natives();
     for w in &windows {
-        let (close, endpoint, frame) = match w.shared.lock() {
-            Ok(q) => (q.close, q.endpoint, q.frame),
+        let (close, endpoint, frame, editor_work) = match w.shared.lock() {
+            Ok(q) => (q.close, q.endpoint, q.frame, !q.platform_flushes.is_empty()),
             Err(_) => std::process::abort(),
         };
+        if !w.closed.get() && RESIZE_DEPTH.get() == 0 && (editor_work || w.input.has_pending()) {
+            w.flush_editor_commands();
+        }
         #[cfg(feature = "diagnostics")]
         {
             let commands = match w.shared.lock() {
@@ -405,9 +475,12 @@ fn service() {
                 q.wake = false;
                 q.resize = None;
                 q.events.clear();
-                q.events.push_back(WindowEvent::Destroyed);
+                q.platform_flushes.clear();
+                q.events.push_back((WindowEvent::Destroyed, None));
                 w.shared.changed.notify_all();
             }
+            w.input.close();
+            w.panels.close();
             // Hide first; keep the content view attached until endpoint teardown.
             w.window.orderOut(None);
         }
@@ -501,10 +574,13 @@ fn deliver(w: &Native, slot: Duration) {
         q.frame = false;
         w.used_slot.set(slot);
         w.link.setPaused(true);
-        q.events.push_back(WindowEvent::Frame {
-            predicted_presentation_timestamp: predicted,
-            refresh_interval: w.interval.get(),
-        });
+        q.events.push_back((
+            WindowEvent::Frame {
+                predicted_presentation_timestamp: predicted,
+                refresh_interval: w.interval.get(),
+            },
+            None,
+        ));
         w.shared.changed.notify_all();
     }
 }
@@ -591,6 +667,7 @@ fn resize(w: &Native) {
     // final frame with a transaction can discard it and leave the window blank
     // until new input. Normal asynchronous presentation survives that transition.
     CATransaction::begin();
+    RESIZE_DEPTH.set(RESIZE_DEPTH.get() + 1);
     CATransaction::setDisableActions(true);
     w.layer.setPresentsWithTransaction(w.view.inLiveResize());
     w.layer.setFrame(bounds);
@@ -655,6 +732,17 @@ fn resize(w: &Native) {
     }
     w.layer.setPresentsWithTransaction(false);
     CATransaction::commit();
+    RESIZE_DEPTH.set(RESIZE_DEPTH.get() - 1);
+    w.invalidate_text_coordinates();
+    if w.input.has_pending()
+        || natives().iter().any(|w| {
+            w.shared
+                .lock()
+                .is_ok_and(|q| !q.platform_flushes.is_empty())
+        })
+    {
+        w.shared.signal();
+    }
 }
 #[derive(Default)]
 struct ViewState {
@@ -673,6 +761,10 @@ define_class!(
         fn flipped(&self) -> bool { true }
         #[unsafe(method(acceptsFirstResponder))]
         fn accepts_first(&self) -> bool { true }
+        #[unsafe(method_id(inputContext))]
+        fn editor_input_context(&self) -> Option<Retained<NSTextInputContext>> {
+            boundary(|| self.ivars().id.get().and_then(find).and_then(|w| w.input.context()))
+        }
         #[unsafe(method(setFrameSize:))]
         fn frame_size(&self, size: NSSize) { boundary(|| {
             // SAFETY: Forward the exact NSView method signature to our superclass.
@@ -704,13 +796,13 @@ define_class!(
         #[unsafe(method(mouseExited:))]
         fn exited(&self, event: &NSEvent) { boundary(|| {
             if let Some(w) = self.ivars().id.get().and_then(find) {
-                w.shared.emit(WindowEvent::PointerLeft { timestamp: seconds(event.timestamp()) });
+                w.route_input(WindowEvent::PointerLeft { timestamp: seconds(event.timestamp()) });
             }
         }); }
         #[unsafe(method(cancelOperation:))]
         fn interrupted(&self, _: Option<&objc2::runtime::AnyObject>) { boundary(|| {
             if let Some(w) = self.ivars().id.get().and_then(find) {
-                w.shared.emit(WindowEvent::PointerInterrupted { timestamp: native_time() });
+                w.route_input(WindowEvent::PointerInterrupted { timestamp: native_time() });
             }
         }); }
         #[unsafe(method(mouseDragged:))]
@@ -735,6 +827,8 @@ define_class!(
         fn key_down(&self, event: &NSEvent) { boundary(|| self.key(event, true)); }
         #[unsafe(method(keyUp:))]
         fn key_up(&self, event: &NSEvent) { boundary(|| self.key(event, false)); }
+        #[unsafe(method(scrollWheel:))]
+        fn wheel(&self, event: &NSEvent) { boundary(|| self.scroll(event)); }
     }
 );
 impl ContentView {
@@ -762,7 +856,7 @@ impl ContentView {
                     timestamp,
                 }
             };
-            w.shared.emit(event);
+            w.route_input(event);
             #[cfg(feature = "diagnostics")]
             if let Some(receipt) = receipt {
                 // AppKit's queue can quantize NSEvent's floating-point timestamp
@@ -774,22 +868,30 @@ impl ContentView {
     }
     fn key(&self, event: &NSEvent, pressed: bool) {
         if let Some(w) = self.ivars().id.get().and_then(find) {
-            // AppKit routes native key equivalents before the responder's keyDown:.
-            let transition = keyboard::transition(event, pressed);
-            let escape_press = matches!(
-                transition,
-                WindowEvent::Key {
-                    code: KeyCode::Escape,
-                    pressed: true,
-                    repeat: false,
-                    ..
-                }
-            );
-            w.shared.emit(transition);
-            // The raw key callback replaces NSResponder's keyDown:. During a drag
-            // let AppKit deliver its cancellation command to cancelOperation:.
-            if escape_press && NSEvent::pressedMouseButtons() != 0 {
-                self.interpretKeyEvents(&NSArray::from_slice(&[event]));
+            w.route_key(event, pressed);
+        }
+    }
+    fn scroll(&self, event: &NSEvent) {
+        if let Some(w) = self.ivars().id.get().and_then(find) {
+            let position = self.convertPoint_fromView(event.locationInWindow(), None);
+            let line_height = if event.hasPreciseScrollingDeltas() {
+                1.0
+            } else {
+                16.0
+            };
+            // AppKit's deltas move the content, while the port reports viewport movement.
+            let delta_x = -event.scrollingDeltaX() * line_height;
+            let delta_y = -event.scrollingDeltaY() * line_height;
+            if [position.x, position.y, delta_x, delta_y]
+                .into_iter()
+                .all(f64::is_finite)
+            {
+                w.route_input(WindowEvent::Wheel {
+                    position: Point::new(position.x, position.y),
+                    delta_x,
+                    delta_y,
+                    timestamp: seconds(event.timestamp()),
+                });
             }
         }
     }
@@ -852,6 +954,14 @@ define_class!(
                 }
             });
         }
+        #[unsafe(method(windowDidMove:))]
+        fn moved(&self, _: &objc2_foundation::NSNotification) {
+            boundary(|| {
+                if let Some(w) = find(self.ivars().id) {
+                    w.invalidate_text_coordinates();
+                }
+            });
+        }
         #[unsafe(method(windowDidEnterFullScreen:))]
         fn entered_fullscreen(&self, _: &objc2_foundation::NSNotification) {
             boundary(|| {
@@ -878,7 +988,7 @@ define_class!(
         fn should_close(&self, _: &NSWindow) -> bool {
             boundary(|| {
                 if let Some(w) = find(self.ivars().id) {
-                    w.shared.emit(WindowEvent::CloseRequested);
+                    w.route_input(WindowEvent::CloseRequested);
                 }
                 false
             })
@@ -888,10 +998,7 @@ define_class!(
 impl Delegate {
     fn activation(&self, active: bool) {
         if let Some(w) = find(self.ivars().id) {
-            w.shared.emit(WindowEvent::ActivationChanged {
-                active,
-                timestamp: native_time(),
-            });
+            w.input_activation(active);
         }
     }
 
@@ -903,7 +1010,7 @@ impl Delegate {
                 && !w.window.isMiniaturized()
                 && !NSApplication::sharedApplication(self.mtm()).isHidden();
             if self.ivars().visible.replace(visible) != visible {
-                w.shared.emit(WindowEvent::VisibilityChanged {
+                w.route_input(WindowEvent::VisibilityChanged {
                     visible,
                     timestamp: native_time(),
                 });
@@ -1250,6 +1357,8 @@ impl EventLoopContext for Context {
             changed: Condvar::new(),
             queue: Mutex::new(Queue {
                 events: VecDeque::new(),
+                input_sequence: 0,
+                platform_flushes: VecDeque::new(),
                 alive: true,
                 endpoint: true,
                 wake: false,
@@ -1308,6 +1417,8 @@ impl EventLoopContext for Context {
             target: Cell::new(Duration::ZERO),
             used_slot: Cell::new(Duration::ZERO),
             closed: Cell::new(false),
+            input: input_dispatch::Dispatch::default(),
+            panels: desktop_services::Panels::default(),
         });
         WINDOWS.with(|w| w.borrow_mut().push(native.clone()));
         #[cfg(not(feature = "diagnostics"))]
@@ -1327,6 +1438,7 @@ impl EventLoopContext for Context {
                 shared,
                 terminal: false,
                 initial_preferences,
+                completed_input: None,
             }),
         })
     }

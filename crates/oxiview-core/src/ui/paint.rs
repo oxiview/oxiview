@@ -1,4 +1,4 @@
-use super::{Node, NodeId, UiError, UiTree};
+use super::{Node, NodeId, UiError, UiTree, editable::EditorDraws};
 use crate::PaintedScene;
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect, Size};
 use oxiview_layout::LayoutBox;
@@ -42,6 +42,7 @@ struct PaintFrame {
     scene: Scene,
     prepared: Vec<(NodeId, Box<NodePainting>)>,
     draws: HashMap<NodeId, DrawHandles>,
+    editors: HashMap<NodeId, EditorDraws>,
 }
 
 #[derive(Default)]
@@ -58,6 +59,7 @@ pub(super) struct DrawChanges {
     pub(super) border: bool,
     pub(super) focus_ring: bool,
     pub(super) custom: bool,
+    pub(super) editor: bool,
 }
 
 pub(super) struct PaintCache {
@@ -65,6 +67,7 @@ pub(super) struct PaintCache {
     root: SceneNodeId,
     scale: f64,
     draws: HashMap<NodeId, DrawHandles>,
+    editors: HashMap<NodeId, EditorDraws>,
     changes: HashMap<NodeId, DrawChanges>,
 }
 
@@ -78,6 +81,17 @@ impl PaintCache {
 
     fn update(&mut self, tree: &UiTree) -> Result<(), UiError> {
         for (id, changes) in std::mem::take(&mut self.changes) {
+            if changes.editor
+                && let Some(draws) = self.editors.get_mut(&id)
+                && let Some(editor) = tree.editors.get(&id)
+            {
+                draws.update(
+                    &mut self.scene,
+                    editor,
+                    tree.editor_viewport(id)?,
+                    self.scale,
+                )?;
+            }
             // A suppressed node has no draws in the retained Scene.
             if let Some(draws) = self.draws.get(&id) {
                 draws.replace(&mut self.scene, tree.node(id)?, changes)?;
@@ -186,6 +200,7 @@ impl UiTree {
             scene,
             prepared,
             draws,
+            editors,
         } = frame;
         let painted_nodes = prepared.len();
         for (id, painting) in prepared {
@@ -199,6 +214,7 @@ impl UiTree {
             root,
             scale,
             draws,
+            editors,
             changes: HashMap::new(),
         });
         self.paint_dirty = false;
@@ -402,6 +418,15 @@ impl UiTree {
             draws
         };
         frame.draws.insert(id, draws);
+        if !self.editors.is_empty()
+            && let Some(editor) = self.editors.get(&id)
+        {
+            let viewport = self.editor_viewport(id)?;
+            frame.editors.insert(
+                id,
+                EditorDraws::mount(&mut frame.scene, parent, editor, viewport, scale)?,
+            );
+        }
         if node_focus_ring(node).is_some() {
             focus_rings.push(id);
         }
@@ -425,7 +450,7 @@ impl UiTree {
         }
         Ok(())
     }
-    fn padding_clip(&self, id: NodeId) -> Result<(Rect, CornerRadii), UiError> {
+    pub(super) fn padding_clip(&self, id: NodeId) -> Result<(Rect, CornerRadii), UiError> {
         let node = self.node(id)?;
         let rect = self.bounds(id)?;
         let radii = normalized_radii(rect, node.style.border_radii);

@@ -2,7 +2,7 @@
 # The dev-only exception lets any checked crate use test tools in tests.
 # Skip crates not yet created; new workspace members must be registered.
 # Examples are applications, so they are exempt; the xtask ban still applies to them.
-exempt = ["xtask", "window", "snake", "snake-oxi", "snake-m5-oxi", "animation-fps"]
+exempt = ["xtask", "window", "snake", "snake-oxi", "snake-m5-oxi", "markdown-editor-oxi", "animation-fps"]
 forbidden = ["xtask"]
 dev-only = ["oxiview-testing"]
 
@@ -115,7 +115,7 @@ packages = ["taffy"]
 allow = ["oxiview-layout"]
 
 [[external]]
-packages = ["parley", "fontique", "swash", "harfrust"]
+packages = ["parley", "fontique", "swash", "harfrust", "icu_segmenter"]
 allow = ["oxiview-text"]
 
 [[external]]

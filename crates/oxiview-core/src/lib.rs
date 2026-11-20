@@ -3,7 +3,8 @@
 //! remain selected by the application composition root.
 
 use oxiview_platform::{
-    PhysicalSize, ResizeToken, SystemPreferences, WindowEndpoint, WindowEvent, WindowWaker,
+    PhysicalSize, PlatformCommand, ResizeToken, SystemPreferences, WindowEndpoint, WindowEvent,
+    WindowWaker,
 };
 use oxiview_scene::{NodeId as SceneNodeId, Scene};
 use std::{
@@ -14,13 +15,17 @@ use std::{
 mod ui;
 mod ui_projection;
 mod window_runtime;
-pub use oxiview_text::{RichText, TextAlign, TextSpan, TextSpanStyle, TextStyle, TextSystem};
+pub use oxiview_text::{
+    Affinity, Caret, EditCommand, EditError, EditMode, Editor, NativeEdit, RichText, Selection,
+    TextAlign, TextSpan, TextSpanStyle, TextStyle, TextSystem,
+};
 pub use ui::{
-    Action, ActionEvent, ActionSource, FocusEvent, FocusEventKind, FocusPolicy,
-    KEY_SEQUENCE_TIMEOUT, KeyBinding, KeyChord, Keymap, KeymapError, NodeId, NodeMeasure,
-    NodeSemantics, PointerEventKind, PreferenceSignals, ShortcutKey, UiBatchReport,
-    UiCommandOutcome, UiCommandSender, UiCommands, UiDiagnostics, UiDispatchResult, UiError,
-    UiPointerEvent, UiTree, View, component, for_each, keyed_for, node, rich_text, show, text,
+    Action, ActionEvent, ActionSource, Editable, EditorInputError, EditorWindowState, FocusEvent,
+    FocusEventKind, FocusPolicy, KEY_SEQUENCE_TIMEOUT, KeyBinding, KeyChord, Keymap, KeymapError,
+    NodeId, NodeMeasure, NodeSemantics, PointerEventKind, PreferenceSignals, ShortcutKey,
+    UiBatchReport, UiCommandOutcome, UiCommandSender, UiCommands, UiDiagnostics, UiDispatchResult,
+    UiError, UiPointerEvent, UiTree, View, component, editable_text, for_each, keyed_for, node,
+    rich_text, show, text,
 };
 
 /// Failures terminate this window loop; affected state is never resumed.
@@ -219,6 +224,14 @@ pub trait Application {
     fn should_close(&mut self) -> bool {
         true
     }
+    /// Publishes current text input and drains platform requests on the window thread.
+    ///
+    /// Called after initialization, after event and close-intent handling, and
+    /// again if the turn paints. Appending commands does not request a frame.
+    /// Send `PlatformCommand::Close` to finish a previously deferred close.
+    fn flush_platform(&mut self, _commands: &mut Vec<PlatformCommand>) -> Result<(), Error> {
+        Ok(())
+    }
     /// Receives each successful submission, including frames without input.
     /// Submission does not confirm display scanout. The default preserves the
     /// existing `presented` callback and calls it exactly once.
@@ -326,11 +339,11 @@ fn window_loop_with_runtime(
     let mut scale = 1.0;
     let mut pending_resize = None;
     let mut waiting_frame: Option<FrameTiming> = None;
-    let mut closing = false;
     scheduler.resize(size);
     let waker = endpoint.waker();
     application.initialize_preferences(endpoint.preferences())?;
     runtime.poll_ready()?;
+    let mut closing = flush_platform(endpoint, application, false)?;
     loop {
         let output = scheduler.schedule_if_available(waiting_frame.is_none() && !closing);
         if output.request_frame {
@@ -370,6 +383,7 @@ fn window_loop_with_runtime(
         if let WindowEvent::PointerMoved { timestamp, .. }
         | WindowEvent::PointerButton { timestamp, .. }
         | WindowEvent::PointerLeft { timestamp }
+        | WindowEvent::Wheel { timestamp, .. }
         | WindowEvent::ActivationChanged { timestamp, .. }
         | WindowEvent::VisibilityChanged { timestamp, .. }
         | WindowEvent::PointerInterrupted { timestamp }
@@ -377,8 +391,20 @@ fn window_loop_with_runtime(
         {
             scheduler.input(*timestamp);
         }
+        if let WindowEvent::TextInput(input) = &event {
+            scheduler.input(input.timestamp);
+        }
+        let close_requested =
+            matches!(event, WindowEvent::CloseRequested) && application.should_close();
+        if flush_platform(endpoint, application, close_requested)? {
+            closing = true;
+            waiting_frame = None;
+            scheduler.cancel_timed_request();
+            continue;
+        }
         let resumed = matches!(event, WindowEvent::PresentationReady | WindowEvent::Wake);
         let mut check_drawable = resumed;
+        let mut painted = false;
         match event {
             WindowEvent::Resized {
                 display_sync,
@@ -397,6 +423,7 @@ fn window_loop_with_runtime(
                 presenter.configure(size, scale, display_sync)?;
                 pending_resize = Some(token);
                 let presented = if scheduler.resize(size) {
+                    painted = true;
                     produce(
                         || endpoint.now(),
                         application,
@@ -420,21 +447,13 @@ fn window_loop_with_runtime(
             WindowEvent::Frame {
                 predicted_presentation_timestamp,
                 refresh_interval,
-            } => {
-                if scheduler.frame() {
-                    waiting_frame = Some(FrameTiming {
-                        predicted_presentation_timestamp,
-                        refresh_interval,
-                        kind: FrameKind::Vsync,
-                    });
-                    check_drawable = true;
-                }
-            }
-            WindowEvent::CloseRequested if application.should_close() => {
-                endpoint.request_close()?;
-                closing = true;
-                waiting_frame = None;
-                scheduler.cancel_timed_request();
+            } if scheduler.frame() => {
+                waiting_frame = Some(FrameTiming {
+                    predicted_presentation_timestamp,
+                    refresh_interval,
+                    kind: FrameKind::Vsync,
+                });
+                check_drawable = true;
             }
             _ => {}
         }
@@ -463,11 +482,37 @@ fn window_loop_with_runtime(
                 size,
                 scale,
             )?;
+            painted = true;
             if outcome == PresentationOutcome::Presented {
                 acknowledge_pending(endpoint, &mut pending_resize)?;
             }
         }
+        if painted && flush_platform(endpoint, application, false)? {
+            closing = true;
+            scheduler.cancel_timed_request();
+        }
     }
+}
+
+fn flush_platform(
+    endpoint: &mut dyn WindowEndpoint,
+    application: &mut impl Application,
+    mut close: bool,
+) -> Result<bool, Error> {
+    let mut commands = Vec::new();
+    application.flush_platform(&mut commands)?;
+    if let Some(index) = commands
+        .iter()
+        .position(|command| matches!(command, PlatformCommand::Close))
+    {
+        commands.truncate(index);
+        close = true;
+    }
+    endpoint.flush_platform(commands)?;
+    if close {
+        endpoint.request_close()?;
+    }
+    Ok(close)
 }
 fn acknowledge_pending(
     endpoint: &mut dyn WindowEndpoint,

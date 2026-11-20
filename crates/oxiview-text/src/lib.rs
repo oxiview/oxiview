@@ -5,8 +5,15 @@
 //! Large or transformed glyphs carry owned font data or synthesized outlines.
 
 mod drawing;
+mod edit;
+mod edit_layout;
 
 pub use drawing::{GlyphDraw, TextDecoration, TextDecorationKind};
+pub use edit::{
+    Affinity, Caret, EditCommand, EditError, EditMode, Editor, EditorPresentation, NativeEdit,
+    Selection, TYPING_GROUP_INTERVAL,
+};
+pub use edit_layout::EditLayout;
 
 use oxiview_base::{Color, PixelSize, Rect, RgbaImage, Size};
 use parley::{

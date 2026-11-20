@@ -19,10 +19,22 @@ M4 is complete. Small glyphs are cached at the display scale and large
 outlines render through Vello GPU. The owner confirmed text clarity in the
 native Snake window. [M4 acceptance record](docs/plans/m4-text-and-snake.md#acceptance-record)
 M5 is complete. Snake's M5 fork passed native review for keyboard navigation, persistent rebinding and live appearance. Three focus-ring snapshots and three performance workloads have accepted baselines. [M5 acceptance record](docs/plans/m5-focus-keyboard-and-themes.md#acceptance-record)
+M6 is complete. The Markdown editor passed native macOS review for Chinese input, candidate positioning, undo and file round trips. The release replay covers the editing and preview behavior. [M6 acceptance record](docs/plans/m6-text-editing-and-markdown.md#acceptance-record)
 M1 is complete: native visual acceptance, fresh-clone verification and local
 performance baseline comparison passed. See the [execution record](docs/plans/m1-first-window.md)
 for measured results and remaining latency work.
 The toolchain is pinned to Rust stable 1.97.0 with edition 2024.
+
+## Markdown editor
+
+Run the native two-pane editor on macOS, or exercise the same application through its release headless replay.
+
+```sh
+cargo run --release -p markdown-editor-oxi
+cargo run --release -p markdown-editor-oxi -- --headless --json
+```
+
+Open a Markdown file, edit multilingual source with inline IME, and preview tables, local images, Mermaid diagrams and LaTeX. [Editor and keyboard controls](examples/markdown-editor-oxi/README.md) · [M6 plan](docs/plans/m6-text-editing-and-markdown.md)
 
 ## Snake
 
@@ -201,7 +213,7 @@ session; keep the mouse still during the idle check. Missing baselines fail and
 may be recorded only after human confirmation. See
 [the performance protocol](docs/conventions/testing-performance.md).
 
-Windows and Linux remain planned native ports. Editable text/IME and the widget
-library belong to M6 and M7. The original M1 demo and measurement modes
+Windows and Linux remain planned native ports. The Markdown editor exercises
+M6 text input. The widget library belongs to M7. The original M1 demo and measurement modes
 retain their rendering/scheduling workload; use the separate M2 preview mode
 for node-tree and layout interaction.

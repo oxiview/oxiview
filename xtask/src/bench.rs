@@ -419,6 +419,12 @@ const M5_METRICS: &[&str] = &[
     "interaction/color_token_16_of_256",
 ];
 
+const M6_METRICS: &[&str] = &[
+    "text_editing/replace_and_undo_4k",
+    "text_editing/cached_wrapped_geometry_32_lines",
+    "text_editing/preedit_16_updates_then_commit",
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scope {
     Full,
@@ -426,6 +432,7 @@ pub(crate) enum Scope {
     M3,
     M4,
     M5,
+    M6,
 }
 
 impl Scope {
@@ -436,6 +443,7 @@ impl Scope {
             Self::M3 => "bench-m3",
             Self::M4 => "bench-m4",
             Self::M5 => "bench-m5",
+            Self::M6 => "bench-m6",
         }
     }
 
@@ -446,6 +454,7 @@ impl Scope {
             "bench-m3" => Some(Self::M3),
             "bench-m4" => Some(Self::M4),
             "bench-m5" => Some(Self::M5),
+            "bench-m6" => Some(Self::M6),
             _ => None,
         }
     }
@@ -490,6 +499,12 @@ impl Scope {
                 "bench-m5-2.log",
                 "bench-m5-3.log",
             ],
+            Self::M6 => &[
+                "bench-m6-results.json",
+                "bench-m6-1.log",
+                "bench-m6-2.log",
+                "bench-m6-3.log",
+            ],
         }
     }
 
@@ -504,6 +519,7 @@ impl Scope {
             Self::M3 => Some(("M3", M3_METRICS)),
             Self::M4 => Some(("M4", M4_METRICS)),
             Self::M5 => Some(("M5", M5_METRICS)),
+            Self::M6 => Some(("M6", M6_METRICS)),
         }
     }
 
@@ -546,6 +562,14 @@ impl Scope {
                 "--bench",
                 "interaction",
             ],
+            Self::M6 => &[
+                "bench",
+                "--locked",
+                "-p",
+                "oxiview-text",
+                "--bench",
+                "text_editing",
+            ],
         }
     }
 
@@ -556,6 +580,7 @@ impl Scope {
             Self::M3 => "cargo xtask bench --m3 --record",
             Self::M4 => "cargo xtask bench --m4 --record",
             Self::M5 => "cargo xtask bench --m5 --record",
+            Self::M6 => "cargo xtask bench --m6 --record",
         }
     }
 }
@@ -597,6 +622,9 @@ impl BenchCheck {
             }
             Scope::M5 => {
                 log.push_str("Scope: M5 focus, Actions and theme resolution (3 metrics)\n")
+            }
+            Scope::M6 => {
+                log.push_str("Scope: M6 Unicode editing, geometry and preedit (3 metrics)\n")
             }
         }
         let machine = probe_machine()?;
@@ -685,7 +713,7 @@ impl BenchCheck {
         }
         let mut metrics = match self.scope {
             Scope::Full => pending(),
-            Scope::M2 | Scope::M3 | Scope::M4 | Scope::M5 => BTreeMap::new(),
+            Scope::M2 | Scope::M3 | Scope::M4 | Scope::M5 | Scope::M6 => BTreeMap::new(),
         };
         for name in rounds[0].keys() {
             let mut samples: Vec<_> = rounds.iter().map(|round| round[name]).collect();
@@ -708,7 +736,7 @@ impl BenchCheck {
         }
         let measured = match self.scope {
             Scope::Full => measure_native(root),
-            Scope::M2 | Scope::M3 | Scope::M4 | Scope::M5 => Ok(BTreeMap::new()),
+            Scope::M2 | Scope::M3 | Scope::M4 | Scope::M5 | Scope::M6 => Ok(BTreeMap::new()),
         };
         let mut native = match measured {
             Ok(measurements) => measurements,

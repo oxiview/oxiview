@@ -1,5 +1,46 @@
 # Dependency management
 
+## M6 Markdown preview
+
+These exact workspace pins are inherited only by `markdown-editor-oxi`. The
+example translates parser events, diagram pixels, and math boxes into owned
+preview data before returning results to the window thread.
+
+| Dependency | Assessment and enabled capabilities |
+| --- | --- |
+| `pulldown-cmark =0.13.6` | MIT, Rust 1.71.1. Offset events provide CommonMark syntax and GFM tasks, tables and strikethrough, plus inline and display math delimiters. Default features are disabled, including the HTML emitter. [Release](https://docs.rs/crate/pulldown-cmark/0.13.6) |
+| `fermaid =0.5.1` | MIT OR Apache-2.0 OR BSD-3-Clause OR 0BSD, Rust 1.85. The example enables the renderer's diagram families, including flowcharts, sequence, state, class and ER. The additional parsers introduce no runtime dependencies. Fermaid accepts native text measurements for its labels, bounds diagram work, and includes line and column in syntax errors. [Release](https://docs.rs/crate/fermaid/0.5.1) |
+| `resvg =0.50.0` | Apache-2.0 OR MIT, Rust 1.85. Enables `text` and `system-fonts`. The example rasterizes the engine's intermediate SVG in-process to a bounded straight-sRGB image. It supplies the same preferred font used for measuring the labels. SVG image resolution is disabled. [Release](https://docs.rs/crate/resvg/0.50.0) |
+| `ratex-parser`, `ratex-layout`, `ratex-types`, `ratex-katex-fonts` at `=0.1.16` | MIT. The parser and layout crate run with default features disabled. RaTeX provides a validated display list with glyph baselines, paths, and rules in logical em coordinates. The example translates it to Scene primitives and uses the existing `skrifa =0.49.0` pin to resolve glyph IDs in the bundled KaTeX faces. [RaTeX source](https://github.com/erweixin/RaTeX) · [Layout release](https://docs.rs/crate/ratex-layout/0.1.16) |
+| `image =0.25.10` | MIT OR Apache-2.0, Rust 1.88. Defaults are disabled. Decodes local PNG, JPEG, GIF and WebP into static RGBA images. The standard library provides file reads and the workspace PNG crate provides only PNG decoding. [Release](https://docs.rs/crate/image/0.25.10) |
+| `unicode-bidi =0.3.18`, `unicode-linebreak =0.1.5` | MIT OR Apache-2.0 and Apache-2.0, respectively. The former is shared with resvg's text graph. They resolve visual order and wrap points for paragraphs containing inline graphics. The text system shapes the associated text fragments. [Bidi release](https://docs.rs/crate/unicode-bidi/0.3.18) · [Line break release](https://docs.rs/crate/unicode-linebreak/0.1.5) |
+
+The selected graph uses native Rust code. Resvg adds usvg, Fontdb, Tiny Skia
+and their parsing and geometry dependencies. Resvg shares the workspace
+HarfRust and Skrifa versions. RaTeX adds its metric tables and lexer, plus
+perfect-hash tables and their macros. The image crate adds its format
+decoders and color management. The diagram adapter loads the existing
+licensed Noto Sans fixtures first and uses installed fonts for fallback.
+[Noto Sans fixture licenses](../../crates/oxiview-text/tests/fonts/README.md)
+
+Resvg's font database and RaTeX retain duplicate `roxmltree`,
+`phf_shared`, and `thiserror` versions alongside the existing workspace
+versions. The local cargo-deny check reports those as warnings. Its
+license, cached advisory, source and ban checks passed on the selected graph.
+
+The RaTeX font package embeds the KaTeX TrueType faces and ships their SIL
+Open Font License 1.1. The published KaTeX Main Regular file has SHA-256
+`d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830`.
+[Bundled font license](https://docs.rs/crate/ratex-katex-fonts/0.1.16/source/fonts/OFL.txt)
+
+The first prototype built the Mermaid-RS fork `document-graphics-mermaid
+0.2.1` and LaTeX-Rust 2.1.1 on Rust 1.97. Cargo-deny rejected its graph
+because `ttf-parser` and `rustybuzz` are unmaintained. LaTeX-Rust 3.0.3
+requires Rust 1.99. Fermaid and RaTeX provide the required layouts with the
+workspace's supported font stack. [TTF Parser advisory](https://rustsec.org/advisories/RUSTSEC-2026-0192.html)
+· [Rustybuzz advisory](https://rustsec.org/advisories/RUSTSEC-2026-0206.html)
+· [LaTeX-Rust 3.0.3 manifest](https://docs.rs/crate/latex-rust/3.0.3/source/Cargo.toml)
+
 ## M5 development theme files
 
 The styling port uses the existing `toml` workspace dependency to parse

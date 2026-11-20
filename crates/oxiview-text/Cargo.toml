@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+icu_segmenter.workspace = true
 oxiview-base.workspace = true
 parley.workspace = true
 skrifa.workspace = true
@@ -23,4 +24,9 @@ divan.workspace = true
 [[bench]]
 name = "text_pipeline"
 path = "../../benches/text_pipeline.rs"
+harness = false
+
+[[bench]]
+name = "text_editing"
+path = "../../benches/text_editing.rs"
 harness = false

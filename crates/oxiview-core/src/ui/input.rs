@@ -300,7 +300,7 @@ impl UiCommands {
     pub fn stop_propagation(&mut self) {
         self.stop = true;
     }
-    fn push(&mut self, command: Command) {
+    pub(super) fn push(&mut self, command: Command) {
         let command = if self.buffer.accepting {
             command
         } else {
@@ -551,6 +551,7 @@ impl UiTree {
                 self.cancel_queue(UiError::QueueClosed, &mut handler, &mut work)?;
                 let order = self.postorder(self.root)?;
                 self.paint_cache = None;
+                self.editors.clear();
                 for id in order {
                     if let Some(slot) = self.nodes.get_mut(id.slot) {
                         drop(slot.take());
