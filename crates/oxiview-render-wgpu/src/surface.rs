@@ -1,4 +1,4 @@
-use crate::{Error, PixelSize, RenderContext, acquisition::Acquisition, device, encoding};
+use crate::{Error, PixelSize, RenderContext, acquisition::Acquisition, device};
 use oxiview_base::{NativeSurfaceHandle, NativeSurfaceKind};
 use oxiview_scene::{NodeId, Scene};
 use std::sync::{
@@ -181,7 +181,7 @@ impl WindowSurface {
         worker.start(
             move || {
                 let _span = tracing::trace_span!("drawable_acquisition").entered();
-                scoped_device(&device, &lost, || surface.get_current_texture())
+                device::scoped(&device, &lost, || surface.get_current_texture())
             },
             notify,
         )?;
@@ -209,16 +209,15 @@ impl WindowSurface {
         let encoded = scene
             .encode(root)
             .map_err(|e| Error::SceneEncoding(e.to_string()))?;
-        let commands = encoding::Commands::new(&encoded, self.size)?;
         let mut process = self
             .context
             .process
             .lock()
             .map_err(|e| Error::DeviceLost(e.to_string()))?;
         process.ensure_device()?;
-        let gpu = process
-            .gpu
-            .as_ref()
+        let device::Process { instance, gpu } = &mut *process;
+        let gpu = gpu
+            .as_mut()
             .ok_or_else(|| Error::DeviceLost("device unavailable".into()))?;
         if !self
             .configuration
@@ -253,7 +252,7 @@ impl WindowSurface {
                     if attempt == 0 =>
                 {
                     // Recreating also handles Lost; no drawable is held here.
-                    self.surface = Arc::new(create(&process.instance, self.handle)?);
+                    self.surface = Arc::new(create(instance, self.handle)?);
                     self.configuration =
                         Some(configure(&self.surface, gpu, self.size, self.display_sync)?);
                 }
@@ -270,7 +269,7 @@ impl WindowSurface {
             }
         }
         let frame = frame.ok_or_else(|| Error::Surface("no drawable after retry".into()))?;
-        match gpu.render(&commands, self.size, Some(&frame.texture), false) {
+        match gpu.render_scene(&encoded, self.size, Some(&frame.texture), false) {
             Ok(_) => {
                 scoped(gpu, || gpu.queue.present(frame))?;
                 Ok(FrameOutcome::Presented)
@@ -299,15 +298,10 @@ fn configure(
     let mut config = surface
         .get_default_config(&gpu.adapter, size.width, size.height)
         .ok_or_else(|| Error::Surface("surface incompatible with shared adapter".into()))?;
-    config.format = [
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
-        wgpu::TextureFormat::Bgra8Unorm,
-        wgpu::TextureFormat::Rgba8Unorm,
-    ]
-    .into_iter()
-    .find(|format| capabilities.formats.contains(format))
-    .ok_or_else(|| Error::Surface("no supported RGBA8 surface format".into()))?;
+    config.format = crate::copy::SURFACE_FORMATS
+        .into_iter()
+        .find(|format| capabilities.formats.contains(format))
+        .ok_or_else(|| Error::Surface("no supported RGBA8 surface format".into()))?;
     if !capabilities
         .present_modes
         .contains(&wgpu::PresentMode::Fifo)
@@ -339,32 +333,5 @@ fn configure(
 // failure invalidates shared state synchronously; all surfaces notice the new
 // device identity on next use, even before wgpu delivers its loss callback.
 fn scoped<T>(gpu: &device::Gpu, operation: impl FnOnce() -> T) -> Result<T, Error> {
-    scoped_device(&gpu.device, &gpu.lost, operation)
-}
-// wgpu's std-enabled error scopes are thread-local. Keep acquisition scopes
-// on the worker and leave the shared rendering mutex free during a pool wait.
-fn scoped_device<T>(
-    device: &wgpu::Device,
-    lost: &AtomicBool,
-    operation: impl FnOnce() -> T,
-) -> Result<T, Error> {
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let result = operation();
-    let errors = [
-        device::block_on(internal.pop()),
-        device::block_on(memory.pop()),
-        device::block_on(validation.pop()),
-    ];
-    if let Some(error) = errors.into_iter().flatten().next() {
-        lost.store(true, Ordering::Release);
-        return Err(Error::DeviceLost(error.to_string()));
-    }
-    if lost.load(Ordering::Acquire) {
-        return Err(Error::DeviceLost(
-            "device lost during surface operation".into(),
-        ));
-    }
-    Ok(result)
+    device::scoped(&gpu.device, &gpu.lost, operation)
 }

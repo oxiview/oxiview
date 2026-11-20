@@ -5,6 +5,7 @@ use super::{
 use oxiview_reactive::Owner;
 use oxiview_scene::Primitive;
 use oxiview_style::Style;
+use oxiview_text::RichText;
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -98,7 +99,11 @@ impl UiCommandSender {
     }
     /// Queues replacement of a real text node's source string.
     pub fn set_text(&self, node: NodeId, text: impl Into<String>) -> Result<(), UiError> {
-        self.post(Command::Text(node, text.into()))
+        self.set_rich_text(node, RichText::plain(text.into()))
+    }
+    /// Queues a rich-text content replacement in the active or next batch.
+    pub fn set_rich_text(&self, node: NodeId, text: RichText) -> Result<(), UiError> {
+        self.post(Command::Text(node, text))
     }
     /// Queues subtree removal with the normal lifecycle cleanup.
     pub fn remove(&self, node: NodeId) -> Result<(), UiError> {

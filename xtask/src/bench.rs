@@ -407,12 +407,19 @@ const M3_METRICS: &[&str] = &[
     "components/show_mount_and_dispose",
     "components/keyed_reorder_32",
 ];
+const M4_METRICS: &[&str] = &[
+    "text_pipeline/shape_wrapped_paragraph",
+    "text_pipeline/shape_rich_paragraph",
+    "text_pipeline/cold_label_glyphs_2x",
+    "text_pipeline/warm_label_glyphs_2x",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scope {
     Full,
     M2,
     M3,
+    M4,
 }
 
 impl Scope {
@@ -421,6 +428,7 @@ impl Scope {
             Self::Full => "bench",
             Self::M2 => "bench-m2",
             Self::M3 => "bench-m3",
+            Self::M4 => "bench-m4",
         }
     }
 
@@ -429,6 +437,7 @@ impl Scope {
             "bench" => Some(Self::Full),
             "bench-m2" => Some(Self::M2),
             "bench-m3" => Some(Self::M3),
+            "bench-m4" => Some(Self::M4),
             _ => None,
         }
     }
@@ -461,6 +470,12 @@ impl Scope {
                 "bench-m3-2.log",
                 "bench-m3-3.log",
             ],
+            Self::M4 => &[
+                "bench-m4-results.json",
+                "bench-m4-1.log",
+                "bench-m4-2.log",
+                "bench-m4-3.log",
+            ],
         }
     }
 
@@ -473,6 +488,7 @@ impl Scope {
             Self::Full => None,
             Self::M2 => Some(("M2", M2_METRICS)),
             Self::M3 => Some(("M3", M3_METRICS)),
+            Self::M4 => Some(("M4", M4_METRICS)),
         }
     }
 
@@ -499,6 +515,14 @@ impl Scope {
                 "--bench",
                 "components",
             ],
+            Self::M4 => &[
+                "bench",
+                "--locked",
+                "-p",
+                "oxiview-text",
+                "--bench",
+                "text_pipeline",
+            ],
         }
     }
 
@@ -507,6 +531,7 @@ impl Scope {
             Self::Full => "cargo xtask bench --record",
             Self::M2 => "cargo xtask bench --m2 --record",
             Self::M3 => "cargo xtask bench --m3 --record",
+            Self::M4 => "cargo xtask bench --m4 --record",
         }
     }
 }
@@ -543,6 +568,9 @@ impl BenchCheck {
             Scope::Full => {}
             Scope::M2 => log.push_str("Scope: M2 layout and UI tree (8 metrics)\n"),
             Scope::M3 => log.push_str("Scope: M3 reactivity and components (4 metrics)\n"),
+            Scope::M4 => {
+                log.push_str("Scope: M4 text shaping and glyph rasterization (4 metrics)\n")
+            }
         }
         let machine = probe_machine()?;
         let id = machine_id(&machine);
@@ -630,7 +658,7 @@ impl BenchCheck {
         }
         let mut metrics = match self.scope {
             Scope::Full => pending(),
-            Scope::M2 | Scope::M3 => BTreeMap::new(),
+            Scope::M2 | Scope::M3 | Scope::M4 => BTreeMap::new(),
         };
         for name in rounds[0].keys() {
             let mut samples: Vec<_> = rounds.iter().map(|round| round[name]).collect();
@@ -653,7 +681,7 @@ impl BenchCheck {
         }
         let measured = match self.scope {
             Scope::Full => measure_native(root),
-            Scope::M2 | Scope::M3 => Ok(BTreeMap::new()),
+            Scope::M2 | Scope::M3 | Scope::M4 => Ok(BTreeMap::new()),
         };
         let mut native = match measured {
             Ok(measurements) => measurements,

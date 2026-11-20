@@ -28,6 +28,11 @@ const DIVAN_M3: &str = "components fastest │ slowest │ median │ mean │ s
 ├─ bound_style_update 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 10000
 ├─ keyed_reorder_32 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 1000
 ╰─ show_mount_and_dispose 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 5000";
+const DIVAN_M4: &str = "text_pipeline fastest │ slowest │ median │ mean │ samples │ iters
+├─ cold_label_glyphs_2x 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 2560
+├─ shape_rich_paragraph 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 5120
+├─ shape_wrapped_paragraph 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 5120
+╰─ warm_label_glyphs_2x 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 51200";
 
 fn fixture_machine() -> Machine {
     Machine {
@@ -152,6 +157,20 @@ impl Fixture {
                         "components::bound_style_update",
                         "components::show_mount_and_dispose",
                         "components::keyed_reorder_32",
+                    ],
+                    Scope::M4 => &[
+                        "bench",
+                        "--locked",
+                        "-p",
+                        "oxiview-text",
+                        "--bench",
+                        "text_pipeline",
+                        "--",
+                        "--exact",
+                        "text_pipeline::shape_wrapped_paragraph",
+                        "text_pipeline::shape_rich_paragraph",
+                        "text_pipeline::cold_label_glyphs_2x",
+                        "text_pipeline::warm_label_glyphs_2x",
                     ],
                 };
                 assert!(command.get_args().eq(expected.iter().copied()));
@@ -316,53 +335,48 @@ fn m2_record_merges_only_its_values_and_retains_full_missing_measurement_checks(
 }
 
 #[test]
-fn m3_record_and_comparison_preserve_existing_m2_and_native_baselines() {
+fn each_milestone_records_only_its_metrics_and_preserves_earlier_baselines() {
     let fixture = Fixture::new();
     fixture.seed_baseline();
     assert_eq!(
         fixture.run(Scope::M2, true, [DIVAN_M2; 3]).0,
         Ok(Status::Pass)
     );
-    let previous: Value = serde_json::from_slice(&fs::read(fixture.path()).expect("M2 baseline"))
-        .expect("valid baseline JSON");
     let m2_report = fixture.report(Scope::M2);
-    assert_eq!(
-        fixture.run(Scope::M3, false, [DIVAN_M3; 3]).0,
-        Ok(Status::Fail)
-    );
-    let first = fixture.report(Scope::M3);
-    assert_eq!(first["scope"], "m3");
-    assert_eq!(metrics(&first).len(), M3_METRICS.len());
-    assert!(
-        metrics(&first)
-            .iter()
-            .all(|m| m["status"] == "missing_baseline")
-    );
-    assert_eq!(
-        fixture.run(Scope::M3, true, [DIVAN_M3; 3]).0,
-        Ok(Status::Pass)
-    );
-    let mut after: Value = serde_json::from_slice(&fs::read(fixture.path()).expect("M3 baseline"))
-        .expect("valid baseline JSON");
-    for &name in M3_METRICS {
-        let metric = after["metrics"]
-            .as_object_mut()
-            .expect("metric object")
-            .remove(name)
-            .expect("recorded M3 metric");
-        assert_eq!(metric["value"], 2000.0);
+    for (scope, label, names, rounds) in [
+        (Scope::M3, "m3", M3_METRICS, DIVAN_M3),
+        (Scope::M4, "m4", M4_METRICS, DIVAN_M4),
+    ] {
+        let baseline = || -> Value {
+            serde_json::from_slice(&fs::read(fixture.path()).expect("machine baseline"))
+                .expect("valid baseline JSON")
+        };
+        let previous = baseline();
+        assert_eq!(fixture.run(scope, false, [rounds; 3]).0, Ok(Status::Fail));
+        let first = fixture.report(scope);
+        assert_eq!(first["scope"], label);
+        assert_eq!(metrics(&first).len(), names.len());
+        assert!(
+            metrics(&first)
+                .iter()
+                .all(|m| m["status"] == "missing_baseline")
+        );
+        assert_eq!(fixture.run(scope, true, [rounds; 3]).0, Ok(Status::Pass));
+        let mut after = baseline();
+        for &name in names {
+            let metric = after["metrics"]
+                .as_object_mut()
+                .expect("metric object")
+                .remove(name)
+                .expect("recorded metric");
+            assert_eq!(metric["value"], 2000.0);
+        }
+        assert_eq!(after, previous);
+        assert_eq!(fixture.run(scope, false, [rounds; 3]).0, Ok(Status::Pass));
+        assert_eq!(fixture.report(Scope::M2), m2_report);
+        let slow = rounds.replace("2 µs", "3 µs");
+        assert_eq!(fixture.run(scope, false, [&slow; 3]).0, Ok(Status::Fail));
     }
-    assert_eq!(after, previous);
-    assert_eq!(
-        fixture.run(Scope::M3, false, [DIVAN_M3; 3]).0,
-        Ok(Status::Pass)
-    );
-    assert_eq!(fixture.report(Scope::M2), m2_report);
-    let slow = DIVAN_M3.replace("2 µs", "3 µs");
-    assert_eq!(
-        fixture.run(Scope::M3, false, [&slow; 3]).0,
-        Ok(Status::Fail)
-    );
 }
 
 #[test]

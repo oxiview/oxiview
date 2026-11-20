@@ -158,6 +158,34 @@
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
+    },
+    "text_pipeline/cold_label_glyphs_2x": {
+      "value": 70280.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "text_pipeline/shape_rich_paragraph": {
+      "value": 26360.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "text_pipeline/shape_wrapped_paragraph": {
+      "value": 25430.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "text_pipeline/warm_label_glyphs_2x": {
+      "value": 1799.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
     }
   }
 }

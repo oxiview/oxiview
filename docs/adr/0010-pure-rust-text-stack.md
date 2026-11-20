@@ -24,8 +24,28 @@ The framework's own **editing core** provides **editable text**: grapheme-level 
 
 ## M4 implementation
 
-Snake uses Parley for layout and Swash for DPI-aware rasterization. A bounded
-cache retains glyph images, and the GPU renderer reads deduplicated pixel data
-from the encoded Scene's command buffer. A persistent GPU texture atlas,
-large-text vector paths and the full rich-text API remain open.
+Parley shapes text in logical coordinates. UI text painting supplies the
+local-to-device affine to the text port. Small outlines use Swash hinting and
+quarter-pixel phases at the final display scale. The default cutoff is 64
+device pixels per em, configurable through `TextSystem::with_vector_threshold`.
+Outlines above that cutoff and outlines with rotation, shear, reflection, or
+nonuniform scaling become unhinted Scene glyphs. Synthesized bold and oblique
+outlines use the Scene's filled Bézier path. Bitmap-only faces retain their
+available strikes and the advance of unpainted spaces. COLR glyphs reference
+their font's paint graph at all sizes.
+The `glyph_images` API remains available for callers that need Swash raster
+images.
+
+The CPU adapter draws unhinted outlines through Skrifa and reads COLR
+paint tables through Skrifa's Fontations dependency. Vello CPU rasterizes glyph
+clip coverage and supplies the blend operators. Each color glyph blends and
+interpolates premultiplied linear-light values in viewport-clipped tiles. The
+adapter applies glyph opacity once and passes these float tiles to the linear
+compositor. The finished frame is encoded as straight sRGB. Keeping the original color stops and
+geometry handles empty and single-stop lines, hard stops, and variable stop
+offsets and alpha. Headless pixel tests cover transformed gradients, sweep
+orientation, alpha, compositing, palette mapping, and retained clip and opacity.
+[OpenType COLR](https://learn.microsoft.com/en-us/typography/opentype/spec/colr) ·
+[OpenType CPAL interpolation](https://learn.microsoft.com/en-us/typography/opentype/spec/cpal#interpolation-of-colors)
+
 [M4 text and Snake](../plans/m4-text-and-snake.md)

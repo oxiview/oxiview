@@ -97,7 +97,7 @@ headless artifact directory. Defaults write to `target/xtask/snake/`:
 - `ready.png` and `ready@2x.png`: actual font rendering at two display scales.
 - `playing@2x.png`: a run driven by keyboard inputs that collected three foods.
 - `paused.png`, `game-over.png`, and `compact.png`: lifecycle and resize states.
-- `report.json`: executed checks, glyph-image evidence, component mounts,
+- `report.json`: executed checks, raster and vector glyph counts, raster pixels, component mounts,
   history updates, rejected-command counts, and retired automatic bindings.
 
 The manifest is marked incomplete before work starts and failed if a replay

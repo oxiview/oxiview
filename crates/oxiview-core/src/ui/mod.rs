@@ -25,7 +25,7 @@ pub use input::{
     PointerEventKind, UiBatchReport, UiCommandOutcome, UiCommands, UiDispatchResult, UiPointerEvent,
 };
 pub use mailbox::UiCommandSender;
-pub use text::text;
+pub use text::{rich_text, text};
 pub use view::{View, component, for_each, keyed_for, node, show};
 
 const MAX_DEPTH: usize = oxiview_layout::MAX_LAYOUT_DEPTH;
@@ -167,6 +167,12 @@ pub trait NodeMeasure {
         known: Dimensions<Option<f64>>,
         available: Dimensions<AvailableSpace>,
     ) -> Dimensions<f64>;
+
+    /// Returns the first baseline from the content top at the final content width.
+    /// The default delegates baseline synthesis to the layout engine.
+    fn first_baseline(&self, _content_width: f64) -> Option<f64> {
+        None
+    }
 }
 impl<F> NodeMeasure for F
 where
@@ -1012,6 +1018,15 @@ impl LayoutTree for TreeLayout<'_> {
     fn content_revision(&self, id: NodeId) -> u64 {
         self.tree.node(id).map_or(0, |node| node.content_revision)
     }
+    fn first_baseline(&mut self, id: NodeId, content_width: f64) -> Option<f64> {
+        self.tree
+            .node(id)
+            .ok()?
+            .measure
+            .as_ref()?
+            .first_baseline(content_width)
+    }
+
     fn measure(
         &mut self,
         id: NodeId,

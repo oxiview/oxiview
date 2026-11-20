@@ -135,7 +135,8 @@ fn assert_fixture_pixels(image: &RgbaImage, scale: f64) {
         "overflow outside the border"
     );
     let single = pixel(image, scale, 53, 30);
-    for (actual, expected) in single.into_iter().zip([144u8, 121, 80, 255]) {
+    // Encode the 50/50 mean of decoded GOLD and PANEL RGB.
+    for (actual, expected) in single.into_iter().zip([182u8, 140, 80, 255]) {
         assert!(actual.abs_diff(expected) <= 1, "half opacity: {single:?}");
     }
     assert_eq!(

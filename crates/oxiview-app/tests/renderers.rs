@@ -12,6 +12,49 @@ const SIZE: PixelSize = PixelSize {
     height: 64,
 };
 
+#[test]
+fn coincident_gradient_endpoints_sample_the_last_stop_at_zero() -> TestResult {
+    use oxiview_base::{Color, Point};
+    use oxiview_scene::ColorStop;
+    let gpu = RenderContext::new()?;
+    let red = Color::from_rgba8(255, 0, 0, 255);
+    let blue = Color::from_rgba8(0, 0, 255, 255);
+    let brush = Brush::LinearGradient(
+        Point::default(),
+        Point::default(),
+        [red, blue]
+            .map(|color| ColorStop {
+                position: 0.0,
+                color,
+            })
+            .into(),
+    );
+    for transform in [
+        Affine::IDENTITY,
+        Affine::new([1.0, 0.0, 0.2, 1.0, 0.0, 0.0]),
+    ] {
+        let mut scene = Scene::new();
+        let root = scene.insert(None, 0, NodeKind::Transform(transform))?;
+        scene.insert(
+            Some(root),
+            0,
+            NodeKind::Draw(Primitive::Fill(
+                Rect::new(0.0, 0.0, 32.0, 32.0),
+                CornerRadii::default(),
+                brush.clone(),
+            )),
+        )?;
+        for image in [
+            CpuRenderer.render(&scene, root, SIZE)?,
+            gpu.render(&scene, root, SIZE)?,
+        ] {
+            let center = (16 * SIZE.width as usize + 16) * 4;
+            assert_eq!(&image.pixels()[center..center + 4], &[0, 0, 255, 255]);
+        }
+    }
+    Ok(())
+}
+
 fn metrics(a: &[u8], b: &[u8]) -> (u8, f64) {
     let mut max = 0;
     let mut differing = 0;

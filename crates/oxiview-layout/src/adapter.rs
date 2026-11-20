@@ -6,7 +6,10 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
-use taffy::{CacheTree, LayoutPartialTree as _, NodeId, TraversePartialTree};
+use taffy::{
+    CacheTree, LayoutPartialTree as _, NodeId, TraversePartialTree, prelude::TaffyMinContent,
+    util::ResolveOrZero,
+};
 
 /// Layout implementation that borrows the caller's topology.
 ///
@@ -422,6 +425,21 @@ impl<I: Copy + Eq + Hash> Updates<I> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct GridBaseline {
+    offset: f32,
+    margin_top: f32,
+}
+
+// Direct child calls made by the pinned Grid algorithm. A probe and a
+// placed item use different constraints even if they share a child ID.
+struct GridBaselinePass {
+    depth: usize,
+    align_items: taffy::AlignItems,
+    probes: HashMap<NodeId, GridBaseline>,
+    placed: HashMap<NodeId, GridBaseline>,
+}
+
 struct Adapter<'a, T: LayoutTree> {
     retained: &'a TaffyLayout<T::NodeId>,
     styles: &'a TaffyStyles,
@@ -433,6 +451,8 @@ struct Adapter<'a, T: LayoutTree> {
     stats: LayoutStats,
     error: Option<LayoutError>,
     depth: usize,
+    grid_baselines: Option<GridBaselinePass>,
+    speculative_cache: Option<HashMap<NodeId, NodeCache>>,
 }
 
 impl<T: LayoutTree> Adapter<'_, T> {
@@ -461,6 +481,8 @@ impl<T: LayoutTree> Adapter<'_, T> {
             stats: LayoutStats::default(),
             error: None,
             depth: 0,
+            grid_baselines: None,
+            speculative_cache: None,
         }
     }
 
@@ -1019,6 +1041,9 @@ impl<T: LayoutTree> taffy::LayoutPartialTree for Adapter<'_, T> {
     }
 
     fn set_unrounded_layout(&mut self, id: NodeId, layout: &taffy::Layout) {
+        if self.speculative_cache.is_some() {
+            return;
+        }
         if self.inputs(id).is_none() {
             self.error.get_or_insert(LayoutError::InvalidTree);
             return;
@@ -1042,6 +1067,21 @@ impl<T: LayoutTree> taffy::LayoutPartialTree for Adapter<'_, T> {
         inputs: taffy::LayoutInput,
     ) -> taffy::LayoutOutput {
         self.stats.layout_visits += 1;
+        if let Some(align_items) = self
+            .grid_baselines
+            .as_ref()
+            .and_then(|pass| (pass.depth == self.depth).then_some(pass.align_items))
+            && inputs.run_mode == taffy::RunMode::PerformLayout
+            && self.participates_in_baseline(id, align_items)
+        {
+            return self.grid_baseline_child(id, inputs);
+        }
+        self.compute_node(id, inputs)
+    }
+}
+
+impl<T: LayoutTree> Adapter<'_, T> {
+    fn compute_node(&mut self, id: NodeId, inputs: taffy::LayoutInput) -> taffy::LayoutOutput {
         if self.error.is_some() {
             return taffy::LayoutOutput::HIDDEN;
         }
@@ -1066,8 +1106,8 @@ impl<T: LayoutTree> taffy::LayoutPartialTree for Adapter<'_, T> {
                     tree.compute_leaf(id, node, inputs)
                 } else {
                     match display {
-                        taffy::Display::Flex => taffy::compute_flexbox_layout(tree, id, inputs),
-                        taffy::Display::Grid => taffy::compute_grid_layout(tree, id, inputs),
+                        taffy::Display::Flex => tree.compute_flex(id, inputs),
+                        taffy::Display::Grid => tree.compute_grid(id, inputs),
                         taffy::Display::Block | taffy::Display::FlowRoot => {
                             taffy::compute_block_layout(tree, id, inputs, None)
                         }
@@ -1083,10 +1123,172 @@ impl<T: LayoutTree> taffy::LayoutPartialTree for Adapter<'_, T> {
         self.depth -= 1;
         output
     }
-}
 
-impl<T: LayoutTree> Adapter<'_, T> {
+    fn participates_in_baseline(&self, id: NodeId, align_items: taffy::AlignItems) -> bool {
+        let style = self.style(id);
+        style.display != taffy::Display::None
+            && !style.position.is_out_of_flow()
+            && style.align_self.unwrap_or(align_items) == taffy::AlignItems::BASELINE
+            && !style.margin.top.is_auto()
+            && !style.margin.bottom.is_auto()
+    }
+
+    fn baseline_group(&self, id: NodeId) -> Option<taffy::AlignItems> {
+        let align_items = self.style(id).align_items;
+        self.child_ids(id)
+            .filter(|&child| self.participates_in_baseline(child, align_items))
+            .nth(1)
+            .map(|_| align_items)
+    }
+
+    fn speculatively<R>(&mut self, compute: impl FnOnce(&mut Self) -> R) -> R {
+        if self.speculative_cache.is_some() {
+            return compute(self);
+        }
+        self.speculative_cache = Some(HashMap::new());
+        let output = compute(self);
+        self.speculative_cache = None;
+        output
+    }
+
+    fn compute_flex(&mut self, id: NodeId, inputs: taffy::LayoutInput) -> taffy::LayoutOutput {
+        if inputs.run_mode == taffy::RunMode::ComputeSize
+            && matches!(
+                self.style(id).flex_direction,
+                taffy::FlexDirection::Row | taffy::FlexDirection::RowReverse
+            )
+            && self.baseline_group(id).is_some()
+        {
+            // Taffy performs child layouts during a size-only baseline probe.
+            // Discard their geometry and keep their cache out of the final pass.
+            return self.speculatively(|tree| taffy::compute_flexbox_layout(tree, id, inputs));
+        }
+        taffy::compute_flexbox_layout(self, id, inputs)
+    }
+
+    fn compute_grid(&mut self, id: NodeId, inputs: taffy::LayoutInput) -> taffy::LayoutOutput {
+        let Some(align_items) = self.baseline_group(id) else {
+            return taffy::compute_grid_layout(self, id, inputs);
+        };
+        if inputs.run_mode == taffy::RunMode::ComputeSize {
+            if inputs.axis == taffy::RequestedAxis::Horizontal
+                || inputs.known_dimensions.height.is_some()
+            {
+                return self.speculatively(|tree| taffy::compute_grid_layout(tree, id, inputs));
+            }
+            // Row height depends on the same shims as final placement. Use the
+            // resolved grid areas during this measurement without publishing them.
+            let layout = taffy::LayoutInput {
+                run_mode: taffy::RunMode::PerformLayout,
+                ..inputs
+            };
+            return self.speculatively(|tree| tree.grid_with_baselines(id, layout, align_items));
+        }
+        self.grid_with_baselines(id, inputs, align_items)
+    }
+
+    fn grid_with_baselines(
+        &mut self,
+        id: NodeId,
+        inputs: taffy::LayoutInput,
+        align_items: taffy::AlignItems,
+    ) -> taffy::LayoutOutput {
+        let outer = self.grid_baselines.replace(GridBaselinePass {
+            depth: self.depth,
+            align_items,
+            probes: HashMap::new(),
+            placed: HashMap::new(),
+        });
+        let mut output = taffy::compute_grid_layout(self, id, inputs);
+        // Taffy 0.15.1 uses min-content probes before it knows the grid areas.
+        // If first-line runs or box insets differ at placement, feed the measured
+        // baseline back into row sizing and alignment. Bound iteration for layouts
+        // where a baseline shim feeds back into an item's width.
+        for _ in 0..3 {
+            let Some(pass) = self.grid_baselines.as_mut() else {
+                break;
+            };
+            if self.error.is_some()
+                || pass
+                    .probes
+                    .iter()
+                    .all(|(id, value)| pass.placed.get(id) == Some(value))
+            {
+                break;
+            }
+            // Keep only items the upstream algorithm actually probed together.
+            // The same output is used for both intrinsic height and positioning.
+            pass.placed
+                .retain(|child, _| pass.probes.contains_key(child));
+            pass.probes = std::mem::take(&mut pass.placed);
+            output = taffy::compute_grid_layout(self, id, inputs);
+        }
+        self.grid_baselines = outer;
+        output
+    }
+
+    fn grid_baseline_child(
+        &mut self,
+        id: NodeId,
+        inputs: taffy::LayoutInput,
+    ) -> taffy::LayoutOutput {
+        let is_probe = inputs.known_dimensions == taffy::Size::NONE
+            && inputs.available_space == taffy::Size::MIN_CONTENT;
+        let margin_top = self
+            .style(id)
+            .margin
+            .top
+            .resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
+        if is_probe {
+            if let Some(baseline) = self
+                .grid_baselines
+                .as_ref()
+                .and_then(|pass| pass.probes.get(&id))
+            {
+                let offset = baseline.offset + (baseline.margin_top - margin_top);
+                return taffy::LayoutOutput::from_sizes_and_baselines(
+                    taffy::Size {
+                        width: 0.0,
+                        height: offset.max(0.0),
+                    },
+                    taffy::Rect::ZERO,
+                    taffy::tree::Baselines::from_first(Some(offset)),
+                );
+            }
+            let output = self.speculatively(|tree| tree.compute_node(id, inputs));
+            let baseline = self.grid_baseline(id, &output, margin_top);
+            if let Some(pass) = self.grid_baselines.as_mut() {
+                pass.probes.insert(id, baseline);
+            }
+            return output;
+        }
+        let output = self.compute_node(id, inputs);
+        let baseline = self.grid_baseline(id, &output, margin_top);
+        if let Some(pass) = self.grid_baselines.as_mut() {
+            pass.placed.insert(id, baseline);
+        }
+        output
+    }
+
+    fn grid_baseline(
+        &self,
+        id: NodeId,
+        output: &taffy::LayoutOutput,
+        margin_top: f32,
+    ) -> GridBaseline {
+        let offset = output.baselines.first.unwrap_or(output.size.height);
+        let offset = if self.style(id).overflow.y.is_scroll_container() {
+            offset.min(output.size.height).max(0.0)
+        } else {
+            offset
+        };
+        GridBaseline { offset, margin_top }
+    }
+
     fn hide(&mut self, id: NodeId) -> taffy::LayoutOutput {
+        if self.speculative_cache.is_some() {
+            return taffy::LayoutOutput::HIDDEN;
+        }
         let completed = self
             .updates
             .geometry
@@ -1120,7 +1322,7 @@ impl<T: LayoutTree> Adapter<'_, T> {
     ) -> taffy::LayoutOutput {
         let style = self.converted_style(id).cloned();
         let style = style.as_ref().map_or(&self.default_style, Rc::as_ref);
-        taffy::compute_leaf_layout(
+        let mut output = taffy::compute_leaf_layout(
             inputs,
             style,
             |_, _| 0.0,
@@ -1162,7 +1364,30 @@ impl<T: LayoutTree> Adapter<'_, T> {
                     height: measured.height as f32,
                 }
             },
-        )
+        );
+        if inputs.run_mode == taffy::RunMode::PerformLayout && self.error.is_none() {
+            let padding = style
+                .padding
+                .resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
+            let border = style
+                .border
+                .resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
+            let width = (f64::from(output.size.width)
+                - (f64::from(border.left) + f64::from(padding.left))
+                - f64::from(border.right)
+                - f64::from(padding.right))
+            .max(0.0);
+            if let Some(first_baseline) = self.tree.first_baseline(node, width) {
+                let baseline =
+                    (first_baseline + f64::from(padding.top) + f64::from(border.top)) as f32;
+                if baseline.is_finite() {
+                    output.baselines = taffy::tree::Baselines::from_first(Some(baseline));
+                } else {
+                    self.error = Some(LayoutError::InvalidGeometry);
+                }
+            }
+        }
+        output
     }
 }
 
@@ -1174,7 +1399,12 @@ impl<T: LayoutTree> CacheTree for Adapter<'_, T> {
         } else {
             self.retained.nodes.get(&id).map(|node| &node.cache)
         };
-        let result = cache.and_then(|cache| cache.get(input));
+        let result = self
+            .speculative_cache
+            .as_ref()
+            .and_then(|scratch| scratch.get(&id))
+            .and_then(|cache| cache.get(input))
+            .or_else(|| cache.and_then(|cache| cache.get(input)));
         if result.is_some() {
             self.stats.cache_hits += 1;
         }
@@ -1182,6 +1412,10 @@ impl<T: LayoutTree> CacheTree for Adapter<'_, T> {
     }
 
     fn cache_store(&mut self, id: NodeId, input: &taffy::LayoutInput, output: taffy::LayoutOutput) {
+        if let Some(cache) = &mut self.speculative_cache {
+            cache.entry(id).or_default().store(*input, output);
+            return;
+        }
         let cache = self.updates.caches.entry(id).or_insert_with(|| {
             if self.updates.dirty.contains(&id) {
                 NodeCache::default()
@@ -1196,6 +1430,10 @@ impl<T: LayoutTree> CacheTree for Adapter<'_, T> {
     }
 
     fn cache_clear(&mut self, id: NodeId) {
+        if let Some(cache) = &mut self.speculative_cache {
+            cache.remove(&id);
+            return;
+        }
         self.updates.caches.insert(id, NodeCache::default());
     }
 }
@@ -1216,6 +1454,9 @@ impl<T: LayoutTree> taffy::LayoutContainingBlock for Adapter<'_, T> {
     }
 
     fn add_hoisted_children(&mut self, id: NodeId, hoisted: &[NodeId]) {
+        if self.speculative_cache.is_some() {
+            return;
+        }
         for child in hoisted {
             if let Some(geometry) = self.updates.geometry.get_mut(child) {
                 geometry.hoisted_by = Some(id);
@@ -1325,6 +1566,13 @@ fn align(v: Alignment) -> taffy::AlignItems {
         Alignment::End => taffy::AlignItems::END,
         Alignment::Center => taffy::AlignItems::CENTER,
         Alignment::Stretch => taffy::AlignItems::STRETCH,
+        Alignment::Baseline => taffy::AlignItems::BASELINE,
+    }
+}
+fn justify(v: Alignment) -> taffy::AlignItems {
+    match v {
+        Alignment::Baseline => taffy::AlignItems::START,
+        other => align(other),
     }
 }
 fn content(v: ContentAlignment) -> taffy::AlignContent {
@@ -1425,8 +1673,8 @@ fn convert_style(v: &LayoutInput) -> taffy::Style {
         },
         align_items: align(v.align_items),
         align_self: v.align_self.map(align),
-        justify_items: align(v.justify_items),
-        justify_self: v.justify_self.map(align),
+        justify_items: justify(v.justify_items),
+        justify_self: v.justify_self.map(justify),
         justify_content: content(v.justify_content),
         align_content: content(v.align_content),
         grid_template_columns: v

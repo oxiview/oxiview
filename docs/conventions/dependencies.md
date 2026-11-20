@@ -1,5 +1,32 @@
 # Dependency management
 
+## M4 Vello GPU adapter
+
+The GPU adapter pins `vello_gpu =0.4.0` with native `wgpu`, text, image sampling,
+and sweep gradients enabled. This is the Vello Sparse Strips renderer. It
+preprocesses paths on the CPU and rasterizes and composites on the GPU. Its
+published manifest requires wgpu 30 and glifo 0.5.0, and the lockfile resolves
+the existing wgpu 30.0.2 and Metal backend. Vello's texture bindings sample
+the adapter's persistent atlas and standalone images directly. The shader
+crate builds WGSL with WESL and Naga in Rust. Defaults are disabled to avoid
+adding other backend features.
+
+The adapter uses existing `glifo =0.5.0` and `skrifa =0.49.0` graph versions
+to translate COLR paints and outline glyphs. It uses `guillotiere =0.7.0`
+for reclaiming atlas rectangles and `half =2.7.1` to upload linear
+premultiplied RGBA16F texels. Both were already resolved in the workspace.
+The standard library and existing adapter lack an atlas allocator, half
+conversion on stable Rust, and a general vector GPU renderer. All of
+these APIs remain internal to the rendering adapters. The selected
+dependencies offer a compatible MIT or Apache-2.0 license and require
+no new native runtime libraries. The published versions build on Rust
+1.97. Dependency licenses, advisories, and duplicate versions are checked
+with `cargo xtask deps`.
+
+[Vello GPU release](https://docs.rs/crate/vello_gpu/0.4.0) ·
+[Vello GPU shader release](https://docs.rs/crate/vello_gpu_shaders/0.4.0) ·
+[Glifo release](https://docs.rs/crate/glifo/0.5.0)
+
 ## M4 static font text (2026-11-17)
 
 The text port pins `parley =0.13.0` and `swash =0.2.10`, implementing the
@@ -141,11 +168,19 @@ Run `cargo xtask deps` to review direction, licenses, advisories, duplicate vers
 
 Keep patches in the root Cargo.toml `[patch.crates-io]` and prioritize upstream fixes. Use traceable pinned commits or version-controlled local patches, not machine-specific directories. Record each new patch below with its crate, reason, upstream issue/PR link, and explicit removal condition. On upgrades, check whether upstream has merged and released the fix. Once the condition is met, remove the patch and entry, then verify again.
 
-The current deny policy rejects unapproved Git sources. Review and explicitly update source allow rules before using a Git patch; never bypass cargo-deny. This step adds no patches and changes no source policy.
+The current deny policy rejects unapproved Git sources. Review the source allow rules before using a Git patch. The local Vello CPU patch is version-controlled with its Apache and MIT licenses.
 
 | Crate | Reason | Upstream issue / PR | Removal condition |
 | --- | --- | --- | --- |
-| None | No upstream patches currently | Not applicable | Not applicable |
+| `vello_cpu 0.4.0` | Decode straight sRGB images before filtering, retain linear float precision through compositing, and encode straight sRGB on output. The published RGBA8 interface loses low-coverage colors when quantized before conversion. | [Upstream pixel-format interface discussion](https://github.com/linebender/vello/issues/2010) and [pinned upstream renderer](https://github.com/linebender/vello/blob/b7e8f523b45c07a5edb806bb7241ef5afe34a882/vello_cpu/src/render.rs). The upstream issue concerns BGRA8. The linear transfer extension is maintained locally. | Remove when a release exposes equivalent sampling and float-to-straight-sRGB output and passes the analytic, snapshot and Snake parity tests. |
+
+The [local Vello CPU source](../../vendor/vello_cpu) starts from the published
+0.4.0 archive with SHA-256
+`5d6b3db720c5d3aa8783cb1c042d8a77142df70bd0f742dc9005f6d6efe33ebf`.
+The patch carries the frame's image resources through dispatch to the f32
+sampler and writes each finished strip to RGBA8. A CPU frame keeps float
+precision during blending without allocating a full-window float readback.
+[Linear conversion](../../vendor/vello_cpu/src/linear.rs) · [CPU composition tests](../../crates/oxiview-render-cpu/src/tests.rs)
 
 ## When to write an ADR
 
@@ -201,18 +236,31 @@ An initial DNS failure delayed resolution. The workspace lockfile now pins
 | --- | --- |
 | `vello_cpu =0.4.0` | Apache-2.0 OR MIT, compatible with the workspace license policy. Maintained by the [Linebender Vello project](https://github.com/linebender/vello). The cached 0.4.0 source changelog records the 2026-11-11 release, including compositing fixes and API changes. Pure Rust, including SIMD support, with no native build tools or system libraries. The existing workspace provides geometry, retained scenes, and pixel comparison, but no CPU rasterization implementation. Only `oxiview-render-cpu` may depend on it; all upstream types remain private. |
 
-Default features are disabled; only `std` and `u8_pipeline` are enabled. Text,
-PNG, multithreading, and the f32 pipeline are disabled. The observed
+M0 disabled default features and enabled `std` and `u8_pipeline`. The observed
 `cargo tree --offline -p oxiview-render-cpu` runtime graph adds `vello_common`,
 `fearless_simd`, `fearless_simd_macros`, `bytemuck` and its derive macro,
 `hashbrown`/`foldhash`, `guillotiere`/`euclid`/`num-traits` (with `autocfg` at
 build time), and `log`. It reuses the workspace's `peniko`, `kurbo`, `color`,
 `smallvec`, `thiserror`, and proc-macro dependencies. There are no duplicate
 versions in the rasterizer's runtime graph. The test harness graph retains
-its existing two `miniz_oxide` versions. Optional text packages such as `glifo`
-and `skrifa` appear in lockfile resolution but are absent from the enabled build
-feature graph. This footprint provides path rasterization and compositing
-without implementing those algorithms inside the framework.
+its existing two `miniz_oxide` versions. This initial footprint provided path
+rasterization and compositing without implementing those algorithms inside
+the framework.
+
+M4 enables `f32_pipeline` for the CPU adapter's COLR compositing.
+The adapter uses Vello CPU for coverage and floating-point blend operators
+and directly pins its existing SIMD dependency, [Fearless SIMD 1.2.0](https://docs.rs/crate/fearless_simd/1.2.0),
+with default features disabled. Fearless SIMD is pure Rust and MIT OR
+Apache-2.0. No new runtime package is introduced. The ordinary scene uses the
+existing u8 pipeline.
+
+The text port and CPU adapter pin [Skrifa 0.49.0](https://docs.rs/crate/skrifa/0.49.0)
+with only `std` enabled. It provides color glyph detection, outline extraction,
+and typed font table access. The CPU adapter resolves the original COLR paint
+and color-line values, then replays them into bounded linear-light tiles.
+Swash handles hinted masks and embedded color strikes. Vello CPU's `text`,
+PNG, and multithreading features stay disabled. Rasterizer and font parsing
+types stay private.
 
 The API is unstable, output can change between versions, gradient quality is
 below the GPU path, and pixels will not match the GPU renderer byte for byte.

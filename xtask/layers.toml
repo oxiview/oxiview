@@ -115,14 +115,22 @@ packages = ["taffy"]
 allow = ["oxiview-layout"]
 
 [[external]]
-packages = ["parley", "fontique", "swash", "skrifa", "harfrust"]
+packages = ["parley", "fontique", "swash", "harfrust"]
 allow = ["oxiview-text"]
 
 [[external]]
-packages = ["vello", "wgpu"]
+packages = ["skrifa"]
+allow = ["oxiview-text", "oxiview-render-cpu", "oxiview-render-wgpu"]
+
+[[external]]
+packages = ["glifo"]
+allow = ["oxiview-render-wgpu"]
+
+[[external]]
+packages = ["vello", "vello_gpu", "wgpu"]
 allow = ["oxiview-render-wgpu", "oxiview-app"]
 
 [[external]]
-packages = ["vello_cpu"]
+packages = ["fearless_simd", "vello_cpu"]
 allow = ["oxiview-render-cpu"]
 

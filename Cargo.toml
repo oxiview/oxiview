@@ -22,6 +22,7 @@ quote = "=1.0.47"
 syn = { version = "=2.0.119", features = ["full", "parsing"] }
 parley = { version = "=0.13.0", default-features = false, features = ["system", "complex-scripts"] }
 swash = { version = "=0.2.10", default-features = false, features = ["std", "scale", "render"] }
+skrifa = { version = "=0.49.0", default-features = false, features = ["std"] }
 taffy = { version = "=0.15.1", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "content_size"] }
 oxiview-style = { version = "0.0.0", path = "crates/oxiview-style" }
 oxiview-layout = { version = "0.0.0", path = "crates/oxiview-layout" }
@@ -40,8 +41,13 @@ objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSGeometry", "NSRunLoop"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSScreen", "NSWindow", "NSView", "NSTrackingArea", "NSEvent", "NSGraphics", "NSGraphicsContext", "objc2-core-foundation", "objc2-quartz-core"] }
 wgpu = { version = "=30.0.2", default-features = false, features = ["std", "metal", "vulkan", "dx12", "wgsl"] }
+vello_gpu = { version = "=0.4.0", default-features = false, features = ["wgpu", "text", "full_image_support", "gradient_sweep"] }
+glifo = { version = "=0.5.0", default-features = false, features = ["std"] }
+guillotiere = "=0.7.0"
+half = { version = "=2.7.1", default-features = false }
 oxiview-scene = { version = "0.0.0", path = "crates/oxiview-scene" }
-vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline"] }
+fearless_simd = { version = "=1.2.0", default-features = false }
+vello_cpu = { version = "=0.4.0", default-features = false, features = ["std", "u8_pipeline", "f32_pipeline"] }
 oxiview-base = { version = "0.0.0", path = "crates/oxiview-base" }
 proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 kurbo = "=0.13.1"
@@ -68,3 +74,8 @@ panic = "deny"
 cast_lossless = "warn"
 redundant_clone = "warn"
 dbg_macro = "warn"
+
+[patch.crates-io]
+# Published Vello CPU 0.4.0, upstream b7e8f523b45c07a5edb806bb7241ef5afe34a882.
+# The local patch samples Scene images and writes straight sRGB at the float compositor's boundaries.
+vello_cpu = { path = "vendor/vello_cpu" }

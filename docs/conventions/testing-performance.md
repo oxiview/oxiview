@@ -88,6 +88,27 @@ the raw Divan output. Recording with `--m3 --record` requires human approval.
 It updates these four metrics and preserves the existing M1 and M2 values.
 [M3 acceptance record](../plans/m3-reactivity-and-components.md#acceptance-record)
 
+## M4 text benchmarks
+
+`cargo xtask bench --m4` uses the pinned Noto Sans and Noto Sans Arabic
+fixtures with system font discovery disabled. Font registration happens before
+timing. Both paragraph workloads shape and wrap the same mixed-script text at
+a width of 188 logical pixels. The rich paragraph defines three spans before
+measurement. [Benchmark source](../../benches/text_pipeline.rs)
+
+| Metric under `text_pipeline/` | One timed iteration | Samples × iterations |
+| --- | --- | ---: |
+| `shape_wrapped_paragraph` | Shape Latin and Arabic text at 16 logical pixels per em | 80 × 64 |
+| `shape_rich_paragraph` | Shape the paragraph with weight, size and foreground overrides | 80 × 64 |
+| `cold_label_glyphs_2x` | Rasterize the pre-shaped score label at 2× with the glyph image cache budget set to zero | 80 × 32 |
+| `warm_label_glyphs_2x` | Prepare the same label at the same subpixel origin with all glyph images resident | 100 × 512 |
+
+The scoped comparison writes `target/xtask/bench-m4-results.json` and three
+Divan logs. Each metric uses the median of three run medians and the workspace
+default 10% regression threshold. Cache counters verify that the cold path
+rasterized glyphs and the warm path reused them. These times measure work on
+the CPU. GPU residency is checked separately by rendering repeated frames.
+
 ## Recording and updating
 
 ### Publishing measurements in the READMEs
@@ -130,7 +151,7 @@ baseline updates still use the separate human-confirmed `bench --record` workflo
 ### Updating the regression baseline
 
 1. Close heavy workloads and confirm the current code and benchmark inputs are as intended.
-2. After human confirmation, use `cargo xtask bench --record` for the full suite, `cargo xtask bench --m2 --record` for M2, or `cargo xtask bench --m3 --record` for M3. Review and commit the approved changes to `perf/baselines/<machine-id>.json`. Default bench and verify never write baselines.
+2. After human confirmation, use `cargo xtask bench --record` for the full suite or add `--m2`, `--m3` or `--m4` to record only that milestone. Review and commit the approved changes to `perf/baselines/<machine-id>.json`. Default bench and verify never write baselines.
 3. Immediately repeat the comparison for the same scope to confirm reproducibility. Investigate code and environment on regression. Do not repeatedly record to hide failures.
 4. Full recording preserves each metric's `regression_percent` (default 10, individually configurable from 0–100), except the fixed 15% pixel margin, while updating values, machine description, and recording time. Scoped recording updates the selected milestone's values and preserves the existing machine description, recording time, thresholds, and other entries. A first scoped recording creates the machine baseline with the selected values and pending hard-target entries. Full comparison requires baselines for all full-suite measurements. Missing measurements within the selected scope also fail in recording mode. Deleting or renaming metrics requires human review of baseline changes.
 

@@ -12,6 +12,110 @@ fn group() -> NodeKind {
 }
 
 #[test]
+fn bezier_paths_validate_contours_and_share_storage_through_encoding()
+-> Result<(), Box<dyn std::error::Error>> {
+    use PathCommand::{Close, CubicTo, LineTo, MoveTo, QuadTo};
+
+    let start = Point::new(2.125, 3.5);
+    let end = Point::new(8.75, 13.0);
+    for invalid in [
+        vec![LineTo(end)],
+        vec![MoveTo(start), Close, QuadTo(start, end)],
+        vec![Close],
+        vec![MoveTo(start), QuadTo(Point::new(1.0, f64::NAN), end)],
+        vec![
+            MoveTo(start),
+            CubicTo(start, Point::new(f64::INFINITY, 0.0), end),
+        ],
+    ] {
+        assert_eq!(
+            BezierPath::new(invalid),
+            Err(oxiview_base::Error::InvalidPath)
+        );
+    }
+    assert!(BezierPath::new(Vec::new())?.commands().is_empty());
+    let path = BezierPath::new(vec![
+        MoveTo(start),
+        QuadTo(start, end),
+        CubicTo(start, end, start),
+        Close,
+    ])?;
+    let mut scene = Scene::new();
+    let draw = scene.insert(
+        None,
+        0,
+        NodeKind::Draw(Primitive::FillPath(
+            path.clone(),
+            FillRule::EvenOdd,
+            Brush::Solid(Color::from_rgba8(1, 2, 3, 255)),
+        )),
+    )?;
+    let before = scene.clone();
+    assert_eq!(
+        scene.replace(
+            draw,
+            NodeKind::Draw(Primitive::FillPath(
+                path.clone(),
+                FillRule::NonZero,
+                Brush::LinearGradient(start, end, Vec::new()),
+            ))
+        ),
+        Err(Error::InvalidGradient)
+    );
+    assert_eq!(scene, before);
+
+    let placement = Affine::new([1.0, -0.5, 0.0, 2.0, 20.25, 1.5]);
+    let root = scene.insert(None, 1, NodeKind::Reference(draw, placement))?;
+    let encoded = scene.encode(root)?;
+    drop(scene);
+    assert!(matches!(encoded.nodes.as_slice(), [EncodedNode::Draw {
+        primitive: Primitive::FillPath(encoded, FillRule::EvenOdd, _), transform, ..
+    }] if *transform == placement && std::ptr::eq(encoded.commands(), path.commands())));
+    Ok(())
+}
+
+#[test]
+fn glyph_encoding_preserves_local_coordinates_and_owned_font() -> Result<(), Error> {
+    let mut scene = Scene::new();
+    let parent_transform = Affine::new([2.0, 0.0, 0.0, 2.0, 11.0, 15.0]);
+    let child_transform = Affine::new([0.0, 1.0, -1.0, 0.0, 21.0, 0.0]);
+    let root = scene.insert(None, 0, NodeKind::Transform(parent_transform))?;
+    let child = scene.insert(Some(root), 0, NodeKind::Transform(child_transform))?;
+    let glyph = Glyph {
+        font: oxiview_base::GlyphFont::new(Arc::from([1, 2, 3])),
+        face_index: 1,
+        glyph_id: 6,
+        size: 16.0,
+        origin: Point::new(2.0, 3.0),
+        color: Color::from_rgba8(10, 20, 30, 255),
+        variations: Arc::from([8192, -1234]),
+        kind: oxiview_base::GlyphKind::Color,
+    };
+    let draw = scene.insert(
+        Some(child),
+        0,
+        NodeKind::Draw(Primitive::Glyph(glyph.clone())),
+    )?;
+    let mut invalid = glyph.clone();
+    invalid.size = f32::NAN;
+    assert_eq!(
+        scene.replace(draw, NodeKind::Draw(Primitive::Glyph(invalid))),
+        Err(Error::InvalidGlyph),
+    );
+    let encoded = scene.encode(root)?;
+    drop(scene);
+    assert_eq!(
+        encoded.nodes,
+        [EncodedNode::Draw {
+            primitive: Primitive::Glyph(glyph),
+            transform: child_transform.then(parent_transform),
+            clips: Vec::new(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn cycles_indices_and_removal_are_atomic() -> Result<(), Error> {
     let mut scene = Scene::new();
     let root = scene.insert(None, 0, group())?;

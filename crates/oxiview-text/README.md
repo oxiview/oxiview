@@ -2,21 +2,33 @@
 
 Language: **English**
 
-Owned text-context APIs for Unicode shaping, font fallback, paragraph wrapping,
-and DPI-aware glyph rasterization. Parley/fontique/Harfrust provide logical
-layout; Swash rasterizes glyphs into immutable shared foundation images. Core converts the returned
-`GlyphImage { rect, image }` records into Scene image primitives; the text
-crate has no dependency on the Scene drawing language. The native
-GPU renderer samples glyph pixels from the Scene's encoded command buffer,
-with the same transform, clip, and group-opacity semantics as other primitives.
-The CPU renderer supports the same image primitive for headless runs.
+Parley, fontique and Harfrust shape and wrap Unicode text in logical units.
+Keep one `TextSystem` per window. Call `layout` for a plain paragraph or
+`layout_rich` for styled spans. The returned `TextLayout` exposes logical
+size, first-line baseline and counts of lines and glyphs. `rewrap` reuses
+shaping at a different width.
 
-Keep one `TextSystem` per window. `layout(text, &style, max_width)` returns an
-owned `TextLayout`; `size()` is logical geometry for intrinsic measurement.
-`glyph_images(&layout, local_origin, display_scale)` returns owned positioned glyph images
-at the actual display scale. A scale change needs new glyph primitives, while
-the logical layout can be reused. `TextStyle` supports family, weight, size,
-color, line height, and direction-aware paragraph alignment.
+`RichText::new` takes the full paragraph and a list of `TextSpan` values.
+Each span specifies a nonempty UTF-8 byte range and per-span style. Spans can
+arrive out of order and must have disjoint ranges. Unstyled text inherits
+the paragraph's family, size, weight, foreground and line height. Spans can
+override the line-height multiplier, add logical letter or word spacing,
+and enable underline or strikethrough in the span's foreground. The
+`rich_text` view and `bind_rich_text` apply the same API to a retained node.
+Flex and Grid rows can align the first lines of differently sized labels
+with `Alignment::Baseline`.
+[Rich text types](src/rich.rs) · [Text view](../oxiview-core/src/ui/text.rs)
+
+`glyph_draws` takes a local origin and the complete local-to-device affine.
+It selects hinted images for small glyphs and vectors above 64 device pixels
+per em or under complex transforms. Set the cutoff with
+`with_vector_threshold`. Color glyphs retain their OpenType paint graph or
+embedded bitmap strike. `TextLayout::decorations` returns logical rule
+rectangles for the positioned runs. Core paints underlines, glyphs, then
+strikethroughs in the Scene. Both renderers apply the resolved transforms,
+clips and group opacity. The `glyph_images` method also supports callers that
+explicitly need Swash raster images.
+[GPU backend and atlas](../../docs/adr/0038-vello-gpu-and-glyph-atlas.md)
 
 The default cache retains at most 8 MiB of glyph pixels and 4,096 entries using
 LRU eviction. Pixel storage already referenced by a Scene remains alive after
@@ -32,8 +44,7 @@ variable weights, DPI changes, cache eviction, and invalid inputs. The macOS
 system-font test additionally covers Chinese and a color emoji without opening
 a window.
 
-The current implementation emits glyph images. It does not yet implement the
-dedicated GPU texture atlas, large-text vector path, arbitrary transformed vector glyphs, complete COLRv1
-painting, or a Vello GPU backend migration from ADR-0010/0012. This library and
-the Snake demonstration establish working font text without claiming those
-remaining M4 capabilities or editable-text behavior from later milestones.
+The original color fixture exercises color gradients, clipping, blending and
+embedded strikes. The application-level specimen exercises styled Latin and
+Arabic text at three display scales. [Font fixtures](tests/fonts/README.md) ·
+[M4 display tests](../oxiview-app/tests/m4_text_display.rs)

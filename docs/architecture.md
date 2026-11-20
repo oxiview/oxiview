@@ -50,10 +50,12 @@ attribute selects the inherent method on the value returned by the current
 node factory. Component declarations and ordinary Rust items use syn's Rust
 syntax nodes during module compilation.
 
-For text, core uses `oxiview-text` to measure paragraphs and obtain positioned
-glyph images. Core adds these images to the Scene consumed by both renderers.
-The shared `RgbaImage` and `PixelSize` types live in `oxiview-base`.
-[M4 text and rendering](plans/m4-text-and-snake.md)
+For text, core uses `oxiview-text` to shape paragraphs and measure their
+first-line baseline. Small hinted glyphs and bitmap strikes carry owned
+image data. Scalable glyphs carry their font, variation coordinates and
+local baseline position through the Scene. Native and offscreen GPU
+rendering share a Vello adapter and device-owned glyph atlas.
+[M4 text and rendering](plans/m4-text-and-snake.md) · [Renderer selection](adr/0038-vello-gpu-and-glyph-atlas.md)
 
 On macOS, the window thread owns input dispatch, painting and submission.
 For an ordinary native frame, a worker waits for a surface texture and wakes

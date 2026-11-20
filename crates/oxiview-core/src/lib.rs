@@ -12,10 +12,11 @@ use std::{
 mod ui;
 mod ui_projection;
 mod window_runtime;
+pub use oxiview_text::{RichText, TextAlign, TextSpan, TextSpanStyle, TextStyle, TextSystem};
 pub use ui::{
     NodeId, NodeMeasure, NodeSemantics, PointerEventKind, UiBatchReport, UiCommandOutcome,
     UiCommandSender, UiCommands, UiDiagnostics, UiDispatchResult, UiError, UiPointerEvent, UiTree,
-    View, component, for_each, keyed_for, node, show, text,
+    View, component, for_each, keyed_for, node, rich_text, show, text,
 };
 
 /// Failures terminate this window loop; affected state is never resumed.

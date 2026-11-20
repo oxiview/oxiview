@@ -66,6 +66,9 @@ enum Task {
         /// Run only the four M3 reactive and component workloads without opening a native window.
         #[arg(long, conflicts_with = "m2")]
         m3: bool,
+        /// Run only the four M4 text workloads without opening a native window.
+        #[arg(long, conflicts_with_all = ["m2", "m3"])]
+        m4: bool,
         /// Record the selected scope in the repository baseline. Run only after human confirmation.
         #[arg(long)]
         record: bool,
@@ -172,11 +175,13 @@ fn run(task: Task, root: &Path, report: &mut Report) {
             .push(execute(&scaffold::NewCrate { name, context }, root));
         return;
     }
-    if let Task::Bench { m2, m3, record } = task {
+    if let Task::Bench { m2, m3, m4, record } = task {
         let scope = if m2 {
             bench::Scope::M2
         } else if m3 {
             bench::Scope::M3
+        } else if m4 {
+            bench::Scope::M4
         } else {
             bench::Scope::Full
         };
@@ -306,10 +311,12 @@ fn main() -> ExitCode {
     } else {
         for item in &report.checks {
             println!("{}: {:?} ({} ms)", item.name, item.status, item.duration_ms);
-            if matches!(
-                item.name.as_str(),
-                "snapshot" | "bench" | "bench-m2" | "bench-m3" | "new-crate" | "install-hooks"
-            ) && item.status == report::Status::Pass
+            if (bench::Scope::from_check_name(&item.name).is_some()
+                || matches!(
+                    item.name.as_str(),
+                    "snapshot" | "new-crate" | "install-hooks"
+                ))
+                && item.status == report::Status::Pass
                 && let Ok(log) =
                     std::fs::read_to_string(root.join(format!("target/xtask/{}.log", item.name)))
             {
@@ -335,22 +342,25 @@ mod tests {
 
     #[test]
     fn bench_accepts_each_flag_once_in_either_order() {
-        for (flags, expected) in [
-            (&[][..], (false, false, false)),
-            (&["--record"][..], (false, false, true)),
-            (&["--m2"][..], (true, false, false)),
-            (&["--m2", "--record"][..], (true, false, true)),
-            (&["--record", "--m2"][..], (true, false, true)),
-            (&["--m3"][..], (false, true, false)),
-            (&["--m3", "--record"][..], (false, true, true)),
-            (&["--record", "--m3"][..], (false, true, true)),
-        ] {
-            let args = ["xtask", "bench"].into_iter().chain(flags.iter().copied());
-            let cli = Cli::try_parse_from(args).expect("valid bench flags");
-            assert!(matches!(
-                cli.command,
-                Task::Bench { m2, m3, record } if (m2, m3, record) == expected
-            ));
+        for scope in [None, Some("--m2"), Some("--m3"), Some("--m4")] {
+            for flags in [
+                [scope, None],
+                [scope, Some("--record")],
+                [Some("--record"), scope],
+            ] {
+                let args = ["xtask", "bench"]
+                    .into_iter()
+                    .chain(flags.into_iter().flatten());
+                let cli = Cli::try_parse_from(args).expect("valid bench flags");
+                assert!(matches!(
+                    cli.command,
+                    Task::Bench { m2, m3, m4, record }
+                        if m2 == (scope == Some("--m2"))
+                           && m3 == (scope == Some("--m3"))
+                           && m4 == (scope == Some("--m4"))
+                           && record == flags.contains(&Some("--record"))
+                ));
+            }
         }
         for (flags, kind) in [
             (&["--m2", "--m2"][..], ErrorKind::ArgumentConflict),
@@ -358,7 +368,10 @@ mod tests {
             (&["--m3", "--m3"][..], ErrorKind::ArgumentConflict),
             (&["--m2", "--m3"][..], ErrorKind::ArgumentConflict),
             (&["--m3", "--m2"][..], ErrorKind::ArgumentConflict),
-            (&["--m4"][..], ErrorKind::UnknownArgument),
+            (&["--m4", "--m4"][..], ErrorKind::ArgumentConflict),
+            (&["--m4", "--m2"][..], ErrorKind::ArgumentConflict),
+            (&["--m3", "--m4"][..], ErrorKind::ArgumentConflict),
+            (&["--m5"][..], ErrorKind::UnknownArgument),
             (&["--m2=true"][..], ErrorKind::TooManyValues),
             (&["layout"][..], ErrorKind::UnknownArgument),
         ] {

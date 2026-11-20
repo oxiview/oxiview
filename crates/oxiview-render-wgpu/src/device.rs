@@ -1,4 +1,5 @@
-use crate::{Error, PixelSize, RgbaImage, encoding::Commands, straight};
+use crate::{Error, PixelSize, RgbaImage, copy, encoding::Commands, straight, vector};
+use oxiview_scene::EncodedScene;
 use std::{
     future::Future,
     sync::{
@@ -18,6 +19,8 @@ pub(crate) struct Gpu {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    blitter: copy::Blitter,
+    pub(crate) vector: Option<vector::Backend>,
     pub(crate) lost: Arc<AtomicBool>,
 }
 impl Process {
@@ -68,6 +71,7 @@ impl Process {
             compilation_options: Default::default(),
             cache: None,
         });
+        let blitter = copy::Blitter::new(&device);
         let errors = [
             block_on(internal.pop()),
             block_on(memory.pop()),
@@ -81,6 +85,8 @@ impl Process {
             device,
             queue,
             pipeline,
+            blitter,
+            vector: None,
             lost,
         });
         Ok(())
@@ -92,6 +98,7 @@ impl Process {
             gpu.lost.store(true, Ordering::Release);
         }
     }
+    #[cfg(test)]
     pub(crate) fn render(
         &mut self,
         commands: &Commands,
@@ -112,6 +119,80 @@ impl Process {
     }
 }
 impl Gpu {
+    pub(crate) fn render_scene(
+        &mut self,
+        scene: &EncodedScene,
+        size: PixelSize,
+        target: Option<&wgpu::Texture>,
+        read: bool,
+    ) -> Result<Option<RgbaImage>, Error> {
+        let limits = self.device.limits();
+        if !crate::surface::validate_size(size, limits.max_texture_dimension_2d)? {
+            return Err(Error::InvalidSize(size));
+        }
+        if !vector::needs_vello(scene) {
+            // Large opacity stacks can exceed the SDF storage-buffer budget
+            // even when the render target itself is supported.
+            let result = self.render(&Commands::new(scene, size)?, size, target, read);
+            if !matches!(result, Err(Error::InvalidSize(_))) {
+                return result;
+            }
+        }
+
+        let vector = &mut self.vector;
+        scoped(&self.device, &self.lost, || {
+            let linear = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("oxiview Vello linear color"),
+                size: extent(size),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: vector::FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            let backend =
+                vector.get_or_insert_with(|| vector::Backend::new(&self.device, &self.queue));
+            let view = linear.create_view(&Default::default());
+            backend.encode(&self.device, &self.queue, &mut encoder, scene, &view, size)?;
+
+            let offscreen;
+            let output = match target {
+                Some(target) => target,
+                None => {
+                    offscreen = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("oxiview straight sRGB readback"),
+                        size: extent(size),
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    });
+                    &offscreen
+                }
+            };
+            let alpha = if target.is_some() {
+                copy::Alpha::Premultiplied
+            } else {
+                copy::Alpha::Straight
+            };
+            self.blitter
+                .encode(&self.device, &mut encoder, &view, output, alpha)?;
+            Self::finish(
+                &self.device,
+                &self.queue,
+                encoder,
+                output,
+                read,
+                target.is_some(),
+            )
+        })?
+    }
     pub(crate) fn render(
         &self,
         commands: &Commands,
@@ -120,24 +201,9 @@ impl Gpu {
         read: bool,
     ) -> Result<Option<RgbaImage>, Error> {
         let limits = self.device.limits();
-        if size.width == 0
-            || size.height == 0
-            || size.width > limits.max_texture_dimension_2d
-            || size.height > limits.max_texture_dimension_2d
-        {
-            return Err(Error::InvalidSize(size));
-        }
-        let row = u64::from(size.width) * 4;
-        let padded_row = row.div_ceil(256) * 256;
-        let readback_size = padded_row * u64::from(size.height);
         let stack_size = commands.opacity_stack_bytes(size)?;
         let data = commands.bytes();
-        if size.width == 0
-            || size.height == 0
-            || size.width > limits.max_texture_dimension_2d
-            || size.height > limits.max_texture_dimension_2d
-            || readback_size > limits.max_buffer_size
-            || padded_row > u64::from(u32::MAX)
+        if !crate::surface::validate_size(size, limits.max_texture_dimension_2d)?
             || stack_size > limits.max_storage_buffer_binding_size
             || stack_size > limits.max_buffer_size
             || data.len() as u64 > limits.max_storage_buffer_binding_size
@@ -146,39 +212,14 @@ impl Gpu {
         {
             return Err(Error::InvalidSize(size));
         }
-        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let result = self.submit(
-            &data,
-            stack_size,
-            padded_row as u32,
-            readback_size,
-            size,
-            target,
-            read,
-        );
-        // Always pop scopes, including readback failures.
-        let errors = [
-            block_on(internal.pop()),
-            block_on(memory.pop()),
-            block_on(validation.pop()),
-        ];
-        if let Some(error) = errors.into_iter().flatten().next() {
-            return Err(Error::DeviceLost(error.to_string()));
-        }
-        if self.lost.load(Ordering::Acquire) {
-            return Err(Error::DeviceLost("device loss callback".into()));
-        }
-        result
+        scoped(&self.device, &self.lost, || {
+            self.submit(&data, stack_size, size, target, read)
+        })?
     }
-    #[allow(clippy::too_many_arguments)] // Validated submission dimensions and optional presentation target.
     fn submit(
         &self,
         data: &[u8],
         stack_size: u64,
-        padded_row: u32,
-        readback_size: u64,
         size: PixelSize,
         target: Option<&wgpu::Texture>,
         read: bool,
@@ -196,11 +237,7 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let extent = wgpu::Extent3d {
-            width: size.width,
-            height: size.height,
-            depth_or_array_layers: 1,
-        };
+        let extent = extent(size);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen RGBA"),
             size: extent,
@@ -242,19 +279,48 @@ impl Gpu {
             pass.dispatch_workgroups(size.width.div_ceil(8), size.height.div_ceil(8), 1);
         }
         if let Some(target) = target {
-            crate::copy::encode(&self.device, &mut encoder, &view, target);
+            self.blitter.encode(
+                &self.device,
+                &mut encoder,
+                &view,
+                target,
+                copy::Alpha::Encoded,
+            )?;
         }
+        Self::finish(
+            &self.device,
+            &self.queue,
+            encoder,
+            target.unwrap_or(&texture),
+            read,
+            true,
+        )
+    }
+
+    fn finish(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut encoder: wgpu::CommandEncoder,
+        output: &wgpu::Texture,
+        read: bool,
+        premultiplied: bool,
+    ) -> Result<Option<RgbaImage>, Error> {
         if !read {
-            self.queue.submit([encoder.finish()]);
+            queue.submit([encoder.finish()]);
             return Ok(None);
         }
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let size = PixelSize {
+            width: output.width(),
+            height: output.height(),
+        };
+        let (padded_row, readback_size) = readback_layout(size, &device.limits())?;
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pixel readback"),
             size: readback_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let output = target.unwrap_or(&texture);
+        let extent = extent(size);
         encoder.copy_texture_to_buffer(
             output.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -267,14 +333,14 @@ impl Gpu {
             },
             extent,
         );
-        let submission = self.queue.submit([encoder.finish()]);
+        let submission = queue.submit([encoder.finish()]);
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         readback
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result);
             });
-        self.device
+        device
             .poll(wgpu::PollType::Wait {
                 submission_index: Some(submission),
                 timeout: Some(std::time::Duration::from_secs(30)),
@@ -302,7 +368,11 @@ impl Gpu {
                 } else {
                     (r, b)
                 };
-                pixels.extend([straight(r, a), straight(g, a), straight(b, a), a]);
+                pixels.extend(if premultiplied {
+                    [straight(r, a), straight(g, a), straight(b, a), a]
+                } else {
+                    [r, g, b, a]
+                });
             }
         }
         drop(mapped);
@@ -311,6 +381,53 @@ impl Gpu {
             .map(Some)
             .map_err(|e| Error::SceneEncoding(e.to_string()))
     }
+}
+
+fn extent(size: PixelSize) -> wgpu::Extent3d {
+    wgpu::Extent3d {
+        width: size.width,
+        height: size.height,
+        depth_or_array_layers: 1,
+    }
+}
+
+fn readback_layout(size: PixelSize, limits: &wgpu::Limits) -> Result<(u32, u64), Error> {
+    let row = (u64::from(size.width) * 4).div_ceil(256) * 256;
+    let bytes = row
+        .checked_mul(u64::from(size.height))
+        .ok_or(Error::InvalidSize(size))?;
+    if bytes > limits.max_buffer_size {
+        return Err(Error::InvalidSize(size));
+    }
+    Ok((
+        u32::try_from(row).map_err(|_| Error::InvalidSize(size))?,
+        bytes,
+    ))
+}
+
+// wgpu scopes are thread-local, including those around worker acquisition.
+pub(crate) fn scoped<T>(
+    device: &wgpu::Device,
+    lost: &AtomicBool,
+    operation: impl FnOnce() -> T,
+) -> Result<T, Error> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let result = operation();
+    let errors = [
+        block_on(internal.pop()),
+        block_on(memory.pop()),
+        block_on(validation.pop()),
+    ];
+    if let Some(error) = errors.into_iter().flatten().next() {
+        lost.store(true, Ordering::Release);
+        return Err(Error::DeviceLost(error.to_string()));
+    }
+    if lost.load(Ordering::Acquire) {
+        return Err(Error::DeviceLost("device loss callback".into()));
+    }
+    Ok(result)
 }
 
 // Native adapter/device requests and error scopes need an executor, not a runtime.

@@ -1,6 +1,6 @@
 use super::*;
-use oxiview_base::Affine;
-use oxiview_scene::NodeKind;
+use oxiview_base::{Affine, Point};
+use oxiview_scene::{ColorStop, NodeKind};
 use oxiview_testing::{CompareConfig, compare};
 #[path = "../tests/scenes/mod.rs"]
 mod scenes;
@@ -68,6 +68,110 @@ fn straight_alpha_and_group_compositing() -> TestResult {
     assert_eq!(pixel(&image, 30, 30), [0, 0, 255, 128]);
     assert_eq!(pixel(&image, 50, 50), [0, 0, 255, 128]);
     assert_eq!(pixel(&image, 0, 0), [0, 0, 0, 0]);
+    Ok(())
+}
+
+#[test]
+fn dark_colors_keep_precision_through_nested_layers_and_straight_readback() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Transform(Affine::IDENTITY))?;
+    let dark = Color::from_rgba8(9, 16, 22, 255);
+    let background = Rect::new(0.0, 0.0, 64.0, 64.0);
+    scene.insert(Some(root), 0, fill(background, dark))?;
+    let opacity = scene.insert(Some(root), 1, NodeKind::Opacity(0.5))?;
+    let nested = scene.insert(Some(opacity), 0, NodeKind::Opacity(0.5))?;
+    let rect = Rect::new(8.0, 8.0, 20.0, 20.0);
+    scene.insert(Some(nested), 0, fill(rect, red()))?;
+    scene.insert(Some(nested), 1, fill(rect, blue()))?;
+    let rendered = CpuRenderer.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 0, 0), [9, 16, 22, 255]);
+    // The nested layers apply 0.5² opacity to the opaque blue result.
+    // sRGB(0.25 × blue_linear + 0.75 × dark_linear) rounds to [7, 13, 138].
+    assert_eq!(pixel(&rendered, 12, 12), [7, 13, 138, 255]);
+
+    let translucent = Color::from_rgba8(9, 16, 22, 3);
+    let root = scene.insert(None, 0, fill(background, translucent))?;
+    let rendered = CpuRenderer.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 0, 0), [9, 16, 22, 3]);
+    Ok(())
+}
+
+#[test]
+fn raster_filtering_interpolates_premultiplied_linear_texels() -> TestResult {
+    let image = RgbaImage::new(
+        PixelSize {
+            width: 2,
+            height: 1,
+        },
+        vec![255, 0, 0, 128, 0, 0, 255, 255],
+    )?;
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(8.0, 8.0, 13.0, 12.0), image)),
+    )?;
+    let rendered = CpuRenderer.render(&scene, root, SIZE)?;
+    // At the center, each texel has weight 0.5. Straight linear RB is
+    // [128/383, 255/383] and alpha is 383/510.
+    assert_eq!(pixel(&rendered, 8, 9), [255, 0, 0, 128]);
+    assert_eq!(pixel(&rendered, 10, 9), [156, 0, 213, 192]);
+    assert_eq!(pixel(&rendered, 12, 9), [0, 0, 255, 255]);
+
+    let dark = RgbaImage::new(
+        PixelSize {
+            width: 1,
+            height: 1,
+        },
+        vec![9, 16, 22, 3],
+    )?;
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(8.0, 8.0, 9.0, 9.0), dark)),
+    )?;
+    let rendered = CpuRenderer.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 8, 8), [9, 16, 22, 3]);
+    Ok(())
+}
+
+#[test]
+fn translucent_gradient_interpolates_premultiplied_linear_stops() -> TestResult {
+    let mut scene = Scene::new();
+    let brush = Brush::LinearGradient(
+        Point::new(8.5, 8.0),
+        Point::new(12.5, 8.0),
+        vec![
+            ColorStop {
+                position: 0.0,
+                color: Color::from_rgba8(255, 0, 0, 128),
+            },
+            ColorStop {
+                position: 1.0,
+                color: blue(),
+            },
+        ],
+    );
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Draw(Primitive::Fill(
+            Rect::new(8.0, 8.0, 13.0, 12.0),
+            CornerRadii::default(),
+            brush,
+        )),
+    )?;
+    let rendered = CpuRenderer.render(&scene, root, SIZE)?;
+    // The linear-premultiplied midpoint yields the same channels as the
+    // bilinear midpoint. Allow a byte for the gradient ramp lookup.
+    let pixel = pixel(&rendered, 10, 9);
+    assert!(
+        pixel
+            .iter()
+            .zip([156, 0, 213, 192])
+            .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+        "midpoint {pixel:?}"
+    );
     Ok(())
 }
 

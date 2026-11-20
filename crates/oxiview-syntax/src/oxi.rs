@@ -162,6 +162,33 @@ mod tests {
     }
 
     #[test]
+    fn typed_styles_forward_baseline_alignment() -> Result<()> {
+        let style = module.parse_str(
+            "pub style label() {
+                layout: LayoutStyle {
+                    align_items: Alignment::Baseline,
+                    align_self: Some(Alignment::Baseline),
+                    ..Default::default()
+                }
+            }",
+        )?;
+        let expected = quote! {
+            pub fn label() -> ::oxiview_style::Style {
+                ::oxiview_style::Style {
+                    layout: LayoutStyle {
+                        align_items: Alignment::Baseline,
+                        align_self: Some(Alignment::Baseline),
+                        ..Default::default()
+                    },
+                    ..::core::default::Default::default()
+                }
+            }
+        };
+        assert_eq!(style.to_string(), expected.to_string());
+        Ok(())
+    }
+
+    #[test]
     fn setup_blocks_and_qualified_calls_precede_the_root() -> Result<()> {
         let view = module.parse_str(
             "view panel(mut n: u32) {

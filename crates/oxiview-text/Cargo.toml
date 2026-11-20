@@ -12,6 +12,15 @@ workspace = true
 [dependencies]
 oxiview-base.workspace = true
 parley.workspace = true
+skrifa.workspace = true
 swash.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name = "text_pipeline"
+path = "../../benches/text_pipeline.rs"
+harness = false

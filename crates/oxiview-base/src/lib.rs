@@ -4,7 +4,9 @@
 
 mod color;
 mod geometry;
+mod glyph;
 mod image;
+mod path;
 mod services;
 mod surface;
 #[cfg(test)]
@@ -14,7 +16,9 @@ mod tests;
 
 pub use color::Color;
 pub use geometry::{Affine, CornerRadii, Point, Rect, Size};
+pub use glyph::{Glyph, GlyphFont, GlyphKind};
 pub use image::{PixelSize, RgbaImage};
+pub use path::{BezierPath, PathCommand};
 pub use services::{Clock, ManualClock, ManualRng, ManualScheduler, Rng, Scheduler};
 pub use surface::{NativeSurfaceHandle, NativeSurfaceKind};
 
@@ -24,6 +28,9 @@ pub enum Error {
     /// Image dimensions and RGBA byte length disagree or overflow.
     #[error("invalid image dimensions or RGBA byte length")]
     InvalidImage,
+    /// A path coordinate is non-finite or a contour is missing its initial move.
+    #[error("invalid Bézier path")]
+    InvalidPath,
     /// An affine matrix has no finite inverse.
     #[error("affine transform has no finite inverse")]
     NonInvertibleTransform,

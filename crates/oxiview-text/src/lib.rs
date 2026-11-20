@@ -1,19 +1,34 @@
-//! Owned Unicode text layout and DPI-aware glyph rasterization.
+//! Owned Unicode text layout and DPI-aware glyph drawing.
 //!
 //! Parley/fontique/Harfrust perform shaping and fallback. Swash produces cached
-//! glyph images consumed by both Scene renderers. Upstream types remain private.
+//! glyph images for hinted small text and embedded bitmap strikes.
+//! Large or transformed glyphs carry owned font data or synthesized outlines.
 
-use oxiview_base::{Color, PixelSize, Point, Rect, RgbaImage, Size};
+mod drawing;
+
+pub use drawing::{GlyphDraw, TextDecoration, TextDecorationKind};
+
+use oxiview_base::{Color, PixelSize, Rect, RgbaImage, Size};
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontFamily, FontWeight, Layout, LayoutContext,
-    LineHeight, PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, Layout,
+    LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
 };
 use std::{collections::HashMap, sync::Arc};
 use swash::{
     FontRef,
     scale::{Render, ScaleContext, Source, StrikeWith, image::Content},
-    zeno::{Format, Vector},
+    zeno::{Angle, Format, Transform, Vector},
 };
+
+mod rich;
+pub use rich::{RichText, TextSpan, TextSpanStyle};
+use rich::{valid_color, valid_font_size, valid_line_height, valid_weight};
+
+const EMBOLDEN_EM: f32 = 0.03;
+
+fn oblique_transform(degrees: f32) -> Transform {
+    Transform::skew(Angle::from_degrees(degrees), Angle::from_degrees(0.0))
+}
 
 /// Direction-aware paragraph alignment.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,6 +77,17 @@ pub enum Error {
     /// Non-finite or out-of-range style, width, origin, or scale.
     #[error("invalid text style, width, position, or scale")]
     InvalidInput,
+    /// A range splits a UTF-8 code point, overlaps another span, or is empty or out of bounds.
+    #[error("invalid text span {start}..{end}")]
+    InvalidSpan {
+        /// Inclusive byte offset.
+        start: usize,
+        /// Exclusive byte offset.
+        end: usize,
+    },
+    /// The number of spans exceeds the supported per-paragraph limit.
+    #[error("too many text spans")]
+    TooManySpans,
     /// Font data contains no usable face.
     #[error("invalid font data")]
     InvalidFont,
@@ -74,6 +100,9 @@ pub enum Error {
     /// Raster data and placement disagree.
     #[error("invalid glyph image data")]
     InvalidGlyphImage,
+    /// The font could not supply a valid outline for a synthesized glyph.
+    #[error("invalid glyph outline")]
+    InvalidGlyphOutline,
     /// Owned foundation image conversion failed.
     #[error("text image conversion failed: {0}")]
     Image(String),
@@ -90,7 +119,7 @@ impl Default for TextBrush {
 /// Shaped paragraph with private font/run storage and logical dimensions.
 #[derive(Clone)]
 pub struct TextLayout {
-    layout: Layout<TextBrush>,
+    layout: Arc<Layout<TextBrush>>,
     size: Size,
     glyphs: usize,
     missing: usize,
@@ -106,9 +135,51 @@ pub struct GlyphImage {
     pub image: RgbaImage,
 }
 impl TextLayout {
+    /// Reuses shaped glyphs and styles to lay out the paragraph at a new width.
+    pub fn rewrap(&self, max_width: Option<f64>) -> Result<Self, Error> {
+        if !valid_width(max_width) {
+            return Err(Error::InvalidInput);
+        }
+        Self::wrap((*self.layout).clone(), max_width)
+    }
+
+    fn wrap(mut layout: Layout<TextBrush>, max_width: Option<f64>) -> Result<Self, Error> {
+        layout.break_all_lines(max_width.map(|width| width as f32));
+        let mut glyphs = 0;
+        let mut missing = 0;
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    for glyph in run.glyphs() {
+                        glyphs += 1;
+                        missing += usize::from(glyph.id == 0);
+                    }
+                }
+            }
+        }
+        let size = Size::new(f64::from(layout.width()), f64::from(layout.height()));
+        if !size.width().is_finite() || !size.height().is_finite() {
+            return Err(Error::InvalidInput);
+        }
+        Ok(Self {
+            layout: Arc::new(layout),
+            size,
+            glyphs,
+            missing,
+        })
+    }
+
     /// Logical dimensions including line height.
     pub fn size(&self) -> Size {
         self.size
+    }
+    /// First-line baseline measured down from the top of the paragraph.
+    /// An empty source has no text baseline.
+    pub fn first_baseline(&self) -> Option<f64> {
+        if self.layout.text_len() == 0 {
+            return None;
+        }
+        self.layout.first_baseline().map(f64::from)
     }
     /// Number of laid-out lines.
     pub fn line_count(&self) -> usize {
@@ -122,6 +193,10 @@ impl TextLayout {
     pub fn missing_glyph_count(&self) -> usize {
         self.missing
     }
+}
+
+fn valid_width(width: Option<f64>) -> bool {
+    width.is_none_or(|width| (0.0..=f64::from(f32::MAX)).contains(&width))
 }
 
 /// Bounded glyph-cache counters.
@@ -142,11 +217,22 @@ struct GlyphKey {
     index: u32,
     glyph: u16,
     size: u32,
-    coords: Vec<i16>,
+    coords: Arc<[i16]>,
+    skew: Option<u32>,
+    embolden: bool,
     x: u8,
     y: u8,
     color: [u8; 4],
+    source: RasterSource,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum RasterSource {
+    Auto,
+    ColorBitmap(u32),
+    AlphaBitmap(u32),
+}
+
 #[derive(Clone)]
 struct CachedGlyph {
     image: Option<RgbaImage>,
@@ -160,8 +246,8 @@ pub struct TextSystem {
     fonts: FontContext,
     layouts: LayoutContext<TextBrush>,
     scales: ScaleContext,
-    font_keys: HashMap<(u64, u32), swash::CacheKey>,
     glyphs: HashMap<GlyphKey, CachedGlyph>,
+    vector_threshold: f64,
     budget: usize,
     tick: u64,
     stats: TextCacheStats,
@@ -191,8 +277,8 @@ impl TextSystem {
             fonts,
             layouts: LayoutContext::new(),
             scales: ScaleContext::new(),
-            font_keys: HashMap::new(),
             glyphs: HashMap::new(),
+            vector_threshold: 64.0,
             budget: 8 * 1024 * 1024,
             tick: 0,
             stats: TextCacheStats::default(),
@@ -230,21 +316,31 @@ impl TextSystem {
         style: &TextStyle,
         max_width: Option<f64>,
     ) -> Result<TextLayout, Error> {
-        if !style.font_size.is_finite()
-            || style.font_size <= 0.0
-            || style.font_size > 1024.0
-            || !style.line_height.is_finite()
-            || style.line_height <= 0.0
-            || style.line_height > 16.0
-            || !(1..=1000).contains(&style.weight)
-            || !style
-                .color
-                .to_srgb()
-                .iter()
-                .all(|channel| channel.is_finite())
-            || max_width.is_some_and(|width| {
-                !width.is_finite() || width < 0.0 || width > f64::from(f32::MAX)
-            })
+        self.layout_spans(text, &[], style, max_width)
+    }
+
+    /// Shapes and wraps a paragraph with validated per-span overrides.
+    pub fn layout_rich(
+        &mut self,
+        text: &RichText,
+        style: &TextStyle,
+        max_width: Option<f64>,
+    ) -> Result<TextLayout, Error> {
+        self.layout_spans(text.as_str(), text.spans(), style, max_width)
+    }
+
+    fn layout_spans(
+        &mut self,
+        text: &str,
+        spans: &[TextSpan],
+        style: &TextStyle,
+        max_width: Option<f64>,
+    ) -> Result<TextLayout, Error> {
+        if !valid_font_size(style.font_size)
+            || !valid_line_height(style.line_height)
+            || !valid_weight(style.weight)
+            || !valid_color(style.color)
+            || !valid_width(max_width)
         {
             return Err(Error::InvalidInput);
         }
@@ -263,6 +359,49 @@ impl TextSystem {
             style.line_height as f32,
         )));
         builder.push_default(StyleProperty::Brush(TextBrush(style.color)));
+        for span in spans {
+            let range = &span.range;
+            let style = &span.style;
+            if let Some(family) = &style.family {
+                builder.push(
+                    StyleProperty::FontFamily(FontFamily::from(family.as_str())),
+                    range.clone(),
+                );
+            }
+            if let Some(size) = style.font_size {
+                builder.push(StyleProperty::FontSize(size as f32), range.clone());
+            }
+            if let Some(weight) = style.weight {
+                builder.push(
+                    StyleProperty::FontWeight(FontWeight::new(f32::from(weight))),
+                    range.clone(),
+                );
+            }
+            if let Some(color) = style.color {
+                builder.push(StyleProperty::Brush(TextBrush(color)), range.clone());
+            }
+            if style.italic {
+                builder.push(StyleProperty::FontStyle(FontStyle::Italic), range.clone());
+            }
+            if style.underline {
+                builder.push(StyleProperty::Underline(true), range.clone());
+            }
+            if style.strikethrough {
+                builder.push(StyleProperty::Strikethrough(true), range.clone());
+            }
+            if let Some(spacing) = style.letter_spacing {
+                builder.push(StyleProperty::LetterSpacing(spacing as f32), range.clone());
+            }
+            if let Some(spacing) = style.word_spacing {
+                builder.push(StyleProperty::WordSpacing(spacing as f32), range.clone());
+            }
+            if let Some(height) = style.line_height {
+                builder.push(
+                    StyleProperty::LineHeight(LineHeight::FontSizeRelative(height as f32)),
+                    range.clone(),
+                );
+            }
+        }
         let mut layout: Layout<TextBrush> = builder.build(text);
         layout.set_alignment(
             match style.align {
@@ -272,114 +411,11 @@ impl TextSystem {
             },
             AlignmentOptions::default(),
         );
-        layout.break_all_lines(max_width.map(|width| width as f32));
-        let mut glyphs = 0;
-        let mut missing = 0;
-        for line in layout.lines() {
-            for item in line.items() {
-                if let PositionedLayoutItem::GlyphRun(run) = item {
-                    for glyph in run.glyphs() {
-                        glyphs += 1;
-                        missing += usize::from(glyph.id == 0);
-                    }
-                }
-            }
-        }
-        if glyphs == 0 && text.chars().any(|ch| !ch.is_whitespace()) {
+        let layout = TextLayout::wrap(layout, max_width)?;
+        if layout.glyph_count() == 0 && text.chars().any(|ch| !ch.is_whitespace()) {
             return Err(Error::MissingFont);
         }
-        let size = Size::new(f64::from(layout.width()), f64::from(layout.height()));
-        if ![size.width(), size.height()]
-            .into_iter()
-            .all(f64::is_finite)
-        {
-            return Err(Error::InvalidInput);
-        }
-        Ok(TextLayout {
-            layout,
-            size,
-            glyphs,
-            missing,
-        })
-    }
-
-    /// Produces owned glyph-image records at the actual display scale.
-    /// Glyphs use grayscale antialiasing with quarter-pixel phase caching.
-    pub fn glyph_images(
-        &mut self,
-        layout: &TextLayout,
-        origin: Point,
-        scale: f64,
-    ) -> Result<Vec<GlyphImage>, Error> {
-        if ![origin.x(), origin.y(), scale]
-            .into_iter()
-            .all(f64::is_finite)
-            || scale <= 0.0
-            || scale > 16.0
-        {
-            return Err(Error::InvalidInput);
-        }
-        let _span = tracing::info_span!("text_raster", glyphs = layout.glyphs, scale).entered();
-        let mut output = Vec::new();
-        for line in layout.layout.lines() {
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
-                };
-                let run = glyph_run.run();
-                let font = run.font();
-                let size = f64::from(run.font_size()) * scale;
-                if size > 2048.0 {
-                    return Err(Error::RasterLimit);
-                }
-                let color = glyph_run
-                    .style()
-                    .brush
-                    .0
-                    .to_srgb()
-                    .map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
-                let coords: Vec<i16> = run
-                    .normalized_coords()
-                    .iter()
-                    .map(|coord| coord.to_bits())
-                    .collect();
-                let mut advance = f64::from(glyph_run.offset());
-                for glyph in glyph_run.glyphs() {
-                    let x = (origin.x() + advance + f64::from(glyph.x)) * scale;
-                    let y =
-                        (origin.y() + f64::from(glyph_run.baseline()) + f64::from(glyph.y)) * scale;
-                    if !x.is_finite() || !y.is_finite() {
-                        return Err(Error::InvalidInput);
-                    }
-                    advance += f64::from(glyph.advance);
-                    let key = GlyphKey {
-                        font: font.data.id(),
-                        index: font.index,
-                        glyph: u16::try_from(glyph.id).map_err(|_| Error::InvalidFont)?,
-                        size: (size as f32).to_bits(),
-                        coords: coords.clone(),
-                        x: ((x - x.floor()) * 4.0).round() as u8,
-                        y: ((y - y.floor()) * 4.0).round() as u8,
-                        color,
-                    };
-                    let cached = self.raster_glyph(key, font)?;
-                    if let Some(image) = cached.image {
-                        let left = (x.floor() + f64::from(cached.left)) / scale;
-                        let top = (y.floor() - f64::from(cached.top)) / scale;
-                        output.push(GlyphImage {
-                            rect: Rect::new(
-                                left,
-                                top,
-                                left + f64::from(image.width()) / scale,
-                                top + f64::from(image.height()) / scale,
-                            ),
-                            image,
-                        });
-                    }
-                }
-            }
-        }
-        Ok(output)
+        Ok(layout)
     }
 
     fn raster_glyph(
@@ -394,27 +430,46 @@ impl TextSystem {
             return Ok(value.clone());
         }
         self.stats.misses = self.stats.misses.saturating_add(1);
-        let mut font_ref = FontRef::from_index(font.data.as_ref(), font.index as usize)
+        let font_ref = FontRef::from_index(font.data.as_ref(), font.index as usize)
             .ok_or(Error::InvalidFont)?;
-        font_ref.key = *self.font_keys.entry((key.font, key.index)).or_default();
         let mut scaler = self
             .scales
-            .builder(font_ref)
+            // Fontique already gives each blob a unique ID. Swash's bounded
+            // scaler and hinting caches can use that ID and the collection index.
+            .builder_with_id(font_ref, [key.font, u64::from(key.index)])
             .size(f32::from_bits(key.size))
-            .hint(true)
+            .hint(key.source == RasterSource::Auto)
             .normalized_coords(key.coords.iter().copied())
             .build();
-        let image = Render::new(&[
-            Source::ColorOutline(0),
-            Source::ColorBitmap(StrikeWith::BestFit),
-            Source::Outline,
-        ])
-        .format(Format::Alpha)
-        .offset(Vector::new(
-            f32::from(key.x) * 0.25,
-            f32::from(key.y) * 0.25,
-        ))
-        .render(&mut scaler, key.glyph);
+        let image = match key.source {
+            RasterSource::Auto => Render::new(&[
+                Source::ColorOutline(0),
+                Source::ColorBitmap(StrikeWith::BestFit),
+                Source::Outline,
+            ])
+            .format(Format::Alpha)
+            .transform(key.skew.map(f32::from_bits).map(oblique_transform))
+            .embolden(if key.embolden {
+                f32::from_bits(key.size) * EMBOLDEN_EM
+            } else {
+                0.0
+            })
+            .offset(Vector::new(
+                f32::from(key.x) * 0.25,
+                f32::from(key.y) * 0.25,
+            ))
+            .render(&mut scaler, key.glyph),
+            RasterSource::ColorBitmap(index) => Some(
+                scaler
+                    .scale_color_bitmap(key.glyph, StrikeWith::Index(index))
+                    .ok_or(Error::InvalidGlyphImage)?,
+            ),
+            RasterSource::AlphaBitmap(index) => Some(
+                scaler
+                    .scale_bitmap(key.glyph, StrikeWith::Index(index))
+                    .ok_or(Error::InvalidGlyphImage)?,
+            ),
+        };
         let value = if let Some(image) = image {
             let pixels = u64::from(image.placement.width) * u64::from(image.placement.height);
             if pixels > 4 * 1024 * 1024 {

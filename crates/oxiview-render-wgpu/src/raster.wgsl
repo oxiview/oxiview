@@ -79,13 +79,6 @@ fn srgb(v: vec3<f32>) -> vec3<f32> {
 }
 // Shared straight-sRGB image data lives once in the command-buffer atlas.
 // Filter premultiplied colors so transparent pixels cannot introduce fringes.
-fn image_pixel(offset: u32, size: vec2<u32>, p: vec2<i32>) -> vec4<f32> {
-    let xy = vec2<u32>(clamp(p, vec2<i32>(0), vec2<i32>(size) - vec2<i32>(1)));
-    let packed = words[offset + xy.y * size.x + xy.x];
-    let value = vec4<f32>(f32(packed & 255u), f32((packed >> 8u) & 255u),
-                          f32((packed >> 16u) & 255u), f32(packed >> 24u)) / 255.0;
-    return vec4(value.rgb * value.a, value.a);
-}
 fn paint(offset: u32, p: vec2<f32>) -> vec4<f32> {
     if words[offset] == 0xffffffffu {
         return color(offset + 1u);
@@ -94,16 +87,6 @@ fn paint(offset: u32, p: vec2<f32>) -> vec4<f32> {
                      scalar(offset+1u)*p.x + scalar(offset+3u)*p.y + scalar(offset+5u));
     let start = point(offset+6u);
     let delta = point(offset+8u) - start;
-    if words[offset+10u] == 0xffffffffu {
-        let size = vec2<u32>(words[offset+11u], words[offset+12u]);
-        let data = words[offset+13u];
-        let uv = (local - start) / delta * vec2<f32>(size) - vec2(0.5);
-        let base = vec2<i32>(floor(uv));
-        let weight = fract(uv);
-        let a = mix(image_pixel(data,size,base), image_pixel(data,size,base+vec2<i32>(1,0)), weight.x);
-        let b = mix(image_pixel(data,size,base+vec2<i32>(0,1)), image_pixel(data,size,base+vec2<i32>(1,1)), weight.x);
-        return mix(a,b,weight.y);
-    }
     let length2 = dot(delta, delta);
     var t = 0.0;
     if length2 > 0.0 { t = dot(local-start, delta) / length2; }
@@ -121,9 +104,7 @@ fn paint(offset: u32, p: vec2<f32>) -> vec4<f32> {
         stop = next;
         value = color(stop+1u);
     }
-    if value.a <= 0.0 { return vec4(0.0); }
-    let alpha = clamp(value.a, 0.0, 1.0);
-    return vec4(clamp(srgb(value.rgb/value.a), vec3(0.0), vec3(1.0)) * alpha, alpha);
+    return value;
 }
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -172,5 +153,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             }
         }
     }
-    textureStore(output, id.xy, accumulated);
+    let alpha = clamp(accumulated.a, 0.0, 1.0);
+    let rgb = clamp(accumulated.rgb / max(alpha, 1e-8), vec3(0.0), vec3(1.0));
+    textureStore(output, id.xy, vec4(srgb(rgb) * alpha, alpha));
 }

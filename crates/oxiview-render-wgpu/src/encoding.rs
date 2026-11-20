@@ -1,7 +1,6 @@
 use crate::{Error, PixelSize};
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, Primitive};
-use std::collections::HashMap;
 
 mod tiles;
 use tiles::Bounds;
@@ -14,11 +13,9 @@ use tiles::Bounds;
 // Analytic shape: MAX (SDF) or MAX-1 (sampled) tag, inverse affine, bounds,
 // TL/TR/BR/BL radii, SDF scale (unused for sampled shapes).
 // Polygon: vertex count then xy pairs. A solid brush starts with MAX (which
-// cannot encode a finite affine coefficient), then four premultiplied sRGB
-// channels. Other brushes start with inverse affine, gradient endpoints,
-// stop count, then (position, premultiplied linear RGBA) stops.
-// Image brushes use MAX as the stop count, followed by width, height, and an
-// offset into shared straight-RGBA8 pixel words; repeated glyph storage is deduplicated.
+// cannot encode a finite affine coefficient), then four premultiplied linear
+// channels. Gradients start with inverse affine, endpoints, and stop count,
+// followed by (position, premultiplied linear RGBA) stops.
 pub(crate) struct Commands {
     words: Vec<u32>,
     pub(crate) depth: u32,
@@ -30,7 +27,6 @@ impl Commands {
             depth: 0,
         };
         let mut opacities = Vec::new();
-        let mut images = HashMap::new();
         let mut operations: Vec<(u32, Bounds)> = Vec::new();
         let mut nodes = scene.nodes.iter().peekable();
         while let Some(node) = nodes.next() {
@@ -67,15 +63,13 @@ impl Commands {
                     if boxed.is_some() {
                         nodes.next();
                     }
-                    let (mut rect, mut radii, mut width, brush, image) = match primitive {
-                        Primitive::Fill(rect, radii, brush) => {
-                            (*rect, *radii, None, Some(brush), None)
-                        }
+                    let (mut rect, mut radii, mut width, brush) = match primitive {
+                        Primitive::Fill(rect, radii, brush) => (*rect, *radii, None, brush),
                         Primitive::Stroke(rect, radii, width, brush) => {
-                            (*rect, *radii, Some(*width), Some(brush), None)
+                            (*rect, *radii, Some(*width), brush)
                         }
-                        Primitive::Image(rect, image) => {
-                            (*rect, CornerRadii::default(), None, None, Some(image))
+                        Primitive::Image(..) | Primitive::Glyph(_) | Primitive::FillPath(..) => {
+                            return Err(invalid("image, glyph, or path requires Vello"));
                         }
                     };
                     if let Some(boxed) = &boxed {
@@ -119,7 +113,7 @@ impl Commands {
                     }
                     result.set(start + 5, count(result.words.len())?)?;
                     match brush {
-                        Some(Brush::Solid(color)) => {
+                        Brush::Solid(color) => {
                             if inverse
                                 .coefficients()
                                 .into_iter()
@@ -129,7 +123,7 @@ impl Commands {
                             }
                             result.solid_brush(*color)?;
                         }
-                        Some(Brush::LinearGradient(a, b, stops)) => {
+                        Brush::LinearGradient(a, b, stops) => {
                             result.brush_transform(inverse)?;
                             for value in [a.x(), a.y(), b.x(), b.y()] {
                                 result.float(value)?;
@@ -138,38 +132,6 @@ impl Commands {
                             for stop in stops {
                                 result.stop(stop.position, stop.color)?;
                             }
-                        }
-                        None => {
-                            result.brush_transform(inverse)?;
-                            let image = image.ok_or_else(|| invalid("missing image source"))?;
-                            if image.width() == 0 || image.height() == 0 {
-                                return Err(invalid("empty image source"));
-                            }
-                            for value in rect.edges() {
-                                result.float(value)?;
-                            }
-                            result
-                                .words
-                                .extend([u32::MAX, image.width(), image.height(), 0]);
-                            let source_word = result.words.len() - 1;
-                            let key = (
-                                image.pixels().as_ptr().addr(),
-                                image.width(),
-                                image.height(),
-                            );
-                            let image_offset = if let Some(offset) = images.get(&key) {
-                                *offset
-                            } else {
-                                let offset = count(result.words.len())?;
-                                for pixel in image.pixels().chunks_exact(4) {
-                                    if let [r, g, b, a] = pixel {
-                                        result.words.push(u32::from_le_bytes([*r, *g, *b, *a]));
-                                    }
-                                }
-                                images.insert(key, offset);
-                                offset
-                            };
-                            result.set(source_word, image_offset)?;
                         }
                     }
                     if let Some(boxed) = boxed {
@@ -246,6 +208,10 @@ impl Commands {
     fn stop(&mut self, position: f64, color: Color) -> Result<(), Error> {
         self.float(position)?;
         let [r, g, b, a] = color.to_linear();
+        if [r, g, b, a].into_iter().any(|channel| !channel.is_finite()) {
+            return Err(invalid("non-finite or out-of-range GPU color"));
+        }
+        let [r, g, b, a] = [r, g, b, a].map(|channel| channel.clamp(0.0, 1.0));
         for value in [r * a, g * a, b * a, a] {
             self.float(f64::from(value))?;
         }
@@ -268,7 +234,7 @@ impl Commands {
         {
             return Err(invalid("non-finite or out-of-range GPU color"));
         }
-        let [r, g, b, a] = rgba.map(|v| v.clamp(0.0, 1.0));
+        let [r, g, b, a] = [r, g, b, a].map(|v| v.clamp(0.0, 1.0));
         self.words.push(u32::MAX);
         self.words
             .extend([r * a, g * a, b * a, a].map(f32::to_bits));
@@ -470,7 +436,7 @@ fn bordered_fill(first: &EncodedNode, next: Option<&EncodedNode>) -> Option<Bord
     })
 }
 
-fn radii_fit(width: f64, height: f64, [tl, tr, br, bl]: [f64; 4]) -> bool {
+pub(crate) fn radii_fit(width: f64, height: f64, [tl, tr, br, bl]: [f64; 4]) -> bool {
     // Match the CPU adapter's tolerance for proportional-fit rounding.
     let width = width * (1.0 + f64::EPSILON);
     let height = height * (1.0 + f64::EPSILON);

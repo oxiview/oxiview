@@ -8,13 +8,13 @@
 //! Edits are atomic. Removing a referenced subtree is rejected until outside
 //! references are removed. Identity is local to a scene and is never recycled.
 
-use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
+use oxiview_base::{Affine, Color, CornerRadii, Glyph, Point, Rect};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
-pub use oxiview_base::{PixelSize, RgbaImage};
+pub use oxiview_base::{BezierPath, PathCommand, PixelSize, RgbaImage};
 
 mod encoding;
 pub use encoding::{EncodedNode, EncodedScene, ResolvedClip};
@@ -40,6 +40,7 @@ pub enum Brush {
     /// Start, end, and at least two stops in nondecreasing position order.
     /// Equal positions represent a hard transition; values outside the first
     /// and last stop extend the respective endpoint color.
+    /// Coincident endpoints sample position zero, including its last equal stop.
     LinearGradient(Point, Point, Vec<ColorStop>),
 }
 
@@ -52,16 +53,30 @@ pub enum Clip {
     RoundedRect(Rect, CornerRadii),
 }
 
+/// Determines which regions of a Bézier path are filled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FillRule {
+    /// Fill where the signed winding count is nonzero.
+    #[default]
+    NonZero,
+    /// Fill where the crossing count is odd.
+    EvenOdd,
+}
+
 /// A draw operation, with its geometry and brush in the same local space.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Primitive {
     /// Filled rounded rectangle.
     Fill(Rect, CornerRadii, Brush),
+    /// Filled Bézier path. Any open contours are implicitly closed.
+    FillPath(BezierPath, FillRule, Brush),
     /// Rounded rectangle with a centered stroke of the given width.
     Stroke(Rect, CornerRadii, f64, Brush),
     /// Straight-sRGB image sampled into a logical destination rectangle.
     /// Image storage is shared by clones; adapters filter premultiplied pixels.
     Image(Rect, RgbaImage),
+    /// Vector outline or OpenType COLR glyph at a local logical baseline.
+    Glyph(Glyph),
 }
 
 /// Content of a subtree node. Children are supported by every variant.
@@ -85,6 +100,9 @@ pub enum Error {
     /// Pixel byte length does not match its dimensions.
     #[error("invalid RGBA8 image length")]
     InvalidImage,
+    /// Glyph size, origin, color, or font storage is invalid.
+    #[error("invalid glyph description")]
+    InvalidGlyph,
     /// The identity does not exist in this scene.
     #[error("scene node does not exist: {0:?}")]
     MissingNode(NodeId),
@@ -302,7 +320,7 @@ impl Scene {
             }
             NodeKind::Draw(primitive) => {
                 let brush = match primitive {
-                    Primitive::Fill(_, _, brush) => brush,
+                    Primitive::Fill(_, _, brush) | Primitive::FillPath(_, _, brush) => brush,
                     Primitive::Stroke(_, _, width, brush) => {
                         if !width.is_finite() || *width < 0.0 {
                             return Err(Error::InvalidStrokeWidth);
@@ -317,6 +335,18 @@ impl Scene {
                             || rect.size().height() <= 0.0
                         {
                             return Err(Error::InvalidImage);
+                        }
+                        return Ok(());
+                    }
+                    Primitive::Glyph(glyph) => {
+                        if glyph.font.bytes().is_empty()
+                            || !glyph.size.is_finite()
+                            || glyph.size <= 0.0
+                            || !glyph.origin.x().is_finite()
+                            || !glyph.origin.y().is_finite()
+                            || !glyph.color.to_srgb().into_iter().all(f32::is_finite)
+                        {
+                            return Err(Error::InvalidGlyph);
                         }
                         return Ok(());
                     }

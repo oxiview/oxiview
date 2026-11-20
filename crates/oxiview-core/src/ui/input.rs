@@ -4,6 +4,7 @@ use oxiview_platform::{PointerButton, WindowEvent};
 use oxiview_reactive::{Owner, ReactiveError};
 use oxiview_scene::Primitive;
 use oxiview_style::{Display, Style};
+use oxiview_text::RichText;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
 const COMMAND_BUDGET: usize = 4096;
@@ -96,7 +97,7 @@ pub(super) enum Command {
     },
     Style(NodeId, Style),
     Content(NodeId, Vec<Primitive>),
-    Text(NodeId, String),
+    Text(NodeId, RichText),
     Handler(NodeId, Box<NodeHandler>),
     Mutation(NodeId, Box<Mutation>),
     Rejected(NodeId, UiError),
@@ -207,7 +208,11 @@ impl UiCommands {
     }
     /// Queues replacement of a text node's source string and invalidates measurement.
     pub fn set_text(&mut self, id: NodeId, text: impl Into<String>) {
-        self.push(Command::Text(id, text.into()));
+        self.set_rich_text(id, RichText::plain(text.into()));
+    }
+    /// Queues a rich-text content replacement.
+    pub fn set_rich_text(&mut self, id: NodeId, text: RichText) {
+        self.push(Command::Text(id, text));
     }
     /// Queues replacement of the node-owned pointer handler.
     pub fn set_pointer_handler(
@@ -831,7 +836,7 @@ impl UiTree {
                 Ok(())
             }
             Command::Content(id, content) => self.set_content(id, content),
-            Command::Text(id, text) => self.set_text(id, text),
+            Command::Text(id, text) => self.set_rich_text(id, text),
             Command::Handler(id, callback) => {
                 self.node_mut(id)?.handler = Some(Rc::new(RefCell::new(callback)));
                 Ok(())

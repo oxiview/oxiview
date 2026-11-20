@@ -10,8 +10,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+fearless_simd.workspace = true
 oxiview-base.workspace = true
 oxiview-scene.workspace = true
+skrifa.workspace = true
 thiserror.workspace = true
 vello_cpu.workspace = true
 

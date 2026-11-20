@@ -84,6 +84,7 @@ fn flexwrap(v: style::FlexWrap) -> layout::FlexWrap {
 fn alignment(v: style::Alignment) -> layout::Alignment {
     match v {
         style::Alignment::Stretch => layout::Alignment::Stretch,
+        style::Alignment::Baseline => layout::Alignment::Baseline,
         style::Alignment::Start => layout::Alignment::Start,
         style::Alignment::End => layout::Alignment::End,
         style::Alignment::Center => layout::Alignment::Center,

@@ -111,6 +111,8 @@ pub enum Alignment {
     End,
     /// Center the item.
     Center,
+    /// Align first baselines in a flex row or grid row. Uses start on the inline axis.
+    Baseline,
 }
 
 /// Distribution of a group of tracks or items.

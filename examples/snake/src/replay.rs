@@ -33,7 +33,9 @@ pub struct ImageEvidence {
     pub scale: f64,
     /// Number of raster glyph-image draw operations.
     pub glyph_images: usize,
-    /// Pixel area of glyph draws, including repeated glyph placements.
+    /// Number of vector glyphs, including synthesized outline paths.
+    pub vector_glyphs: usize,
+    /// Pixel area of raster glyph draws, including repeated placements.
     pub glyph_pixels: u64,
 }
 /// A machine-readable acceptance result, independent of a native window.
@@ -170,16 +172,21 @@ fn draw(
     let painted = app.render(PhysicalSize { width, height }, f64::from(scale))?;
     let encoded = painted.scene.encode(painted.root)?;
     let mut glyph_images = 0;
+    let mut vector_glyphs = 0;
     let mut glyph_pixels = 0u64;
     for command in &encoded.nodes {
-        if let EncodedNode::Draw {
-            primitive: Primitive::Image(_, image),
-            ..
-        } = command
-        {
-            glyph_images += 1;
-            glyph_pixels =
-                glyph_pixels.saturating_add(u64::from(image.width()) * u64::from(image.height()));
+        if let EncodedNode::Draw { primitive, .. } = command {
+            // Snake's board and controls use rectangle primitives. Images and
+            // outline paths come from the text views and the text overlay.
+            match primitive {
+                Primitive::Image(_, image) => {
+                    glyph_images += 1;
+                    glyph_pixels = glyph_pixels
+                        .saturating_add(u64::from(image.width()) * u64::from(image.height()));
+                }
+                Primitive::Glyph(_) | Primitive::FillPath(..) => vector_glyphs += 1,
+                _ => {}
+            }
         }
     }
     require(
@@ -204,6 +211,7 @@ fn draw(
         height,
         scale: f64::from(scale),
         glyph_images,
+        vector_glyphs,
         glyph_pixels,
     })
 }
@@ -372,20 +380,24 @@ fn run_checks(config: Config, output: &Path, screen: Screen) -> Result<Report, B
         config.height,
         2,
     )?;
-    if ready.glyph_images != ready_hidpi.glyph_images
+    if ready.glyph_images + ready.vector_glyphs
+        != ready_hidpi.glyph_images + ready_hidpi.vector_glyphs
+        || ready_hidpi.vector_glyphs < ready.vector_glyphs
         || ready_hidpi.glyph_pixels <= ready.glyph_pixels * 2
     {
         return Err(format!(
-            "DPI mismatch: 1x has {} glyphs / {} pixels; 2x has {} glyphs / {} pixels",
+            "DPI mismatch: 1x has {} raster / {} vector glyphs / {} raster pixels, 2x has {} raster / {} vector glyphs / {} raster pixels",
             ready.glyph_images,
+            ready.vector_glyphs,
             ready.glyph_pixels,
             ready_hidpi.glyph_images,
+            ready_hidpi.vector_glyphs,
             ready_hidpi.glyph_pixels
         )
         .into());
     }
     images.extend([ready, ready_hidpi]);
-    checks.push("real-font shaping and DPI-aware glyph rasterization");
+    checks.push("real-font shaping and DPI-aware raster and vector glyph selection");
     let mut now = Duration::from_millis(1);
     click(
         &mut app,

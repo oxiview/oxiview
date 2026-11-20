@@ -2,6 +2,8 @@ use super::*;
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
 use oxiview_scene::{Brush, Clip, ColorStop, NodeKind, Primitive};
 
+mod colr;
+
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 const SIZE: PixelSize = PixelSize {
     width: 65,
@@ -138,39 +140,114 @@ fn image_draw_preserves_scale_alpha_clips_and_following_paint() -> TestResult {
 }
 
 #[test]
-fn repeated_image_draws_share_gpu_pixel_storage() -> TestResult {
-    let image = RgbaImage::new(
+fn repeated_image_draws_keep_texture_residency_across_frames() -> TestResult {
+    let raster = RgbaImage::new(
         PixelSize {
-            width: 64,
-            height: 64,
+            width: 8,
+            height: 8,
         },
-        vec![255; 64 * 64 * 4],
+        [161, 32, 199, 73].repeat(8 * 8),
     )?;
     let mut scene = Scene::new();
     let root = scene.insert(None, 0, NodeKind::Transform(Affine::IDENTITY))?;
-    scene.insert(
-        Some(root),
-        0,
-        NodeKind::Draw(Primitive::Image(
-            Rect::new(0.0, 0.0, 16.0, 16.0),
-            image.clone(),
-        )),
+    for (index, left) in [4.0, 24.0].into_iter().enumerate() {
+        scene.insert(
+            Some(root),
+            index,
+            NodeKind::Draw(Primitive::Image(
+                Rect::new(left, 4.0, left + 8.0, 12.0),
+                raster.clone(),
+            )),
+        )?;
+    }
+    let encoded = scene.encode(root)?;
+    let context = RenderContext::new()?;
+    let mut process = context.process.lock().map_err(|e| e.to_string())?;
+    process.ensure_device()?;
+    let gpu = process.gpu.as_mut().ok_or("missing GPU")?;
+    let before = gpu
+        .vector
+        .as_ref()
+        .map_or(0, |backend| backend.atlas.counters.uploads);
+    let first = gpu
+        .render_scene(&encoded, SIZE, None, true)?
+        .ok_or("missing pixels")?;
+    let warm = gpu.vector.as_ref().ok_or("missing Vello")?.atlas.counters;
+    assert_eq!(warm.uploads - before, 1);
+    assert_eq!(pixel(&first, 7, 7), [161, 32, 199, 73]);
+    assert_eq!(pixel(&first, 27, 7), [161, 32, 199, 73]);
+    // A frame on the fast path must not reset the GPU atlas.
+    gpu.render_scene(&oxiview_scene::EncodedScene::default(), SIZE, None, false)?;
+    for _ in 0..3 {
+        let later = gpu
+            .render_scene(&encoded, SIZE, None, true)?
+            .ok_or("missing pixels")?;
+        assert_eq!(later, first);
+    }
+    let steady = gpu.vector.as_ref().ok_or("missing Vello")?.atlas.counters;
+    assert_eq!(steady.uploads, warm.uploads);
+    assert_eq!(steady.overflow_uploads, warm.overflow_uploads);
+    assert_eq!(steady.hits - warm.hits, 6);
+    Ok(())
+}
+
+#[test]
+fn atlas_evicts_unused_entries_and_draws_pinned_overflow() -> TestResult {
+    let size = PixelSize {
+        width: 1024,
+        height: 1024,
+    };
+    let first = RgbaImage::new(size, [0, 255, 0, 255].repeat(1024 * 1024))?;
+    let second = RgbaImage::new(size, [255, 0, 0, 255].repeat(1024 * 1024))?;
+    let third = RgbaImage::new(
+        PixelSize {
+            width: 1025,
+            height: 1,
+        },
+        [0, 0, 255, 255].repeat(1025),
     )?;
-    let once = encoding::Commands::new(&scene.encode(root)?, SIZE)?
-        .bytes()
-        .len();
-    scene.insert(
-        Some(root),
-        1,
+    let image = |left: f64, source: RgbaImage| {
         NodeKind::Draw(Primitive::Image(
-            Rect::new(24.0, 0.0, 40.0, 16.0),
-            image.clone(),
-        )),
-    )?;
-    let twice = encoding::Commands::new(&scene.encode(root)?, SIZE)?
-        .bytes()
-        .len();
-    assert!(twice - once < image.pixels().len());
+            Rect::new(left, 0.0, left + 16.0, 16.0),
+            source,
+        ))
+    };
+    let context = RenderContext::new()?;
+    let mut process = context.process.lock().map_err(|e| e.to_string())?;
+    process.ensure_device()?;
+    let gpu = process.gpu.as_mut().ok_or("missing GPU")?;
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Opacity(1.0))?;
+    let old = scene.insert(Some(root), 0, image(0.0, first))?;
+    gpu.render_scene(&scene.encode(root)?, SIZE, None, true)?;
+    let before = gpu.vector.as_ref().ok_or("missing Vello")?.atlas.counters;
+
+    // The resident entry is pinned even when it appears after a cache miss.
+    scene.insert(Some(root), 0, image(17.0, second))?;
+    scene.insert(Some(root), 2, image(34.0, third))?;
+    let output = gpu
+        .render_scene(&scene.encode(root)?, SIZE, None, true)?
+        .ok_or("missing pixels")?;
+    assert_eq!(pixel(&output, 8, 8), [0, 255, 0, 255]);
+    assert_eq!(pixel(&output, 25, 8), [255, 0, 0, 255]);
+    assert_eq!(pixel(&output, 42, 8), [0, 0, 255, 255]);
+    let atlas = &gpu.vector.as_ref().ok_or("missing Vello")?.atlas;
+    let overflow = atlas.counters;
+    assert_eq!(overflow.uploads, before.uploads);
+    assert_eq!(overflow.evictions, before.evictions);
+    assert_eq!(overflow.overflow_uploads - before.overflow_uploads, 2);
+    assert_eq!(atlas.resident_count(), 1);
+
+    scene.remove(old)?;
+    let output = gpu
+        .render_scene(&scene.encode(root)?, SIZE, None, true)?
+        .ok_or("missing pixels")?;
+    assert_eq!(pixel(&output, 8, 8), [0, 0, 0, 0]);
+    assert_eq!(pixel(&output, 25, 8), [255, 0, 0, 255]);
+    let atlas = &gpu.vector.as_ref().ok_or("missing Vello")?.atlas;
+    assert_eq!(atlas.counters.uploads - overflow.uploads, 1);
+    assert_eq!(atlas.counters.evictions - overflow.evictions, 1);
+    assert_eq!(atlas.resident_count(), 1);
     Ok(())
 }
 
@@ -212,30 +289,21 @@ fn filled_box_border_shares_outer_edge_coverage() -> TestResult {
         // At this outer-edge pixel, the inside border fully replaces the box
         // background wherever the shape covers. Compare with the corresponding
         // single fill, rather than accepting opacity from two averaged edges.
-        let foreground = border.to_srgb();
-        let behind = background.to_srgb();
-        let effective = [
+        let foreground = border.to_linear();
+        let behind = background.to_linear();
+        let effective = Color::from_linear([
             foreground[0] * foreground[3] + behind[0] * (1.0 - foreground[3]),
             foreground[1] * foreground[3] + behind[1] * (1.0 - foreground[3]),
             foreground[2] * foreground[3] + behind[2] * (1.0 - foreground[3]),
-        ]
-        .map(|value| (value * 255.0).round() as u8);
+            1.0,
+        ]);
         let mut reference = Scene::new();
         let reference_root =
             reference.insert(None, 0, fill(Rect::new(0.0, 0.0, 65.0, 64.0), paper))?;
         reference.insert(
             Some(reference_root),
             0,
-            NodeKind::Draw(Primitive::Fill(
-                outer,
-                radii,
-                Brush::Solid(Color::from_rgba8(
-                    effective[0],
-                    effective[1],
-                    effective[2],
-                    255,
-                )),
-            )),
+            NodeKind::Draw(Primitive::Fill(outer, radii, Brush::Solid(effective))),
         )?;
         let expected = gpu.render(&reference, reference_root, SIZE)?;
         for (actual, expected) in pixel(&actual, 12, 9).iter().zip(pixel(&expected, 12, 9)) {
@@ -316,13 +384,12 @@ fn tiled_render_matches_unculled_scene_at_edges_and_nested_groups() -> TestResul
         };
         scene.insert(Some(clip), 0, NodeKind::Draw(primitive))?;
     }
-    let tiled = context.render(&scene, root, SIZE)?;
-    let commands = encoding::Commands::unbinned(&scene.encode(root)?, SIZE)?;
-    let unculled = context
-        .process
-        .lock()
-        .map_err(|e| e.to_string())?
-        .render(&commands, SIZE)?;
+    let encoded = scene.encode(root)?;
+    let commands = encoding::Commands::new(&encoded, SIZE)?;
+    let oracle = encoding::Commands::unbinned(&encoded, SIZE)?;
+    let mut process = context.process.lock().map_err(|e| e.to_string())?;
+    let tiled = process.render(&commands, SIZE)?;
+    let unculled = process.render(&oracle, SIZE)?;
     assert_eq!(tiled.pixels(), unculled.pixels());
     assert!(tiled.pixels().iter().any(|b| *b != 0));
     Ok(())
@@ -720,5 +787,233 @@ fn surface_copy_matches_offscreen_and_recovers() -> TestResult {
         }
         process.lose_device();
     }
+    Ok(())
+}
+
+fn fixture_glyph(id: u16, kind: oxiview_base::GlyphKind, color: Color) -> NodeKind {
+    const FONT: &[u8] = include_bytes!("../../oxiview-text/tests/fonts/OxiviewColorFixture.ttf");
+    NodeKind::Draw(Primitive::Glyph(oxiview_base::Glyph {
+        font: oxiview_base::GlyphFont::new(Arc::from(FONT)),
+        face_index: 0,
+        glyph_id: id,
+        size: 50.0,
+        origin: Point::new(8.0, 52.0),
+        color,
+        variations: Arc::from([]),
+        kind,
+    }))
+}
+
+#[test]
+fn vello_draws_outline_through_transformed_clip() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Transform(Affine::new([1.0, 0.0, 0.5, 1.0, -12.0, 0.0])),
+    )?;
+    let clip = scene.insert(
+        Some(root),
+        0,
+        NodeKind::Clip(Clip::Rect(Rect::new(10.0, 12.0, 27.0, 52.0))),
+    )?;
+    scene.insert(
+        Some(clip),
+        0,
+        fixture_glyph(
+            2,
+            oxiview_base::GlyphKind::Outline,
+            Color::from_rgba8(130, 20, 48, 160),
+        ),
+    )?;
+    let rendered = RenderContext::new()?.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 26, 40), [130, 20, 48, 160]);
+    assert_eq!(pixel(&rendered, 40, 45), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 16, 40), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 26, 55), [0, 0, 0, 0]);
+    Ok(())
+}
+
+#[test]
+fn vello_executes_colrv1_multiply_and_applies_glyph_opacity_once() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        fixture_glyph(
+            4,
+            oxiview_base::GlyphKind::Color,
+            Color::from_rgba8(245, 70, 12, 128),
+        ),
+    )?;
+    let rendered = RenderContext::new()?.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 12, 32), [0, 255, 255, 128]);
+    assert_eq!(pixel(&rendered, 28, 32), [0, 255, 0, 128]);
+    assert_eq!(pixel(&rendered, 44, 32), [255, 255, 0, 128]);
+    assert_eq!(pixel(&rendered, 52, 32), [0, 0, 0, 0]);
+    Ok(())
+}
+
+#[test]
+fn vello_executes_colrv1_sweep_in_font_orientation() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        fixture_glyph(5, oxiview_base::GlyphKind::Color, red()),
+    )?;
+    let rendered = RenderContext::new()?.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 38, 22), [255, 0, 0, 255]);
+    assert_eq!(pixel(&rendered, 18, 22), [0, 255, 0, 255]);
+    assert_eq!(pixel(&rendered, 18, 42), [0, 0, 255, 255]);
+    assert_eq!(pixel(&rendered, 38, 42), [255, 255, 0, 255]);
+    Ok(())
+}
+
+#[test]
+fn vello_composites_images_and_gradients_in_linear_light() -> TestResult {
+    let image = RgbaImage::new(
+        PixelSize {
+            width: 2,
+            height: 1,
+        },
+        vec![255, 0, 0, 255, 0, 0, 255, 255],
+    )?;
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Transform(Affine::IDENTITY))?;
+    scene.insert(
+        Some(root),
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(0.0, 0.0, 65.0, 12.0), image)),
+    )?;
+    scene.insert(
+        Some(root),
+        1,
+        NodeKind::Draw(Primitive::Fill(
+            Rect::new(0.0, 16.0, 65.0, 28.0),
+            CornerRadii::default(),
+            Brush::LinearGradient(
+                Point::new(0.0, 16.0),
+                Point::new(65.0, 16.0),
+                vec![
+                    ColorStop {
+                        position: 0.0,
+                        color: red(),
+                    },
+                    ColorStop {
+                        position: 1.0,
+                        color: blue(),
+                    },
+                ],
+            ),
+        )),
+    )?;
+    scene.insert(Some(root), 2, fill(Rect::new(0.0, 32.0, 65.0, 44.0), red()))?;
+    let group = scene.insert(Some(root), 3, NodeKind::Opacity(0.5))?;
+    for i in 0..2 {
+        scene.insert(
+            Some(group),
+            i,
+            fill(Rect::new(0.0, 32.0, 65.0, 44.0), blue()),
+        )?;
+    }
+    let rendered = RenderContext::new()?.render(&scene, root, SIZE)?;
+    for y in [6, 22, 38] {
+        let [r, g, b, a] = pixel(&rendered, 32, y) else {
+            return Err("invalid readback pixel".into());
+        };
+        assert!(r.abs_diff(188) <= 1, "red at row {y}: {r}");
+        assert!(b.abs_diff(188) <= 1, "blue at row {y}: {b}");
+        assert_eq!((*g, *a), (0, 255));
+    }
+    Ok(())
+}
+
+#[test]
+fn vello_surface_output_preserves_alpha_and_device_recovery() -> TestResult {
+    let raster = RgbaImage::new(
+        PixelSize {
+            width: 1,
+            height: 1,
+        },
+        vec![221, 42, 103, 129],
+    )?;
+    let mut scene = Scene::new();
+    let root = scene.insert(
+        None,
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(8.0, 8.0, 22.0, 22.0), raster)),
+    )?;
+    let encoded = scene.encode(root)?;
+    let context = RenderContext::new()?;
+    let mut process = context.process.lock().map_err(|e| e.to_string())?;
+    process.lose_device();
+    for _ in 0..2 {
+        process.ensure_device()?;
+        let gpu = process.gpu.as_mut().ok_or("missing GPU")?;
+        assert!(gpu.vector.is_none());
+        let output = gpu
+            .render_scene(&encoded, SIZE, None, true)?
+            .ok_or("missing pixels")?;
+        assert_eq!(pixel(&output, 16, 16), [221, 42, 103, 129]);
+        for format in copy::SURFACE_FORMATS {
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Vello surface-like target"),
+                size: wgpu::Extent3d {
+                    width: SIZE.width,
+                    height: SIZE.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let surface = gpu
+                .render_scene(&encoded, SIZE, Some(&target), true)?
+                .ok_or("missing surface pixels")?;
+            assert_eq!(pixel(&surface, 0, 0), [0, 0, 0, 0]);
+            for (&actual, &expected) in pixel(&surface, 16, 16).iter().zip(pixel(&output, 16, 16)) {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "{format:?}: {actual} != {expected}"
+                );
+            }
+        }
+        let atlas = &gpu.vector.as_ref().ok_or("missing Vello")?.atlas;
+        assert_eq!(atlas.counters.uploads, 1);
+        assert_eq!(atlas.counters.hits, 4);
+        process.lose_device();
+    }
+    Ok(())
+}
+
+#[test]
+fn vello_uses_cpal_palette_zero_at_nonzero_record_offset() -> TestResult {
+    let NodeKind::Draw(Primitive::Glyph(mut glyph)) =
+        fixture_glyph(4, oxiview_base::GlyphKind::Color, red())
+    else {
+        return Err("missing fixture glyph".into());
+    };
+    let original = glyph.font.bytes();
+    let face = skrifa::FontRef::from_index(original, 0)?;
+    let cpal = face
+        .table_data(skrifa::Tag::new(b"CPAL"))
+        .ok_or("missing CPAL")?;
+    let offset = cpal.as_bytes().as_ptr().addr() - original.as_ptr().addr();
+    let mut bytes = original.to_vec();
+    // Shift the single palette's start by one record and reduce its length
+    // accordingly. The composite uses palette indices 2 and 3, still in range.
+    bytes[offset + 2..offset + 4].copy_from_slice(&4u16.to_be_bytes());
+    bytes[offset + 12..offset + 14].copy_from_slice(&1u16.to_be_bytes());
+    glyph.font = oxiview_base::GlyphFont::new(bytes.into());
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Draw(Primitive::Glyph(glyph)))?;
+    let output = RenderContext::new()?.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&output, 12, 32), [255, 255, 0, 255]);
+    assert_eq!(pixel(&output, 28, 32), [0, 255, 0, 255]);
+    assert_eq!(pixel(&output, 44, 32), [0, 255, 0, 255]);
     Ok(())
 }

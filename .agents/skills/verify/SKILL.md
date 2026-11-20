@@ -13,7 +13,7 @@ Run all commands from the repository root. Verify locally only.
 - Before delivery, run `cargo xtask verify`, which includes doctor, fmt, lint, test, deps, and docs. docs has no standalone subcommand.
 - For rendering changes, run `cargo xtask test`, inspect relevant pixel snapshots, then run verify. M-1 has only harness self-tests with generated images; do not claim real rendering was verified.
 - For performance changes, run `cargo xtask bench` or `cargo xtask verify --full`; ordinary verify skips benchmarks. See the [benchmark conventions](../../../docs/conventions/testing-performance.md) for measurement requirements.
-- For M2 tree and layout measurements, use `cargo xtask bench --m2`. For M3 reactivity and component measurements, use `cargo xtask bench --m3`. Both run without a visible window. For a native measurement on the owner's desktop, announce the workload and expected duration, then wait for the owner's readiness confirmation as required by [AGENTS.md](../../../AGENTS.md). The M1 idle interval alone takes 30 seconds.
+- For window-free measurements use `cargo xtask bench --m2` for layout, `--m3` for reactivity and components, or `--m4` for text. For a native measurement on the owner's desktop, announce the workload and expected duration, then wait for the owner's readiness confirmation as required by [AGENTS.md](../../../AGENTS.md). The M1 idle interval alone takes 30 seconds.
 - For environment issues, run `cargo xtask doctor`. Report installation commands for missing tools; do not install automatically. For arguments, use `cargo xtask --help` or `cargo xtask help <subcommand>`.
 
 ## Read results

@@ -2,26 +2,23 @@
 //!
 //! The instance, adapter, and device are process-wide and shared by every context.
 //! Device loss discards the old device and rebuilds it for every context on next
-//! use. Offscreen rendering needs no window. The SDF fast path evaluates rounded
-//! rectangle fills, strokes and clips through the inverse affine for similarities:
-//! finite nonzero equal-length orthogonal columns (relative tolerance 1e-12).
-//! Translation, uniform scale, rotation and reflection qualify; other transforms
-//! use a fixed sixteen-sample inside-test pattern over polygons or trimmed arcs.
-//! SDF coverage evaluates distance once at the pixel center, converts it to physical
-//! pixels, and applies the one-pixel ramp `clamp(0.5 - distance_px, 0, 1)`.
-//! Commands are binned into 16x16 physical-pixel tiles using conservative bounds.
-//! The ordered interpreter visits only its tile's commands with clip and opacity stacks,
-//! composing coverage-weighted paint and evaluating gradients at the pixel center.
-//! Shared antialiased edges can exhibit coverage conflation between operations.
-//! Output is straight sRGB RGBA8, without a byte-for-byte CPU equivalence promise.
+//! use. Offscreen rendering needs no window. The SDF fast path uses analytic
+//! coverage for UI geometry under similarities (translation, uniform scale,
+//! rotation and reflection). Vello renders general affine geometry, images and
+//! vector glyphs. The device retains an atlas of uploaded image pixels across
+//! frames. Both paths composite in linear light and expose straight sRGB RGBA8
+//! offscreen. Native presentation preserves the surface's premultiplied alpha.
 
 // Native surface creation is the adapter's only unsafe boundary.
 #![allow(unsafe_code)]
 
 mod acquisition;
+mod atlas;
 mod copy;
 mod device;
+mod glyph;
 mod surface;
+mod vector;
 pub use surface::{FrameOutcome, WindowSurface};
 mod encoding;
 
@@ -105,11 +102,15 @@ impl RenderContext {
         process.ensure_device()?;
         let gpu = process
             .gpu
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| Error::DeviceLost("missing device".into()))?;
-        surface::validate_size(size, gpu.device.limits().max_texture_dimension_2d)?;
-        let commands = encoding::Commands::new(&encoded, size)?;
-        process.render(&commands, size)
+        let result = gpu
+            .render_scene(&encoded, size, None, true)
+            .and_then(|image| image.ok_or_else(|| Error::DeviceLost("missing readback".into())));
+        if matches!(result, Err(Error::DeviceLost(_))) {
+            process.lose_device();
+        }
+        result
     }
 
     /// Destroys the shared device to exercise the real loss/recreation path.

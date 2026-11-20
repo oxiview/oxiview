@@ -1,11 +1,11 @@
 //! Real Snake scene comparison across CPU and offscreen GPU, without a native window.
 
-use oxiview_base::{PixelSize, RgbaImage};
-use oxiview_core::Scheduler;
+use oxiview_base::{Affine, PixelSize, RgbaImage};
+use oxiview_core::{PaintedScene, Scheduler};
 use oxiview_platform::{KeyCode, PhysicalSize, WindowEvent};
 use oxiview_render_cpu::{CpuRenderer, Renderer};
 use oxiview_render_wgpu::RenderContext;
-use oxiview_scene::{EncodedNode, Primitive};
+use oxiview_scene::{EncodedNode, NodeKind, Primitive};
 use snake::{
     application::{Config, Counters, SnakeApp},
     game::Phase,
@@ -119,6 +119,24 @@ fn glyph_regions(nodes: &[EncodedNode], size: PixelSize) -> (Vec<bool>, usize) {
     (mask, glyphs)
 }
 
+fn include_vector_ink(frame: &PaintedScene, size: PixelSize, mask: &mut [bool]) -> TestResult {
+    let mut scene = frame.scene.clone();
+    let mut pending = scene.roots().to_vec();
+    while let Some(id) = pending.pop() {
+        pending.extend_from_slice(scene.children(Some(id))?);
+        if let NodeKind::Draw(primitive) = scene.content(id)?
+            && !matches!(primitive, Primitive::Glyph(_) | Primitive::FillPath(..))
+        {
+            scene.replace(id, NodeKind::Transform(Affine::IDENTITY))?;
+        }
+    }
+    let ink = CpuRenderer.render(&scene, frame.root, size)?;
+    for (include, rgba) in mask.iter_mut().zip(ink.pixels().chunks_exact(4)) {
+        *include |= rgba[3] > 0;
+    }
+    Ok(())
+}
+
 fn shifted_one_pixel(image: &RgbaImage) -> Vec<u8> {
     let mut output = vec![0; image.pixels().len()];
     let stride = image.width() as usize * 4;
@@ -171,7 +189,24 @@ fn actual_ready_and_playing_scenes_match_cpu_and_gpu_at_both_scales() -> TestRes
                     f64::from(scale),
                 )?;
                 let encoded = frame.scene.encode(frame.root)?;
-                let (text_mask, glyphs) = glyph_regions(&encoded.nodes, size);
+                let (mut text_mask, raster_glyphs) = glyph_regions(&encoded.nodes, size);
+                let vector_glyphs = encoded
+                    .nodes
+                    .iter()
+                    .filter(|op| {
+                        matches!(
+                            op,
+                            EncodedNode::Draw {
+                                primitive: Primitive::Glyph(_) | Primitive::FillPath(..),
+                                ..
+                            }
+                        )
+                    })
+                    .count();
+                if vector_glyphs != 0 {
+                    include_vector_ink(&frame, size, &mut text_mask)?;
+                }
+                let glyphs = raster_glyphs + vector_glyphs;
                 assert!(glyphs > 80, "actual scene lost its real text");
                 assert!(
                     encoded

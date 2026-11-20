@@ -14,6 +14,11 @@ oxiview-base.workspace = true
 oxiview-scene.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
+vello_gpu.workspace = true
+glifo.workspace = true
+skrifa.workspace = true
+guillotiere.workspace = true
+half.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

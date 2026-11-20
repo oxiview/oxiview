@@ -1,19 +1,20 @@
 //! CPU rendering adapter for the rendering context.
 //!
-//! The rasterizer API is unstable. Output can drift between versions, gradient
-//! quality is lower than the GPU path, and pixels do not match the GPU renderer
-//! byte for byte. Snapshot review guards silent drift; version upgrades require
-//! re-reviewing and re-accepting baselines. All rasterizer types stay private.
+//! Scene paints composite in premultiplied linear light and frames read back in
+//! straight sRGB. All Vello types stay private. Pixel snapshots guard rasterizer
+//! changes, including differences in coverage and gradient sampling.
 
 use kurbo::Shape;
 use oxiview_base::{Color, CornerRadii, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, NodeId, Primitive, Scene};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     f64::consts::{FRAC_PI_2, PI},
-    sync::Arc,
 };
-use vello_cpu::{Pixmap, RenderContext, Resources, color, kurbo, peniko};
+use vello_cpu::{LinearImages, RenderContext, Resources, color, kurbo, peniko};
+
+mod glyph;
+mod path_fill;
 
 pub use oxiview_scene::{PixelSize, RgbaImage};
 
@@ -26,6 +27,9 @@ pub enum Error {
     /// Dimensions must be nonzero and fit the rasterizer's u16 dimensions.
     #[error("unsupported CPU render size: {0:?}")]
     InvalidSize(PixelSize),
+    /// A glyph's font face, outline, or color paint graph could not be rendered.
+    #[error("glyph rendering failed: {0}")]
+    Glyph(String),
 }
 
 /// Renders a caller-selected retained subtree to straight RGBA8 pixels.
@@ -41,23 +45,21 @@ pub struct CpuRenderer;
 impl Renderer for CpuRenderer {
     fn render(&mut self, scene: &Scene, root: NodeId, size: PixelSize) -> Result<RgbaImage, Error> {
         let (width, height) = dimensions(size)?;
+        let length = usize::from(width)
+            .checked_mul(usize::from(height))
+            .and_then(|count| count.checked_mul(4))
+            .ok_or(Error::InvalidSize(size))?;
         let encoded = scene
             .encode(root)
             .map_err(|error| Error::SceneEncoding(error.to_string()))?;
         let mut context = RenderContext::new(width, height);
-        paint_scene(&mut context, &encoded)?;
-        let mut pixmap = Pixmap::new(width, height);
-        context.render(&mut pixmap, &mut Resources::new());
-        let pixels = pixmap
-            .data_as_u8_slice()
-            .chunks_exact(4)
-            .flat_map(|pixel| {
-                let [r, g, b, a] = *pixel else {
-                    return [0; 4];
-                };
-                [straight(r, a), straight(g, a), straight(b, a), a]
-            })
-            .collect();
+        let mut resources = Resources::new();
+        let mut images = LinearImages::default();
+        paint_scene(&mut context, &encoded, &mut images)?;
+        let mut pixels = vec![0; length];
+        if !context.render_linear(&mut pixels, &mut resources, &images) {
+            return Err(Error::InvalidSize(size));
+        }
         RgbaImage::new(size, pixels).map_err(|e| Error::SceneEncoding(e.to_string()))
     }
 }
@@ -69,14 +71,6 @@ fn dimensions(size: PixelSize) -> Result<(u16, u16), Error> {
         return Err(Error::InvalidSize(size));
     }
     Ok((width, height))
-}
-
-fn straight(channel: u8, alpha: u8) -> u8 {
-    if alpha == 0 {
-        return 0;
-    }
-    // Round to nearest; clamp for robustness to premultiplied quantization.
-    ((u32::from(channel) * 255 + u32::from(alpha) / 2) / u32::from(alpha)).min(255) as u8
 }
 
 fn path(rect: Rect, radii: CornerRadii) -> kurbo::BezPath {
@@ -129,16 +123,18 @@ fn path(rect: Rect, radii: CornerRadii) -> kurbo::BezPath {
 }
 
 fn solid(value: Color) -> color::AlphaColor<color::Srgb> {
-    color::AlphaColor::new(value.to_srgb())
+    // Vello's paint types use Srgb as a numeric carrier. The float compositor
+    // and straight sRGB readback interpret these components as linear.
+    color::AlphaColor::new(value.to_linear().map(|channel| channel.clamp(0.0, 1.0)))
 }
 
 fn paint(context: &mut RenderContext, brush: &Brush) {
     match brush {
         Brush::Solid(value) => context.set_paint(solid(*value)),
         Brush::LinearGradient(start, end, stops) => {
+            // Interpolate the already-linear stop values in the working space.
             let mut gradient =
-                peniko::Gradient::new_linear((start.x(), start.y()), (end.x(), end.y()))
-                    .with_interpolation_cs(color::ColorSpaceTag::LinearSrgb);
+                peniko::Gradient::new_linear((start.x(), start.y()), (end.x(), end.y()));
             gradient.stops.extend(
                 stops
                     .iter()
@@ -149,8 +145,13 @@ fn paint(context: &mut RenderContext, brush: &Brush) {
     }
 }
 
-fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) -> Result<(), Error> {
-    let mut images = HashMap::new();
+fn paint_scene<'a>(
+    context: &mut RenderContext,
+    scene: &'a EncodedScene,
+    images: &mut LinearImages<'a>,
+) -> Result<(), Error> {
+    let mut image_paints = HashMap::new();
+    let mut glyphs = glyph::GlyphPainter::default();
     for node in &scene.nodes {
         match node {
             EncodedNode::BeginOpacity(opacity) => context.push_opacity_layer(*opacity as f32),
@@ -171,6 +172,10 @@ fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) -> Result<(), 
                 }
                 context.set_transform(kurbo::Affine::new(transform.coefficients()));
                 match primitive {
+                    Primitive::Glyph(glyph) => glyphs.paint(context, images, glyph)?,
+                    Primitive::FillPath(path, rule, brush) => {
+                        path_fill::paint_path(context, path, *rule, brush)?;
+                    }
                     Primitive::Fill(rect, radii, brush) => {
                         paint(context, brush);
                         context.fill_path(&path(*rect, *radii));
@@ -186,37 +191,21 @@ fn paint_scene(context: &mut RenderContext, scene: &EncodedScene) -> Result<(), 
                             image.width(),
                             image.height(),
                         );
-                        let pixmap = if let Some(pixmap) = images.get(&key) {
-                            Arc::clone(pixmap)
-                        } else {
-                            let (width, height) = dimensions(PixelSize {
-                                width: image.width(),
-                                height: image.height(),
-                            })?;
-                            let mut pixmap = Pixmap::new(width, height);
-                            for (destination, source) in pixmap
-                                .data_as_u8_slice_mut()
-                                .chunks_exact_mut(4)
-                                .zip(image.pixels().chunks_exact(4))
-                            {
-                                if let ([r, g, b, a], [dr, dg, db, da]) = (source, destination) {
-                                    let premultiply = |channel: u8| {
-                                        ((u16::from(channel) * u16::from(*a) + 127) / 255) as u8
-                                    };
-                                    *dr = premultiply(*r);
-                                    *dg = premultiply(*g);
-                                    *db = premultiply(*b);
-                                    *da = *a;
-                                }
+                        let paint = match image_paints.entry(key) {
+                            Entry::Occupied(entry) => entry.into_mut(),
+                            Entry::Vacant(entry) => {
+                                let size = PixelSize {
+                                    width: image.width(),
+                                    height: image.height(),
+                                };
+                                let (width, height) = dimensions(size)?;
+                                let paint = images
+                                    .insert_srgb(width, height, image.pixels())
+                                    .ok_or(Error::InvalidSize(size))?;
+                                entry.insert(paint)
                             }
-                            let pixmap = Arc::new(pixmap);
-                            images.insert(key, Arc::clone(&pixmap));
-                            pixmap
                         };
-                        context.set_paint(vello_cpu::Image {
-                            image: vello_cpu::ImageSource::Pixmap(pixmap),
-                            sampler: peniko::ImageSampler::default(),
-                        });
+                        context.set_paint(paint.clone());
                         let [left, top, right, bottom] = rect.edges();
                         context.set_paint_transform(kurbo::Affine::new([
                             (right - left) / f64::from(image.width()),

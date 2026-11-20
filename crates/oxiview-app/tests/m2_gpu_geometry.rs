@@ -95,13 +95,15 @@ fn fitted_ui_border_clip_opacity_and_hits_match_at_each_scale() -> TestResult {
             )?;
             let cpu = CpuRenderer.render(&scene, root, pixel_size(scale))?;
             let image = gpu.render(&scene, root, pixel_size(scale))?;
+            // An opaque child wins inside the group, including the overlap.
+            // Encode the 50/50 mean of its decoded RGB and the panel's decoded RGB.
             for (x, y, expected, hit, sample) in [
                 (8.0, 29.0, CANVAS, None, "large arc below midpoint"),
                 (9.0, 39.0, BORDER, Some(panel), "straight border"),
                 (16.0, 22.0, BORDER, Some(panel), "rounded padding clip"),
-                (22.0, 35.0, [120, 60, 70, 255], Some(red), "isolated red"),
-                (42.0, 29.0, [30, 60, 160, 255], Some(blue), "overlap"),
-                (57.0, 29.0, [30, 60, 160, 255], Some(blue), "isolated blue"),
+                (22.0, 35.0, [149, 64, 88, 255], Some(red), "isolated red"),
+                (42.0, 29.0, [32, 64, 166, 255], Some(blue), "overlap"),
+                (57.0, 29.0, [32, 64, 166, 255], Some(blue), "isolated blue"),
             ] {
                 let physical = transform.transform_point(Point::new(x, y));
                 let label = format!("{sample} at {scale}x, shear={shear}");

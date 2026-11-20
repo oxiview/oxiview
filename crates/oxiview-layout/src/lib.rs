@@ -116,6 +116,11 @@ pub trait LayoutTree {
     fn content_revision(&self, _node: Self::NodeId) -> u64 {
         0
     }
+    /// Returns a leaf's first baseline relative to its content top at its final content width.
+    /// The adapter adds border and padding. The default lets containers synthesize a baseline.
+    fn first_baseline(&mut self, _node: Self::NodeId, _content_width: f64) -> Option<f64> {
+        None
+    }
     /// Measures a leaf's intrinsic content under the supplied constraints.
     fn measure(
         &mut self,

@@ -2,6 +2,9 @@
 //! Application and presenter state are initialized on each window thread.
 
 use oxiview_core::{Application, PaintedScene, PresentationOutcome, Presenter};
+pub use oxiview_core::{
+    RichText, TextAlign, TextSpan, TextSpanStyle, TextStyle, TextSystem, rich_text, text,
+};
 use oxiview_platform::{EventLoopContext, PhysicalSize, Platform, WindowAttributes, WindowId};
 use oxiview_platform_headless::HeadlessPlatform;
 use oxiview_render_cpu::{CpuRenderer, Renderer};

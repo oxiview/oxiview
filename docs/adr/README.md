@@ -41,3 +41,4 @@ Language: **English**
 | [0035](0035-node-owned-reactive-scopes.md) | Reactive ownership: node scopes follow retained subtree moves | 4 State and reactivity / 6 Retained tree / invalidation |
 | [0036](0036-fifo-drawable-readiness.md) | Pace native frames by drawable availability | 3 Frame scheduling / 11 Rendering |
 | [0037](0037-optional-precompiled-oxi.md) | Optional precompiled .oxi sources share the Rust Builder contract | 5 Components and API |
+| [0038](0038-vello-gpu-and-glyph-atlas.md) | Use Vello GPU and a device-owned glyph atlas | 9 Text stack / 11 Rendering |

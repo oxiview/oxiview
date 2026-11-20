@@ -1,4 +1,4 @@
-use crate::{Clip, Error, NodeId, NodeKind, Primitive, Scene};
+use crate::{Brush, Clip, Error, NodeId, NodeKind, Primitive, Scene};
 use oxiview_base::Affine;
 
 /// A clip with its complete local-to-scene transform.
@@ -48,6 +48,26 @@ enum Work {
     EndOpacity,
 }
 
+fn resolve_primitive(primitive: &Primitive) -> Primitive {
+    let mut resolved = primitive.clone();
+    let brush = match &mut resolved {
+        Primitive::Fill(_, _, brush)
+        | Primitive::Stroke(_, _, _, brush)
+        | Primitive::FillPath(_, _, brush) => brush,
+        Primitive::Glyph(_) | Primitive::Image(..) => return resolved,
+    };
+    if let Brush::LinearGradient(start, end, stops) = brush
+        && start == end
+        && let Some(stop) = stops
+            .iter()
+            .rfind(|stop| stop.position == 0.0)
+            .or_else(|| stops.first())
+    {
+        *brush = Brush::Solid(stop.color);
+    }
+    resolved
+}
+
 impl Scene {
     /// Encodes the selected subtree, including every reference instance.
     ///
@@ -73,7 +93,7 @@ impl Scene {
             let node = self.node(id)?;
             match &node.kind {
                 NodeKind::Draw(primitive) => output.nodes.push(EncodedNode::Draw {
-                    primitive: primitive.clone(),
+                    primitive: resolve_primitive(primitive),
                     transform: state.transform,
                     clips: state.clips.clone(),
                 }),
