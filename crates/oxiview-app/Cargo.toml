@@ -16,11 +16,12 @@ oxiview-platform.workspace = true
 oxiview-platform-headless.workspace = true
 oxiview-scene.workspace = true
 oxiview-render-cpu.workspace = true
+oxiview-style.workspace = true
+notify.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 oxiview-render-wgpu.workspace = true
-oxiview-style.workspace = true
 oxiview-text.workspace = true
 oxiview-testing.workspace = true
 

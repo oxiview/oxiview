@@ -187,6 +187,9 @@ _Avoid_: Command (to avoid confusion with the platform Cmd key), shortcut
 A configuration mapping key sequences to Actions, layered by focus context.
 _Avoid_: shortcut table, keybinding
 
+**Focus context**:
+A region of a window whose Keymap bindings apply when keyboard focus is on its node or a descendant.
+
 ## Rendering and compositing
 
 **Scene**:

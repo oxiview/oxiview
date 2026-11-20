@@ -1,7 +1,11 @@
 //! Typed UI properties for the styling port. Values remain framework-owned.
 
+mod patch;
+mod theme;
 mod types;
 use oxiview_base::{Color, CornerRadii};
+pub use patch::{FocusRing, InteractionState, LayoutPatch, StateVariant, StylePatch};
+pub use theme::{AppearanceMode, Theme, ThemeEnvironment, ThemeError, ThemeStyle};
 pub use types::*;
 
 /// Whether children may paint and hit outside the padding box.

@@ -1,4 +1,4 @@
-//! Retained UI ownership, layout projection, painting, and pointer routing.
+//! Retained UI ownership, layout projection, painting, and input routing.
 
 use oxiview_base::{Point, Rect, Size};
 use oxiview_layout::{
@@ -8,24 +8,35 @@ use oxiview_layout::{
 use oxiview_scene::Primitive;
 use oxiview_style::{Display, Style};
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     collections::{HashMap, VecDeque},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
+mod action;
 mod diagnostics;
+mod focus;
 mod input;
+mod interaction;
+mod keyboard;
+mod keymap;
 mod mailbox;
 mod paint;
 mod text;
+mod theme;
 mod view;
+pub use action::{Action, ActionEvent, ActionSource};
 pub use diagnostics::UiDiagnostics;
+pub use focus::{FocusEvent, FocusEventKind, FocusPolicy};
 pub use input::{
     PointerEventKind, UiBatchReport, UiCommandOutcome, UiCommands, UiDispatchResult, UiPointerEvent,
 };
+pub use keyboard::KEY_SEQUENCE_TIMEOUT;
+pub use keymap::{KeyBinding, KeyChord, Keymap, KeymapError, ShortcutKey};
 pub use mailbox::UiCommandSender;
 pub use text::{rich_text, text};
+pub use theme::PreferenceSignals;
 pub use view::{View, component, for_each, keyed_for, node, show};
 
 const MAX_DEPTH: usize = oxiview_layout::MAX_LAYOUT_DEPTH;
@@ -114,6 +125,15 @@ pub enum UiError {
     /// Existing capture must be explicitly released before another node acquires it.
     #[error("pointer capture is already owned by another node")]
     CaptureOwned,
+    /// This live node cannot receive logical focus.
+    #[error("focus is unavailable for this node")]
+    FocusUnavailable,
+    /// Action registration requires a nonempty identifier.
+    #[error("Action identifier is empty")]
+    InvalidAction,
+    /// This node does not expose the requested Action or is ineligible.
+    #[error("Action {0:?} is unavailable for this node")]
+    ActionUnavailable(String),
     /// A bounded input processing budget was exhausted.
     #[error("UI command or event processing budget exceeded")]
     BudgetExceeded,
@@ -146,7 +166,7 @@ pub enum UiError {
     RevisionExhausted,
 }
 
-/// Optional retained semantics; platform accessibility and action dispatch are later milestones.
+/// Optional retained semantics with Action names contributed by registrations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NodeSemantics {
     /// Application-defined semantic role.
@@ -310,11 +330,16 @@ struct Node {
     content_revision: u64,
     measure: Option<Box<dyn NodeMeasure>>,
     content: Vec<Primitive>,
-    semantics: Option<NodeSemantics>,
+    semantics: Option<Box<NodeSemantics>>,
     handler: Option<Rc<RefCell<Box<input::NodeHandler>>>>,
+    focus_policy: FocusPolicy,
+    disabled: bool,
+    interaction: Option<Box<interaction::NodeInteraction>>,
+    interaction_signal: OnceCell<Box<oxiview_reactive::Signal<oxiview_style::InteractionState>>>,
     scopes: Vec<oxiview_reactive::Scope>,
     hidden: bool,
     text: Option<Rc<text::TextNode>>,
+    theme: Option<Box<theme::NodeStyles>>,
     painting: Option<Box<paint::NodePainting>>,
 }
 
@@ -335,7 +360,9 @@ pub struct UiTree {
     paint_dirty: bool,
     paint_cache: Option<paint::PaintCache>,
     diagnostics: UiDiagnostics,
+    theme: theme::ThemeState,
     pointer: input::PointerState,
+    interaction: interaction::Interaction,
     queue: VecDeque<input::Batch>,
     mailbox: UiCommandSender,
     report_handler: Option<Rc<RefCell<Box<input::ReportHandler>>>>,
@@ -357,6 +384,10 @@ impl UiTree {
         let reservation = Reservation::new(&identities)?;
         let root = reservation.id;
         let scope = oxiview_reactive::Scope::new().map_err(reactive_error)?;
+        let theme = scope
+            .owner()
+            .run(theme::ThemeState::new)
+            .map_err(reactive_error)?;
         identities
             .try_borrow_mut()
             .map_err(|_| UiError::ReservationBusy)?
@@ -373,9 +404,14 @@ impl UiTree {
             content: Vec::new(),
             semantics: None,
             handler: None,
+            focus_policy: FocusPolicy::None,
+            disabled: false,
+            interaction: None,
+            interaction_signal: OnceCell::new(),
             scopes: vec![scope],
             hidden: false,
             text: None,
+            theme: None,
             painting: None,
         };
         let mailbox = UiCommandSender::new(Rc::clone(&identities));
@@ -391,7 +427,9 @@ impl UiTree {
             paint_dirty: true,
             paint_cache: None,
             diagnostics: UiDiagnostics::default(),
+            theme,
             pointer: input::PointerState::default(),
+            interaction: interaction::Interaction::default(),
             queue: VecDeque::new(),
             mailbox,
             report_handler: None,
@@ -428,7 +466,7 @@ impl UiTree {
     pub fn parent(&self, id: NodeId) -> Result<Option<NodeId>, UiError> {
         Ok(self.node(id)?.parent)
     }
-    /// Reads the retained style; reserved identities report NotYetCreated.
+    /// Reads the effective retained style. Reserved identities report `NotYetCreated`.
     pub fn style(&self, id: NodeId) -> Result<&Style, UiError> {
         Ok(&self.node(id)?.style)
     }
@@ -461,7 +499,7 @@ impl UiTree {
             .lifetime_owner(parent)?
             .run(oxiview_reactive::Scope::new)
             .map_err(reactive_error)?;
-        self.insert_reserved_scoped(id, parent, index, style, scope)
+        self.mount_reserved(id, parent, index, style, scope)
     }
     fn validate_insertion(
         &self,
@@ -474,7 +512,7 @@ impl UiTree {
         if index > len {
             return Err(UiError::ChildIndex { index, len });
         }
-        if self.path(parent)?.len() >= MAX_DEPTH {
+        if self.depth(parent)? >= MAX_DEPTH {
             return Err(UiError::DepthLimit);
         }
         Ok(())
@@ -488,10 +526,11 @@ impl UiTree {
         let index = self.node(parent)?.children.len();
         let reservation = Reservation::new(&self.identities)?;
         let id = reservation.id;
-        self.insert_reserved_scoped(id, parent, index, style, scope)?;
+        self.validate_insertion(parent, index, &style)?;
+        self.mount_reserved(id, parent, index, style, scope)?;
         Ok(id)
     }
-    fn insert_reserved_scoped(
+    fn mount_reserved(
         &mut self,
         id: NodeId,
         parent: NodeId,
@@ -499,7 +538,6 @@ impl UiTree {
         style: Style,
         scope: oxiview_reactive::Scope,
     ) -> Result<(), UiError> {
-        self.validate_insertion(parent, index, &style)?;
         self.identities
             .try_borrow_mut()
             .map_err(|_| UiError::ReservationBusy)?
@@ -520,9 +558,14 @@ impl UiTree {
             content: Vec::new(),
             semantics: None,
             handler: None,
+            focus_policy: FocusPolicy::None,
+            disabled: false,
+            interaction: None,
+            interaction_signal: OnceCell::new(),
             scopes: vec![scope],
             hidden: false,
             text: None,
+            theme: None,
             painting: None,
         });
         self.node_mut(parent)?.children.insert(index, id);
@@ -532,8 +575,17 @@ impl UiTree {
     }
     /// Updates a style atomically; returns whether visual work was invalidated.
     pub fn set_style(&mut self, id: NodeId, style: Style) -> Result<bool, UiError> {
-        self.validate_style(&style)?;
-        let old = &self.node(id)?.style;
+        let mut handler = |_: &UiPointerEvent, _: &UiTree, _: &mut UiCommands| {};
+        let mut work = input::Work::default();
+        let changed = self.set_local_style(id, style, &mut handler, &mut work)?;
+        if self.theme.has_pending_styles() {
+            self.settle_interaction_styles(&mut handler, &mut work)?;
+        }
+        Ok(changed)
+    }
+    fn apply_style(&mut self, id: NodeId, style: Style) -> Result<bool, UiError> {
+        let node = self.node_mut(id)?;
+        let old = &node.style;
         if old == &style {
             return Ok(false);
         }
@@ -544,7 +596,6 @@ impl UiTree {
         let rebuild = box_geometry || old.opacity != style.opacity || old.z_index != style.z_index;
         let background = old.background != style.background;
         let border = old.border_color != style.border_color;
-        let node = self.node_mut(id)?;
         node.style = style;
         if box_geometry {
             node.painting = None;
@@ -611,29 +662,33 @@ impl UiTree {
         id: NodeId,
         semantics: Option<NodeSemantics>,
     ) -> Result<(), UiError> {
-        self.node_mut(id)?.semantics = semantics;
-        Ok(())
+        self.node_mut(id)?.semantics = semantics.map(Box::new);
+        self.sync_action_semantics(id)
     }
-    /// Reads reserved semantic data.
+    /// Reads retained semantic data and the node's supported Action names.
     pub fn semantics(&self, id: NodeId) -> Result<Option<&NodeSemantics>, UiError> {
-        Ok(self.node(id)?.semantics.as_ref())
+        Ok(self.node(id)?.semantics.as_deref())
     }
     /// Removes an ordinary subtree. Interaction-time edits should use UiCommands.
     pub fn remove(&mut self, id: NodeId) -> Result<(), UiError> {
-        self.validate_remove(id)?;
-        self.remove_raw(id)
+        self.direct_command(input::Command::Remove(id))
     }
     /// Removes all descendants of a node, preserving that node's identity and state.
     pub fn clear(&mut self, id: NodeId) -> Result<(), UiError> {
-        let children = self.node(id)?.children.clone();
-        for child in children {
-            self.remove_raw(child)?;
-        }
-        Ok(())
+        self.direct_command(input::Command::Clear(id))
     }
     /// Moves a complete subtree using destination indices after conceptual removal.
     pub fn reparent(&mut self, id: NodeId, parent: NodeId, index: usize) -> Result<(), UiError> {
-        let (old_parent, old_index) = self.validate_reparent(id, parent, index)?;
+        self.direct_command(input::Command::Reparent(id, parent, index))
+    }
+    fn reparent_raw(
+        &mut self,
+        id: NodeId,
+        parent: NodeId,
+        index: usize,
+        old_parent: NodeId,
+        old_index: usize,
+    ) -> Result<(), UiError> {
         if old_parent == parent && old_index == index {
             return Ok(());
         }
@@ -654,15 +709,34 @@ impl UiTree {
     }
     /// Prepares logical geometry without submitting a frame.
     pub fn layout(&mut self, viewport: Size) -> Result<(), UiError> {
+        // The committed viewport was validated when layout ran.
+        if !self.closed
+            && !self.layout_dirty
+            && self.viewport == viewport
+            && !self.theme.has_pending_styles()
+        {
+            return Ok(());
+        }
+        self.layout_for_input(viewport, &mut |_, _, _| {}, &mut input::Work::default())
+    }
+    fn layout_for_input(
+        &mut self,
+        viewport: Size,
+        handler: &mut input::Handler<'_>,
+        work: &mut input::Work,
+    ) -> Result<(), UiError> {
         validate_viewport(viewport)?;
         if self.closed {
             return Err(UiError::Closed);
+        }
+        if self.theme.has_pending_styles() {
+            self.settle_interaction_styles(handler, work)?;
         }
         if !self.layout_dirty && self.viewport == viewport {
             return Ok(());
         }
         let mut engine = std::mem::take(&mut self.engine);
-        let mut output = HashMap::new();
+        let mut output = Vec::new();
         let result = {
             let mut adapter = TreeLayout {
                 tree: self,
@@ -696,7 +770,10 @@ impl UiTree {
         if self.closed {
             return Err(UiError::Closed);
         }
-        let mut output = HashMap::new();
+        if self.theme.has_pending_styles() {
+            self.settle_interaction_styles(&mut |_, _, _| {}, &mut input::Work::default())?;
+        }
+        let mut output = Vec::new();
         let mut adapter = TreeLayout {
             tree: self,
             output: &mut output,
@@ -705,7 +782,7 @@ impl UiTree {
         let stats = engine
             .compute(&mut adapter, self.root, viewport)
             .map_err(|error| UiError::Layout(error.to_string()))?;
-        for &id in output.keys() {
+        for &(id, _) in &output {
             self.node(id)?;
         }
         for (id, layout) in output {
@@ -746,34 +823,42 @@ impl UiTree {
     pub fn hover_path(&self) -> &[NodeId] {
         &self.pointer.hover
     }
-    fn node(&self, id: NodeId) -> Result<&Node, UiError> {
+    fn check_node_owner(&self, id: NodeId) -> Result<(), UiError> {
         if id.owner != self.owner {
             return Err(UiError::ForeignNode);
         }
         if self.closed {
             return Err(UiError::Closed);
         }
+        Ok(())
+    }
+    fn node(&self, id: NodeId) -> Result<&Node, UiError> {
+        self.check_node_owner(id)?;
         if let Some(Some(node)) = self.nodes.get(id.slot)
             && node.id == id
         {
             return Ok(node);
         }
-        match self
-            .identities
-            .try_borrow()
-            .map_err(|_| UiError::ReservationBusy)?
-            .state(id)?
-        {
-            IdentityState::Reserved => Err(UiError::NotYetCreated),
-            _ => Err(UiError::StaleNode),
-        }
+        Err(Self::missing_node(&self.identities, id))
     }
     fn node_mut(&mut self, id: NodeId) -> Result<&mut Node, UiError> {
-        self.node(id)?;
-        self.nodes
-            .get_mut(id.slot)
-            .and_then(Option::as_mut)
-            .ok_or(UiError::StaleNode)
+        self.check_node_owner(id)?;
+        if let Some(Some(node)) = self.nodes.get_mut(id.slot)
+            && node.id == id
+        {
+            return Ok(node);
+        }
+        Err(Self::missing_node(&self.identities, id))
+    }
+    fn missing_node(identities: &RefCell<Identities>, id: NodeId) -> UiError {
+        let Ok(identities) = identities.try_borrow() else {
+            return UiError::ReservationBusy;
+        };
+        match identities.state(id) {
+            Ok(IdentityState::Reserved) => UiError::NotYetCreated,
+            Ok(_) => UiError::StaleNode,
+            Err(error) => error,
+        }
     }
     fn lifetime_owner(&self, id: NodeId) -> Result<oxiview_reactive::Owner, UiError> {
         self.node(id)?
@@ -789,32 +874,50 @@ impl UiTree {
             .map(oxiview_reactive::Scope::owner)
             .ok_or_else(|| UiError::View("node ownership scope is missing".into()))
     }
+    fn ancestors(&self, id: NodeId) -> impl Iterator<Item = Result<&Node, UiError>> {
+        let mut next = Some(id);
+        let mut depth = 0;
+        std::iter::from_fn(move || {
+            let id = next.take()?;
+            if depth == MAX_DEPTH {
+                return Some(Err(UiError::DepthLimit));
+            }
+            let node = self.node(id);
+            if let Ok(node) = node {
+                next = node.parent;
+                depth += 1;
+            }
+            Some(node)
+        })
+    }
+    fn depth(&self, id: NodeId) -> Result<usize, UiError> {
+        self.ancestors(id)
+            .try_fold(0, |depth, node| node.map(|_| depth + 1))
+    }
     fn path(&self, id: NodeId) -> Result<Vec<NodeId>, UiError> {
         let mut path = Vec::new();
-        let mut next = Some(id);
-        while let Some(id) = next {
-            if path.len() >= MAX_DEPTH {
-                return Err(UiError::DepthLimit);
-            }
-            let node = self.node(id)?;
-            path.push(id);
-            next = node.parent;
+        for node in self.ancestors(id) {
+            path.push(node?.id);
         }
         path.reverse();
         Ok(path)
     }
     fn suppressed(&self, id: NodeId) -> Result<bool, UiError> {
-        for ancestor in self.path(id)? {
-            if self.node(ancestor)?.hidden
-                || self.node(ancestor)?.style.layout.display == Display::None
-            {
+        for node in self.ancestors(id) {
+            let node = node?;
+            if node.hidden || node.style.layout.display == Display::None {
                 return Ok(true);
             }
         }
         Ok(false)
     }
     fn descendant(&self, id: NodeId, ancestor: NodeId) -> Result<bool, UiError> {
-        Ok(self.path(id)?.contains(&ancestor))
+        for node in self.ancestors(id) {
+            if node?.id == ancestor {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     fn validate_remove(&self, id: NodeId) -> Result<(), UiError> {
         self.node(id)?;
@@ -840,20 +943,21 @@ impl UiTree {
         if index > len {
             return Err(UiError::ChildIndex { index, len });
         }
-        if self.descendant(parent, id)? {
-            return Err(UiError::Cycle);
+        let mut parent_depth = 0;
+        for ancestor in self.ancestors(parent) {
+            if ancestor?.id == id {
+                return Err(UiError::Cycle);
+            }
+            parent_depth += 1;
         }
-        if old_parent != parent {
-            let parent_depth = self.path(parent)?.len();
-            if parent_depth > self.path(old_parent)?.len() {
-                let mut stack = vec![(id, parent_depth + 1)];
-                while let Some((current, depth)) = stack.pop() {
-                    if depth > MAX_DEPTH {
-                        return Err(UiError::DepthLimit);
-                    }
-                    for child in &self.node(current)?.children {
-                        stack.push((*child, depth + 1));
-                    }
+        if old_parent != parent && parent_depth > self.depth(old_parent)? {
+            let mut stack = vec![(id, parent_depth + 1)];
+            while let Some((current, depth)) = stack.pop() {
+                if depth > MAX_DEPTH {
+                    return Err(UiError::DepthLimit);
+                }
+                for child in &self.node(current)?.children {
+                    stack.push((*child, depth + 1));
                 }
             }
         }
@@ -886,6 +990,7 @@ impl UiTree {
         Ok(result)
     }
     fn remove_raw(&mut self, id: NodeId) -> Result<(), UiError> {
+        self.lose_interaction(focus::FocusScope::Subtree(id))?;
         let order = self.postorder(id)?;
         let parent = self.node(id)?.parent.ok_or(UiError::RootOperation)?;
         self.node_mut(parent)?.children.retain(|child| *child != id);
@@ -895,6 +1000,7 @@ impl UiTree {
             if self.pointer.capture == Some(current) {
                 self.pointer.capture = None;
             }
+            self.untrack_node_styles(current)?;
             let node = self.nodes.get_mut(current.slot).and_then(Option::take);
             self.identities
                 .try_borrow_mut()
@@ -981,7 +1087,7 @@ impl Drop for UiTree {
 
 struct TreeLayout<'a> {
     tree: &'a UiTree,
-    output: &'a mut HashMap<NodeId, LayoutBox>,
+    output: &'a mut Vec<(NodeId, LayoutBox)>,
     viewport: Size,
 }
 impl LayoutTree for TreeLayout<'_> {
@@ -994,11 +1100,14 @@ impl LayoutTree for TreeLayout<'_> {
     fn layout_input(&self, id: NodeId) -> LayoutInput {
         let mut input = self.tree.node(id).map_or_else(
             |_| LayoutInput::default(),
-            |node| crate::ui_projection::project_style(&node.style.layout),
+            |node| {
+                let mut input = crate::ui_projection::project_style(&node.style.layout);
+                if node.hidden {
+                    input.display = oxiview_layout::Display::None;
+                }
+                input
+            },
         );
-        if self.tree.node(id).is_ok_and(|node| node.hidden) {
-            input.display = oxiview_layout::Display::None;
-        }
         if id == self.tree.root {
             if input.width == oxiview_layout::Length::Auto {
                 input.width = oxiview_layout::Length::Points(self.viewport.width());
@@ -1010,7 +1119,7 @@ impl LayoutTree for TreeLayout<'_> {
         input
     }
     fn set_layout(&mut self, id: NodeId, layout: LayoutBox) {
-        self.output.insert(id, layout);
+        self.output.push((id, layout));
     }
     fn contains_node(&self, id: NodeId) -> bool {
         self.tree.contains(id)
@@ -1033,15 +1142,11 @@ impl LayoutTree for TreeLayout<'_> {
         known: Dimensions<Option<f64>>,
         available: Dimensions<AvailableSpace>,
     ) -> Dimensions<f64> {
-        if let Ok(node) = self.tree.node(id)
-            && let Some(measure) = &node.measure
-        {
+        let node = self.tree.node(id).ok();
+        if let Some(measure) = node.and_then(|node| node.measure.as_ref()) {
             return measure.measure(known, available);
         }
-        let intrinsic = self
-            .tree
-            .node(id)
-            .map_or(Size::default(), |node| node.intrinsic);
+        let intrinsic = node.map_or(Size::default(), |node| node.intrinsic);
         Dimensions {
             width: known.width.unwrap_or(intrinsic.width()),
             height: known.height.unwrap_or(intrinsic.height()),

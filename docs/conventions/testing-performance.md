@@ -109,6 +109,18 @@ default 10% regression threshold. Cache counters verify that the cold path
 rasterized glyphs and the warm path reused them. These times measure work on
 the CPU. GPU residency is checked separately by rendering repeated frames.
 
+## M5 focus, Actions and themes
+
+`cargo xtask bench --m5` runs three CPU workloads in a retained window tree. Fixture construction, keyboard event construction and theme parsing take place before timing. The report uses the median of three Divan medians and the workspace 10% comparison threshold. [Benchmark source](../../benches/interaction.rs)
+
+| Metric under `interaction/` | One timed iteration |
+| --- | --- |
+| `tab_256` | Deliver Tab down and up through ordinary dispatch over 256 eligible stops and read the focused identity. |
+| `action_eight_contexts` | Resolve F6 from the innermost of eight nested Keymaps, deliver the outer handler and complete key release. |
+| `color_token_16_of_256` | Switch light/dark palettes with 16 consumers of the changed color and 240 consumers of an unchanged color. |
+
+The scoped report is `target/xtask/bench-m5-results.json`. Recording updates these three metrics on the current machine after owner approval. [M5 plan and acceptance](../plans/m5-focus-keyboard-and-themes.md)
+
 ## Recording and updating
 
 ### Publishing measurements in the READMEs

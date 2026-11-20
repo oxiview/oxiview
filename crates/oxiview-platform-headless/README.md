@@ -9,6 +9,8 @@ It implements the platform port without a native surface or a renderer.
 Construct `HeadlessPlatform::new(refresh_interval)` on the thread that will call
 `Platform::run`. Move endpoints to window threads in the initialization callback.
 Clone the returned `Driver` onto controlling threads as needed.
+`HeadlessPlatform::new_with_preferences(refresh_interval, initial_preferences)`
+configures the snapshot returned by each new window endpoint.
 
 - `now`: read virtual time with explicit poison reporting.
 - `advance_to`: move to an absolute virtual instant, never backwards.
@@ -17,7 +19,11 @@ Clone the returned `Driver` onto controlling threads as needed.
 - `pointer_button`: inject button, press/release, position, and capture timestamp.
 - `pointer_left` reports an ordinary pointer exit. `pointer_interrupted` reports loss of pointer continuity.
 - `activation_changed` and `visibility_changed` inject window activation and visibility transitions with their capture timestamps.
-- `key`: inject physical key, press/release, repeat, and capture timestamp.
+- `key` injects a key with its unshifted US logical identity and empty modifiers.
+- `key_transition` injects an explicit physical position, logical identity,
+  modifiers, press/release, repeat, and capture timestamp.
+- `preferences_changed` queues an owned preference snapshot, including duplicates
+  and unavailable fields. Changes queued during initialization precede the first resize.
 - `resize`: change physical size and scale, returning a fresh resize token.
 - `resize_outcome`: inspect a pending or completed resize transaction.
 - `wait_resize`: block the caller until acknowledgement, supersession, or timeout.

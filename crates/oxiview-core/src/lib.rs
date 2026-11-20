@@ -2,7 +2,9 @@
 //! Trees use logical coordinates; Scenes use physical pixels. Rendering and clocks
 //! remain selected by the application composition root.
 
-use oxiview_platform::{PhysicalSize, ResizeToken, WindowEndpoint, WindowEvent, WindowWaker};
+use oxiview_platform::{
+    PhysicalSize, ResizeToken, SystemPreferences, WindowEndpoint, WindowEvent, WindowWaker,
+};
 use oxiview_scene::{NodeId as SceneNodeId, Scene};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -14,9 +16,11 @@ mod ui_projection;
 mod window_runtime;
 pub use oxiview_text::{RichText, TextAlign, TextSpan, TextSpanStyle, TextStyle, TextSystem};
 pub use ui::{
-    NodeId, NodeMeasure, NodeSemantics, PointerEventKind, UiBatchReport, UiCommandOutcome,
-    UiCommandSender, UiCommands, UiDiagnostics, UiDispatchResult, UiError, UiPointerEvent, UiTree,
-    View, component, for_each, keyed_for, node, rich_text, show, text,
+    Action, ActionEvent, ActionSource, FocusEvent, FocusEventKind, FocusPolicy,
+    KEY_SEQUENCE_TIMEOUT, KeyBinding, KeyChord, Keymap, KeymapError, NodeId, NodeMeasure,
+    NodeSemantics, PointerEventKind, PreferenceSignals, ShortcutKey, UiBatchReport,
+    UiCommandOutcome, UiCommandSender, UiCommands, UiDiagnostics, UiDispatchResult, UiError,
+    UiPointerEvent, UiTree, View, component, for_each, keyed_for, node, rich_text, show, text,
 };
 
 /// Failures terminate this window loop; affected state is never resumed.
@@ -192,6 +196,10 @@ pub struct PaintedScene {
 }
 /// Application code runs only on the window thread and need not be Send.
 pub trait Application {
+    /// Receives the initial platform preferences before the first window event.
+    fn initialize_preferences(&mut self, _preferences: SystemPreferences) -> Result<(), Error> {
+        Ok(())
+    }
     /// Handles events and requests invalidation or future frames through the scheduler.
     /// The waker can be shared with cross-thread work producers.
     fn event(
@@ -321,6 +329,7 @@ fn window_loop_with_runtime(
     let mut closing = false;
     scheduler.resize(size);
     let waker = endpoint.waker();
+    application.initialize_preferences(endpoint.preferences())?;
     runtime.poll_ready()?;
     loop {
         let output = scheduler.schedule_if_available(waiting_frame.is_none() && !closing);

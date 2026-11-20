@@ -166,6 +166,8 @@ fn actual_ready_and_playing_scenes_match_cpu_and_gpu_at_both_scales() -> TestRes
                 app.process(
                     &WindowEvent::Key {
                         code: KeyCode::Enter,
+                        logical: KeyCode::Enter.us_logical_key(),
+                        modifiers: Default::default(),
                         pressed: true,
                         repeat: false,
                         timestamp: Duration::from_millis(1),

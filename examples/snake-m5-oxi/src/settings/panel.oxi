@@ -1,0 +1,4 @@
+<Node theme_type={"settings"} style_patch={patch}>
+    <Node style={group}>{appearance}{selection}{record}{close}</Node>
+    {status_view}
+</Node>

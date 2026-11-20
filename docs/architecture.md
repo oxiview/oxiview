@@ -57,6 +57,8 @@ local baseline position through the Scene. Native and offscreen GPU
 rendering share a Vello adapter and device-owned glyph atlas.
 [M4 text and rendering](plans/m4-text-and-snake.md) · [Renderer selection](adr/0038-vello-gpu-and-glyph-atlas.md)
 
+Each window tree owns its focus, state variants, Action registrations and layered Keymaps. Platform adapters supply physical and logical key identities and an initial preference snapshot followed by ordered changes. The styling port validates typed theme files. Core resolves them against the window's preferences, active states and local declarations. A development file watcher in the composition root publishes a valid revision to the window thread. Snake persists the player's settings separately from framework state. [M5 contracts](plans/m5-focus-keyboard-and-themes.md) · [Runnable demo](../examples/snake-m5-oxi/README.md)
+
 On macOS, the window thread owns input dispatch, painting and submission.
 For an ordinary native frame, a worker waits for a surface texture and wakes
 the window thread when it is available. The window can process input during

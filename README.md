@@ -18,6 +18,7 @@ performance comparisons passed. [M3 acceptance record](docs/plans/m3-reactivity-
 M4 is complete. Small glyphs are cached at the display scale and large
 outlines render through Vello GPU. The owner confirmed text clarity in the
 native Snake window. [M4 acceptance record](docs/plans/m4-text-and-snake.md#acceptance-record)
+M5 is complete. Snake's M5 fork passed native review for keyboard navigation, persistent rebinding and live appearance. Three focus-ring snapshots and three performance workloads have accepted baselines. [M5 acceptance record](docs/plans/m5-focus-keyboard-and-themes.md#acceptance-record)
 M1 is complete: native visual acceptance, fresh-clone verification and local
 performance baseline comparison passed. See the [execution record](docs/plans/m1-first-window.md)
 for measured results and remaining latency work.
@@ -33,6 +34,8 @@ cargo run --release -p snake
 
 Run `cargo run --release -p snake-oxi` for the same game with Rust logic and
 precompiled `.oxi` views and styles. [Snake in .oxi](examples/snake-oxi/README.md)
+
+Run `cargo run --release -p snake-m5-oxi` for the M5 fork. Use Tab to reach its inline Settings, switch appearance, or record a game shortcut that persists across launches. The board and settings resolve the arrow keys in their own focus contexts. [Snake M5 demo](examples/snake-m5-oxi/README.md)
 
 The [Neovim and LazyVim plugin](editors/oxi.nvim/README.md) enables `.oxi`
 highlighting, live syntax diagnostics and navigation between views and Rust.
@@ -198,7 +201,7 @@ session; keep the mouse still during the idle check. Missing baselines fail and
 may be recorded only after human confirmation. See
 [the performance protocol](docs/conventions/testing-performance.md).
 
-Windows and Linux remain planned native ports. Focus/Action mapping, editable
-text/IME, and the widget library remain later milestones. The original M1 demo and measurement modes
+Windows and Linux remain planned native ports. Editable text/IME and the widget
+library belong to M6 and M7. The original M1 demo and measurement modes
 retain their rendering/scheduling workload; use the separate M2 preview mode
 for node-tree and layout interaction.

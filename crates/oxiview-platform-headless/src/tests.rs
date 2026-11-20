@@ -1,5 +1,5 @@
 use super::*;
-use oxiview_base::Size;
+use oxiview_base::{Color, Size};
 use std::sync::{Barrier, mpsc};
 
 fn ms(n: u64) -> Duration {
@@ -46,6 +46,13 @@ fn run(test: impl FnOnce(Box<dyn WindowEndpoint>, Driver) + Send) {
 fn idle_and_coalesced_vsync_policy_surface_and_clock() {
     run(|mut e, d| {
         assert_eq!(e.capabilities(), capabilities());
+        assert!(
+            e.capabilities()
+                .system_preferences
+                .contains(&SystemPreference::TextScale)
+        );
+        assert_eq!(e.capabilities().system_preferences.len(), 5);
+        assert_eq!(e.preferences(), SystemPreferences::default());
         assert!(e.native_surface_handle().unwrap().is_none());
         d.advance_by(ms(10_000)).unwrap();
         assert_eq!(d.now().unwrap(), e.now());
@@ -113,6 +120,8 @@ fn injected_events_preserve_capture_time_and_fifo() {
             e.wait_event().unwrap(),
             WindowEvent::Key {
                 code: KeyCode::KeyA,
+                logical: LogicalKey::Character("a".into()),
+                modifiers: KeyModifiers::default(),
                 pressed: true,
                 repeat: true,
                 timestamp: ms(2)
@@ -122,6 +131,116 @@ fn injected_events_preserve_capture_time_and_fifo() {
         assert_eq!(e.wait_event().unwrap(), WindowEvent::CloseRequested);
         assert_eq!(e.poll_event().unwrap(), None);
         assert_eq!(d.counters(e.id()).unwrap().frames, 0);
+    });
+}
+
+#[test]
+fn rich_key_replay_preserves_independent_identities_and_modifiers() {
+    run(|mut endpoint, driver| {
+        let id = endpoint.id();
+        driver.advance_to(ms(50)).unwrap();
+        let key = KeyTransition {
+            code: KeyCode::KeyQ,
+            logical: LogicalKey::Character("a".into()),
+            modifiers: KeyModifiers {
+                shift: true,
+                control: false,
+                alt: true,
+                meta: true,
+            },
+            pressed: true,
+            repeat: false,
+            timestamp: Some(ms(30)),
+        };
+        let transitions = [
+            key.clone(),
+            KeyTransition {
+                repeat: true,
+                timestamp: Some(ms(41)),
+                ..key.clone()
+            },
+            KeyTransition {
+                logical: LogicalKey::Unidentified,
+                modifiers: KeyModifiers::default(),
+                pressed: false,
+                timestamp: None,
+                ..key
+            },
+        ];
+        for transition in &transitions {
+            driver.key_transition(id, transition.clone()).unwrap();
+        }
+        for transition in transitions {
+            assert_eq!(
+                endpoint.wait_event().unwrap(),
+                WindowEvent::Key {
+                    code: transition.code,
+                    logical: transition.logical,
+                    modifiers: transition.modifiers,
+                    pressed: transition.pressed,
+                    repeat: transition.repeat,
+                    timestamp: transition.timestamp.unwrap_or(ms(50)),
+                }
+            );
+        }
+        assert_eq!(endpoint.poll_event().unwrap(), None);
+        assert_eq!(driver.counters(id).unwrap().frames, 0);
+    });
+}
+
+#[test]
+fn preference_snapshots_are_ordered_across_initial_resize() {
+    let initial = SystemPreferences {
+        appearance: Some(SystemAppearance::Light),
+        accent_color: Some(Color::from_rgba8(0, 110, 190, 255)),
+        increased_contrast: Some(false),
+        reduced_motion: Some(false),
+        text_scale: Some(1.125),
+    };
+    let startup = SystemPreferences {
+        appearance: Some(SystemAppearance::Dark),
+        accent_color: Some(Color::from_rgba8(225, 145, 40, 255)),
+        increased_contrast: Some(true),
+        reduced_motion: Some(true),
+        text_scale: None,
+    };
+    let unavailable = SystemPreferences::default();
+    let (platform, driver) = HeadlessPlatform::new_with_preferences(ms(10), initial).unwrap();
+    thread::scope(|scope| {
+        platform
+            .run(|ctx| {
+                let created = ctx.create_window(attributes())?;
+                let id = created.endpoint.id();
+                driver.preferences_changed(id, startup)?;
+                driver.preferences_changed(id, startup)?;
+
+                scope.spawn(move || {
+                    let mut endpoint = created.endpoint;
+                    assert_eq!(endpoint.preferences(), initial);
+                    for _ in 0..2 {
+                        assert_eq!(
+                            endpoint.wait_event().unwrap(),
+                            WindowEvent::PreferencesChanged {
+                                preferences: startup,
+                            }
+                        );
+                    }
+                    let initial_resize = token(endpoint.wait_event().unwrap());
+                    endpoint.acknowledge_resize(initial_resize).unwrap();
+                    driver.preferences_changed(id, unavailable).unwrap();
+                    assert_eq!(
+                        endpoint.wait_event().unwrap(),
+                        WindowEvent::PreferencesChanged {
+                            preferences: unavailable,
+                        }
+                    );
+                    assert_eq!(endpoint.preferences(), initial);
+                    assert_eq!(endpoint.poll_event().unwrap(), None);
+                    assert_eq!(driver.counters(id).unwrap().frames, 0);
+                });
+                Ok(())
+            })
+            .unwrap();
     });
 }
 
@@ -191,6 +310,7 @@ fn lifecycle_input_is_rejected_after_window_destruction() {
             driver.activation_changed(id, false, None),
             driver.visibility_changed(id, false, None),
             driver.pointer_interrupted(id, None),
+            driver.preferences_changed(id, SystemPreferences::default()),
         ] {
             assert!(matches!(
                 result,

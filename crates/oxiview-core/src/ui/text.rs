@@ -1,5 +1,5 @@
 use super::{NodeId, NodeMeasure, UiError, UiTree, View, node};
-use oxiview_base::{Affine, CornerRadii, Point, Rect, Size};
+use oxiview_base::{Affine, Color, CornerRadii, Point, Rect, Size};
 use oxiview_layout::{AvailableSpace, Dimensions, LayoutBox};
 use oxiview_reactive::{ReactiveError, effect};
 use oxiview_scene::{Brush, FillRule, Primitive};
@@ -7,13 +7,18 @@ use oxiview_text::{
     GlyphDraw, RichText, TextDecorationKind, TextLayout, TextSpan, TextSpanStyle, TextStyle,
     TextSystem,
 };
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    rc::Rc,
+};
 
 const PARAGRAPH_CACHE_CAPACITY: usize = 4;
 
 struct Cached {
     width: Option<f32>,
     layout: TextLayout,
+    appearance: TextAppearance,
 }
 struct RasterCache {
     width: f64,
@@ -23,15 +28,68 @@ struct RasterCache {
     phase_x: f64,
     phase_y: f64,
     primitives: Vec<Primitive>,
+    appearance: TextAppearance,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TextAppearance {
+    pub(super) font_size: f64,
+    pub(super) scale: f64,
+    pub(super) color: Color,
+}
+
 pub(super) struct TextNode {
     system: Rc<RefCell<TextSystem>>,
     source: RefCell<RichText>,
     style: TextStyle,
+    appearance: Cell<TextAppearance>,
     cached: RefCell<VecDeque<Cached>>,
     raster: RefCell<Option<RasterCache>>,
 }
 impl TextNode {
+    pub(super) fn appearance(&self) -> TextAppearance {
+        self.appearance.get()
+    }
+
+    pub(super) fn resolve_appearance(
+        &self,
+        color: Option<Color>,
+        size: Option<f64>,
+        scale: f64,
+    ) -> TextAppearance {
+        TextAppearance {
+            font_size: scale_font_size(size.unwrap_or(self.style.font_size), scale),
+            scale,
+            color: color.unwrap_or(self.style.color),
+        }
+    }
+
+    pub(super) fn appearance_changes_metrics(
+        &self,
+        appearance: TextAppearance,
+    ) -> Result<bool, UiError> {
+        let old = self.appearance();
+        if old.font_size != appearance.font_size {
+            return Ok(true);
+        }
+        Ok(old.scale != appearance.scale
+            && self
+                .source
+                .try_borrow()
+                .map_err(|_| UiError::HandlerBusy)?
+                .spans()
+                .iter()
+                .any(|span| {
+                    span.style.font_size.is_some_and(|size| {
+                        scale_font_size(size, old.scale) != scale_font_size(size, appearance.scale)
+                    })
+                }))
+    }
+
+    pub(super) fn set_appearance(&self, appearance: TextAppearance) {
+        self.appearance.set(appearance);
+    }
+
     pub(super) fn invalidate(&self) -> Result<(), UiError> {
         let mut cached = self
             .cached
@@ -47,10 +105,17 @@ impl TextNode {
     }
     fn paragraph(&self, width: Option<f64>) -> Result<TextLayout, UiError> {
         let width_key = width.map(|width| width as f32);
+        let appearance = self.appearance();
         let mut cache = self
             .cached
             .try_borrow_mut()
             .map_err(|_| UiError::HandlerBusy)?;
+        if cache
+            .back()
+            .is_some_and(|cached| cached.appearance != appearance)
+        {
+            cache.clear();
+        }
         if let Some(cached) = cache.iter().find(|cached| cached.width == width_key) {
             return Ok(cached.layout.clone());
         }
@@ -58,10 +123,16 @@ impl TextNode {
             cached.layout.rewrap(width)
         } else {
             let source = self.source.try_borrow().map_err(|_| UiError::HandlerBusy)?;
+            let style = TextStyle {
+                font_size: appearance.font_size,
+                color: appearance.color,
+                ..self.style.clone()
+            };
+            let scaled = scaled_spans(&source, appearance.scale)?;
             self.system
                 .try_borrow_mut()
                 .map_err(|_| UiError::HandlerBusy)?
-                .layout_rich(&source, &self.style, width)
+                .layout_rich(scaled.as_ref().unwrap_or(&source), &style, width)
         }
         .map_err(|error| UiError::Text(error.to_string()))?;
         if cache.len() == PARAGRAPH_CACHE_CAPACITY {
@@ -70,6 +141,7 @@ impl TextNode {
         cache.push_back(Cached {
             width: width_key,
             layout: layout.clone(),
+            appearance,
         });
         Ok(layout)
     }
@@ -87,6 +159,7 @@ impl TextNode {
         let device_y = (window_origin.y() + top) * scale;
         let phase_x = device_x - device_x.floor();
         let phase_y = device_y - device_y.floor();
+        let appearance = self.appearance();
         if let Some(cached) = self
             .raster
             .try_borrow()
@@ -98,6 +171,7 @@ impl TextNode {
             && cached.scale == scale
             && cached.phase_x == phase_x
             && cached.phase_y == phase_y
+            && cached.appearance == appearance
         {
             return Ok(cached.primitives.clone());
         }
@@ -154,6 +228,7 @@ impl TextNode {
             phase_x,
             phase_y,
             primitives: primitives.clone(),
+            appearance,
         });
         Ok(primitives)
     }
@@ -219,19 +294,55 @@ pub fn text(system: Rc<RefCell<TextSystem>>, source: impl Into<String>, style: T
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn rich_text(system: Rc<RefCell<TextSystem>>, source: RichText, style: TextStyle) -> View {
+    let appearance = TextAppearance {
+        font_size: style.font_size,
+        color: style.color,
+        scale: 1.0,
+    };
     let text = Rc::new(TextNode {
         system,
         source: RefCell::new(source),
         style,
+        appearance: Cell::new(appearance),
         cached: RefCell::new(VecDeque::new()),
         raster: RefCell::new(None),
     });
     let mut view = node().measure(Rc::clone(&text));
     view.setup.push(Box::new(move |tree, id, _| {
         tree.node_mut(id)?.text = Some(text);
-        Ok(())
+        tree.install_text_style(id)
     }));
     view
+}
+
+fn scale_font_size(size: f64, scale: f64) -> f64 {
+    // Keep the result within the shaper's finite domain without concealing an
+    // invalid author-provided size that the original text path would reject.
+    if scale == 1.0 || size as f32 <= 0.0 || !size.is_finite() || size > 1024.0 {
+        return size;
+    }
+    (size * scale).clamp(f64::from(f32::from_bits(1)), 1024.0)
+}
+
+fn scaled_spans(source: &RichText, scale: f64) -> Result<Option<RichText>, UiError> {
+    if scale == 1.0
+        || source
+            .spans()
+            .iter()
+            .all(|span| span.style.font_size.is_none())
+    {
+        return Ok(None);
+    }
+    let mut spans = source.spans().to_vec();
+    for span in &mut spans {
+        span.style.font_size = span
+            .style
+            .font_size
+            .map(|size| scale_font_size(size, scale));
+    }
+    RichText::new(source.as_str(), spans)
+        .map(Some)
+        .map_err(|error| UiError::Text(error.to_string()))
 }
 impl View {
     /// Binds the source string of a `text` node without remounting it.

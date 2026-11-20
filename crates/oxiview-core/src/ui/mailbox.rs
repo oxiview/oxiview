@@ -1,5 +1,5 @@
 use super::{
-    Identities, NodeId, Reservation, UiError, UiTree,
+    Identities, Keymap, NodeId, Reservation, UiError, UiTree,
     input::{Command, Mutation, UiCommands},
 };
 use oxiview_reactive::Owner;
@@ -92,6 +92,18 @@ impl UiCommandSender {
     /// Queues a style replacement, joining the active event batch when called in a handler.
     pub fn set_style(&self, node: NodeId, style: Style) -> Result<(), UiError> {
         self.post(Command::Style(node, style))
+    }
+    /// Queues a change to the node's inherited disabled state.
+    pub fn set_disabled(&self, node: NodeId, disabled: bool) -> Result<(), UiError> {
+        self.post(Command::Disabled(node, disabled))
+    }
+    /// Queues an application or binding request for logical focus.
+    pub fn focus(&self, node: NodeId) -> Result<(), UiError> {
+        self.post(Command::Focus(node))
+    }
+    /// Queues a validated Keymap replacement.
+    pub fn set_keymap(&self, node: NodeId, keymap: Keymap) -> Result<(), UiError> {
+        self.post(Command::Keymap(node, keymap))
     }
     /// Queues custom painting content; the framework retains the supplied primitives.
     pub fn set_content(&self, node: NodeId, content: Vec<Primitive>) -> Result<(), UiError> {

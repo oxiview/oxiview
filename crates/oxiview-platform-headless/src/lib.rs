@@ -108,6 +108,7 @@ struct Window {
 struct State {
     clock: ManualClock,
     interval: Duration,
+    initial_preferences: SystemPreferences,
     windows: Vec<Window>,
     initialized: bool,
     exiting: bool,
@@ -139,9 +140,17 @@ fn live(w: &Window) -> Result<()> {
     }
 }
 fn capabilities() -> Capabilities {
+    use SystemPreference::*;
     Capabilities {
         frame_policies: vec![FramePolicy::OnDemand],
         native_surface: false,
+        system_preferences: vec![
+            Appearance,
+            AccentColor,
+            IncreasedContrast,
+            ReducedMotion,
+            TextScale,
+        ],
     }
 }
 fn destroy(w: &mut Window) {
@@ -208,9 +217,35 @@ pub struct Driver {
     shared: Arc<Shared>,
 }
 
+/// One keyboard transition to inject through the headless driver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyTransition {
+    /// Layout-independent key position.
+    pub code: KeyCode,
+    /// Shortcut identity in the keyboard layout.
+    pub logical: LogicalKey,
+    /// Modifiers held at capture.
+    pub modifiers: KeyModifiers,
+    /// True for a press, false for a release.
+    pub pressed: bool,
+    /// True only for repeated key presses.
+    pub repeat: bool,
+    /// Capture time, or None to capture the current virtual time.
+    pub timestamp: Option<Duration>,
+}
+
 impl HeadlessPlatform {
-    /// Creates a backend and controller with a nonzero virtual refresh interval.
+    /// Creates a backend and controller with a nonzero virtual refresh interval
+    /// and unavailable system preferences.
     pub fn new(refresh_interval: Duration) -> Result<(Self, Driver)> {
+        Self::new_with_preferences(refresh_interval, SystemPreferences::default())
+    }
+
+    /// Creates a backend and controller with initial preferences for new windows.
+    pub fn new_with_preferences(
+        refresh_interval: Duration,
+        initial_preferences: SystemPreferences,
+    ) -> Result<(Self, Driver)> {
         if refresh_interval.is_zero() {
             return Err(DriverError::Invalid("zero refresh interval"));
         }
@@ -218,6 +253,7 @@ impl HeadlessPlatform {
             state: Mutex::new(State {
                 clock: ManualClock::default(),
                 interval: refresh_interval,
+                initial_preferences,
                 windows: Vec::new(),
                 initialized: false,
                 exiting: false,
@@ -341,6 +377,7 @@ impl EventLoopContext for Context {
             endpoint: Box::new(Endpoint {
                 shared: self.shared.clone(),
                 id,
+                initial_preferences: state.initial_preferences,
             }),
         })
     }
@@ -379,6 +416,7 @@ impl MainThreadWindow for Main {
 struct Endpoint {
     shared: Arc<Shared>,
     id: WindowId,
+    initial_preferences: SystemPreferences,
 }
 impl Endpoint {
     fn receive(
@@ -436,6 +474,9 @@ impl WindowEndpoint for Endpoint {
     }
     fn capabilities(&self) -> Capabilities {
         capabilities()
+    }
+    fn preferences(&self) -> SystemPreferences {
+        self.initial_preferences
     }
     fn now(&self) -> Duration {
         match self.shared.state.lock() {
@@ -645,7 +686,7 @@ impl Driver {
             timestamp: timestamp.unwrap_or(now),
         })
     }
-    /// Injects a raw key transition in FIFO order.
+    /// Injects a key transition using unshifted US logical identities and no modifiers.
     pub fn key(
         &self,
         id: WindowId,
@@ -654,12 +695,34 @@ impl Driver {
         repeat: bool,
         timestamp: Option<Duration>,
     ) -> Result<()> {
+        self.key_transition(
+            id,
+            KeyTransition {
+                code,
+                logical: code.us_logical_key(),
+                modifiers: KeyModifiers::default(),
+                pressed,
+                repeat,
+                timestamp,
+            },
+        )
+    }
+    /// Injects a key transition in FIFO order with the supplied logical identity
+    /// and modifiers.
+    pub fn key_transition(&self, id: WindowId, transition: KeyTransition) -> Result<()> {
         self.inject(id, |now| WindowEvent::Key {
-            code,
-            pressed,
-            repeat,
-            timestamp: timestamp.unwrap_or(now),
+            code: transition.code,
+            logical: transition.logical,
+            modifiers: transition.modifiers,
+            pressed: transition.pressed,
+            repeat: transition.repeat,
+            timestamp: transition.timestamp.unwrap_or(now),
         })
+    }
+    /// Queues a preference snapshot in FIFO order, including duplicate snapshots.
+    /// This may be called before the initial resize is published.
+    pub fn preferences_changed(&self, id: WindowId, preferences: SystemPreferences) -> Result<()> {
+        self.inject(id, |_| WindowEvent::PreferencesChanged { preferences })
     }
     /// Requests system repaint without arming a frame.
     pub fn request_redraw(&self, id: WindowId) -> Result<()> {

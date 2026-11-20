@@ -490,6 +490,8 @@ mod tests {
         };
         let space = WindowEvent::Key {
             code: KeyCode::Space,
+            logical: KeyCode::Space.us_logical_key(),
+            modifiers: Default::default(),
             pressed: true,
             repeat: false,
             timestamp: Duration::ZERO,

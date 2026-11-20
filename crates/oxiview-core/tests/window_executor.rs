@@ -108,6 +108,7 @@ impl WindowEndpoint for Endpoint {
         Capabilities {
             frame_policies: vec![FramePolicy::OnDemand],
             native_surface: false,
+            system_preferences: vec![],
         }
     }
     fn now(&self) -> Duration {
@@ -403,6 +404,8 @@ fn window_automatically_runs_woken_tasks_and_disposes_node_and_window_tasks() {
         Step::Event(WindowEvent::Wake),
         Step::Event(WindowEvent::Key {
             code: KeyCode::Escape,
+            logical: KeyCode::Escape.us_logical_key(),
+            modifiers: Default::default(),
             pressed: true,
             repeat: false,
             timestamp: Duration::ZERO,

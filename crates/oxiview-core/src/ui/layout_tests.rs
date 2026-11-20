@@ -25,7 +25,7 @@ fn block_tree() -> UiTree {
 }
 
 fn assert_fresh(tree: &UiTree) {
-    let mut expected = HashMap::new();
+    let mut expected = Vec::new();
     TaffyLayout::new()
         .compute(
             &mut TreeLayout {

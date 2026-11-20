@@ -1,4 +1,8 @@
-use super::{NodeId, Reservation, UiError, UiTree};
+use super::{
+    ActionSource, FocusPolicy, Keymap, NodeId, Reservation, UiError, UiTree,
+    focus::FocusScope,
+    interaction::{ArmedActivation, ArmedInput},
+};
 use oxiview_base::{Point, Size};
 use oxiview_platform::{PointerButton, WindowEvent};
 use oxiview_reactive::{Owner, ReactiveError};
@@ -82,6 +86,8 @@ pub struct UiDispatchResult {
     pub changed: bool,
     /// Number of pointer event deliveries, including bubbling and boundaries.
     pub events: usize,
+    /// Framework input or the caller's recorder consumed this key transition.
+    pub key_handled: bool,
     /// Completed and canceled command batches, in execution order.
     pub reports: Vec<UiBatchReport>,
 }
@@ -107,6 +113,13 @@ pub(super) enum Command {
     Reparent(NodeId, NodeId, usize),
     Capture(NodeId),
     Release(NodeId),
+    Focus(NodeId),
+    ClearFocus(NodeId),
+    FocusPolicy(NodeId, FocusPolicy),
+    FocusReturn(NodeId, Option<NodeId>),
+    Disabled(NodeId, bool),
+    Keymap(NodeId, Keymap),
+    InvokeAction(NodeId, String),
 }
 impl Command {
     pub(super) fn node(&self) -> NodeId {
@@ -125,7 +138,14 @@ impl Command {
             | Self::Clear(id)
             | Self::Reparent(id, _, _)
             | Self::Capture(id)
-            | Self::Release(id) => *id,
+            | Self::Release(id)
+            | Self::Focus(id)
+            | Self::ClearFocus(id)
+            | Self::FocusPolicy(id, _)
+            | Self::FocusReturn(id, _)
+            | Self::Disabled(id, _)
+            | Self::Keymap(id, _)
+            | Self::InvokeAction(id, _) => *id,
         }
     }
     fn canceled_binding(&self) -> Result<bool, UiError> {
@@ -152,14 +172,16 @@ pub(super) struct Batch {
 /// Mutations queued by a handler. Reads continue to observe pre-command state.
 /// Creation reserves an ID immediately; dropping ID copies never cancels it.
 pub struct UiCommands {
+    root: NodeId,
     identities: Rc<RefCell<super::Identities>>,
     pub(super) buffer: Rc<super::mailbox::CommandBuffer>,
     notify: bool,
     stop: bool,
 }
 impl UiCommands {
-    fn new(tree: &UiTree) -> Self {
+    pub(super) fn new(tree: &UiTree) -> Self {
         Self {
+            root: tree.root,
             identities: Rc::clone(&tree.identities),
             buffer: super::mailbox::CommandBuffer::new(!tree.closing),
             notify: true,
@@ -242,6 +264,38 @@ impl UiCommands {
     pub fn release_capture(&mut self, id: NodeId) {
         self.push(Command::Release(id));
     }
+    /// Queues hiding or showing this subtree without removing its nodes.
+    pub fn set_visible(&mut self, id: NodeId, visible: bool) {
+        self.push(Command::Visible(id, visible));
+    }
+    /// Requests focus using eligibility at the command's turn.
+    pub fn focus(&mut self, id: NodeId) {
+        self.push(Command::Focus(id));
+    }
+    /// Queues clearing logical focus.
+    pub fn clear_focus(&mut self) {
+        self.push(Command::ClearFocus(self.root));
+    }
+    /// Queues a change of focus eligibility.
+    pub fn set_focus_policy(&mut self, id: NodeId, policy: FocusPolicy) {
+        self.push(Command::FocusPolicy(id, policy));
+    }
+    /// Queues a preferred return target for focus recovery in this subtree.
+    pub fn set_focus_return_target(&mut self, id: NodeId, target: Option<NodeId>) {
+        self.push(Command::FocusReturn(id, target));
+    }
+    /// Queues a change of the disabled state inherited by this subtree.
+    pub fn set_disabled(&mut self, id: NodeId, disabled: bool) {
+        self.push(Command::Disabled(id, disabled));
+    }
+    /// Queues replacement of the Keymap for this focus context.
+    pub fn set_keymap(&mut self, id: NodeId, keymap: Keymap) {
+        self.push(Command::Keymap(id, keymap));
+    }
+    /// Queues an invocation on the designated live node.
+    pub fn invoke_action(&mut self, target: NodeId, action: impl Into<String>) {
+        self.push(Command::InvokeAction(target, action.into()));
+    }
     /// Stops remaining ancestors of the current event without discarding commands.
     pub fn stop_propagation(&mut self) {
         self.stop = true;
@@ -318,6 +372,36 @@ impl UiTree {
     pub fn clear_batch_report_handler(&mut self) {
         self.report_handler = None;
     }
+    /// Hides or shows this subtree without removing its nodes.
+    pub fn set_visible(&mut self, id: NodeId, visible: bool) -> Result<(), UiError> {
+        self.direct_command(Command::Visible(id, visible))
+    }
+
+    pub(super) fn direct_command(&mut self, command: Command) -> Result<(), UiError> {
+        let mut handler = |_: &UiPointerEvent, _: &UiTree, _: &mut UiCommands| {};
+        let mut work = Work::default();
+        self.apply(command, &mut handler, &mut work)?;
+        if self.theme.has_pending_styles() {
+            self.settle_interaction_styles(&mut handler, &mut work)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn direct_interaction<T>(
+        &mut self,
+        action: impl FnOnce(&mut Self) -> Result<T, UiError>,
+    ) -> Result<T, UiError> {
+        if self.closed {
+            return Err(UiError::Closed);
+        }
+        let mut work = Work::default();
+        let mut observer = |_: &UiPointerEvent, _: &UiTree, _: &mut UiCommands| {};
+        self.finish_input(&mut observer, &mut work)?;
+        let result = action(self)?;
+        self.finish_input(&mut observer, &mut work)?;
+        Ok(result)
+    }
+
     /// Applies pending reactive or application-sent commands at a safe boundary.
     pub fn flush_updates(
         &mut self,
@@ -328,9 +412,8 @@ impl UiTree {
             return Err(UiError::Closed);
         }
         let mut work = Work::default();
-        self.collect_mailbox()?;
-        self.drain(&mut observer, &mut work)?;
-        self.layout(viewport)?;
+        self.finish_input(&mut observer, &mut work)?;
+        self.layout_for_input(viewport, &mut observer, &mut work)?;
         work.result.changed = self.paint_dirty;
         Ok(work.result)
     }
@@ -344,6 +427,28 @@ impl UiTree {
         &mut self,
         event: &WindowEvent,
         viewport: Size,
+        handler: impl FnMut(&UiPointerEvent, &UiTree, &mut UiCommands),
+    ) -> Result<UiDispatchResult, UiError> {
+        self.dispatch_input(event, viewport, false, handler)
+    }
+
+    /// Processes an event while consuming any key transition at the input boundary.
+    /// Use this for recording a shortcut. Repeats and release of a consumed press
+    /// remain consumed after returning to ordinary dispatch.
+    pub fn dispatch_consumed_key(
+        &mut self,
+        event: &WindowEvent,
+        viewport: Size,
+        handler: impl FnMut(&UiPointerEvent, &UiTree, &mut UiCommands),
+    ) -> Result<UiDispatchResult, UiError> {
+        self.dispatch_input(event, viewport, true, handler)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        event: &WindowEvent,
+        viewport: Size,
+        key_consumed: bool,
         mut handler: impl FnMut(&UiPointerEvent, &UiTree, &mut UiCommands),
     ) -> Result<UiDispatchResult, UiError> {
         if self.closed {
@@ -352,9 +457,9 @@ impl UiTree {
         let _span = tracing::info_span!("ui_dispatch").entered();
         let mut work = Work::default();
         self.collect_mailbox()?;
-        self.layout(viewport)?;
+        self.layout_for_input(viewport, &mut handler, &mut work)?;
         if !matches!(event, WindowEvent::Destroyed) {
-            self.drain(&mut handler, &mut work)?;
+            self.finish_input(&mut handler, &mut work)?;
         }
         match event {
             WindowEvent::PointerMoved {
@@ -371,14 +476,14 @@ impl UiTree {
                 timestamp,
             } => {
                 self.set_pointer(*position, *timestamp);
-                if *pressed {
+                if *pressed && self.pointer.active {
                     if !self.pointer.pressed.contains(button) {
                         self.pointer.pressed.push(*button);
                     }
-                } else {
+                } else if !pressed {
                     self.pointer.pressed.retain(|old| old != button);
                 }
-                self.positional(
+                let activation = self.positional(
                     if *pressed {
                         PointerEventKind::Down
                     } else {
@@ -394,31 +499,55 @@ impl UiTree {
                     self.pointer.capture = None;
                     self.reconcile(next, &mut handler, &mut work)?;
                 }
+                if let Some(activation) = activation {
+                    self.perform_action(
+                        activation.target,
+                        &activation.action,
+                        ActionSource::Pointer,
+                        Some(*timestamp),
+                    )?;
+                }
             }
             WindowEvent::PointerLeft { timestamp } => {
                 self.pointer.timestamp = *timestamp;
                 self.pointer.inside = false;
+                self.pointer_press_inside(&[])?;
                 if self.pointer.capture.is_none() {
                     self.pointer.active = false;
                     self.reconcile(Vec::new(), &mut handler, &mut work)?;
                 }
             }
-            WindowEvent::ActivationChanged {
-                active: false,
-                timestamp,
+            WindowEvent::ActivationChanged { active, timestamp } => {
+                self.update_window_input(Some(*active), None)?;
+                if !active {
+                    self.pointer.timestamp = *timestamp;
+                    self.interrupt(&mut handler, &mut work)?;
+                }
             }
-            | WindowEvent::VisibilityChanged {
-                visible: false,
-                timestamp,
+            WindowEvent::VisibilityChanged { visible, timestamp } => {
+                self.update_window_input(None, Some(*visible))?;
+                if !visible {
+                    self.pointer.timestamp = *timestamp;
+                    self.interrupt(&mut handler, &mut work)?;
+                }
             }
-            | WindowEvent::PointerInterrupted { timestamp } => {
+            WindowEvent::PointerInterrupted { timestamp } => {
                 self.pointer.timestamp = *timestamp;
+                self.take_arm(|source| matches!(source, ArmedInput::Pointer { .. }))?;
                 self.interrupt(&mut handler, &mut work)?;
+            }
+            WindowEvent::Key { .. } => {
+                work.result.key_handled = self.route_key(event, key_consumed)?;
+            }
+            WindowEvent::PreferencesChanged { preferences } => {
+                self.set_system_preferences(*preferences)?;
             }
             WindowEvent::Destroyed => {
                 self.closing = true;
                 self.mailbox.close()?;
+                self.update_window_input(Some(false), Some(false))?;
                 self.interrupt(&mut handler, &mut work)?;
+                self.transition_focus(None, None)?;
                 self.cancel_queue(UiError::QueueClosed, &mut handler, &mut work)?;
                 let order = self.postorder(self.root)?;
                 self.paint_cache = None;
@@ -427,6 +556,7 @@ impl UiTree {
                         drop(slot.take());
                     }
                 }
+                self.clear_theme_consumers();
                 self.identities
                     .try_borrow_mut()
                     .map_err(|_| UiError::ReservationBusy)?
@@ -438,10 +568,25 @@ impl UiTree {
             _ => {}
         }
         if !self.closed {
-            self.drain(&mut handler, &mut work)?;
+            self.finish_input(&mut handler, &mut work)?;
         }
         work.result.changed = self.paint_dirty && !self.closed;
         Ok(work.result)
+    }
+
+    pub(super) fn settle_interaction_styles(
+        &mut self,
+        handler: &mut Handler<'_>,
+        work: &mut Work,
+    ) -> Result<(), UiError> {
+        // An effective style can hide its own node and cause another round of
+        // interaction updates. Bound the work if the styles cycle.
+        for _ in 0..COMMAND_BUDGET {
+            if !self.sync_interaction_styles(handler, work)? {
+                return Ok(());
+            }
+        }
+        Err(UiError::BudgetExceeded)
     }
 
     fn set_pointer(&mut self, position: Point, timestamp: Duration) {
@@ -451,7 +596,7 @@ impl UiTree {
             && position.y() >= 0.0
             && position.x() < self.viewport.width()
             && position.y() < self.viewport.height();
-        self.pointer.active = true;
+        self.pointer.active = self.accepts_input();
     }
     fn geometric_path(&self) -> Result<Vec<NodeId>, UiError> {
         if self.pointer.inside
@@ -473,18 +618,79 @@ impl UiTree {
         button: Option<PointerButton>,
         handler: &mut Handler<'_>,
         work: &mut Work,
-    ) -> Result<(), UiError> {
-        self.layout(self.viewport)?;
+    ) -> Result<Option<ArmedActivation>, UiError> {
+        self.layout_for_input(self.viewport, handler, work)?;
         let path = self.effective_path()?;
         let target = path.last().copied();
         let mut route = path.clone();
         route.reverse();
         self.check_budget(work, self.hover_cost(&path) + route.len())?;
         self.reconcile(path, handler, work)?;
+        let activation = self.update_pointer_activation(kind, button, &route)?;
         if let Some(target) = target {
             self.emit(kind, target, &route, button, handler, work)?;
         }
-        Ok(())
+        Ok(activation)
+    }
+    fn update_pointer_activation(
+        &mut self,
+        kind: PointerEventKind,
+        button: Option<PointerButton>,
+        route: &[NodeId],
+    ) -> Result<Option<ArmedActivation>, UiError> {
+        if !self.accepts_input() {
+            return Ok(None);
+        }
+        let primary = button == Some(PointerButton::Primary);
+        let pointer_armed = self
+            .interaction
+            .armed
+            .as_ref()
+            .is_some_and(|press| matches!(press.input, ArmedInput::Pointer { .. }));
+        let geometric;
+        let inside_path = if self.pointer.capture.is_some() && pointer_armed {
+            geometric = self.geometric_path()?;
+            geometric.as_slice()
+        } else {
+            route
+        };
+        if kind == PointerEventKind::Down && primary {
+            let mut focus = None;
+            let mut armed = None;
+            for &candidate in route {
+                if focus.is_none() && self.focus_eligible(candidate)? {
+                    focus = Some(candidate);
+                }
+                if armed.is_none()
+                    && let Some(action) = self.activation_action(candidate)?
+                    && self.interaction_available(candidate)?
+                {
+                    let inside = if self.pointer.capture.is_some() && !pointer_armed {
+                        self.geometric_path()?.contains(&candidate)
+                    } else {
+                        inside_path.contains(&candidate)
+                    };
+                    armed = Some(ArmedActivation {
+                        target: candidate,
+                        action: action.to_owned(),
+                        input: ArmedInput::Pointer { inside },
+                    });
+                }
+                if focus.is_some() && armed.is_some() {
+                    break;
+                }
+            }
+            self.transition_focus(focus.or(self.focused_node()), Some(false))?;
+            self.set_armed(armed)?;
+        } else if kind == PointerEventKind::Up && primary {
+            let press = self.take_arm(|source| matches!(source, ArmedInput::Pointer { .. }))?;
+            return Ok(press.filter(|press| {
+                inside_path.contains(&press.target) && route.contains(&press.target)
+            }));
+        } else if pointer_armed {
+            self.pointer_press_inside(inside_path)?;
+        }
+        Ok(None)
     }
     fn hover_cost(&self, next: &[NodeId]) -> usize {
         self.pointer
@@ -515,6 +721,15 @@ impl UiTree {
         self.check_hover_budget(&next, work)?;
         let old = std::mem::replace(&mut self.pointer.hover, next.clone());
         let mut commands = UiCommands::new(self);
+        if old != next {
+            let _active = self.mailbox.activate(&commands)?;
+            self.publish_interaction(
+                old.iter()
+                    .filter(|id| !next.contains(id))
+                    .chain(next.iter().filter(|id| !old.contains(id)))
+                    .copied(),
+            )?;
+        }
         for id in old.iter().rev().filter(|id| !next.contains(id)) {
             self.deliver(
                 PointerEventKind::Leave,
@@ -615,7 +830,7 @@ impl UiTree {
         handler(&event, self, commands);
         Ok(())
     }
-    fn enqueue(&mut self, commands: UiCommands) -> Result<(), UiError> {
+    pub(super) fn enqueue(&mut self, commands: UiCommands) -> Result<(), UiError> {
         if commands.buffer.failed.get() {
             return Err(UiError::CommandBufferBusy);
         }
@@ -680,6 +895,9 @@ impl UiTree {
         handler: &mut Handler<'_>,
         work: &mut Work,
     ) -> Result<(), UiError> {
+        if self.pointer.hover.is_empty() && self.pointer.capture.is_none() {
+            return Ok(());
+        }
         let old = self.pointer.hover.clone();
         let split = old
             .iter()
@@ -724,8 +942,25 @@ impl UiTree {
         }
         self.reconcile(next, handler, work)
     }
-    fn drain(&mut self, handler: &mut Handler<'_>, work: &mut Work) -> Result<(), UiError> {
+    pub(super) fn prepare_display_suppression(
+        &mut self,
+        id: NodeId,
+        display: Display,
+        handler: &mut Handler<'_>,
+        work: &mut Work,
+    ) -> Result<(), UiError> {
+        if display != Display::None || self.node(id)?.style.layout.display == Display::None {
+            return Ok(());
+        }
+        self.cleanup(id, false, handler, work)?;
+        self.lose_interaction(FocusScope::Subtree(id))
+    }
+    fn finish_input(&mut self, handler: &mut Handler<'_>, work: &mut Work) -> Result<(), UiError> {
         self.collect_mailbox()?;
+        if self.theme.has_pending_styles() {
+            self.settle_interaction_styles(handler, work)?;
+            self.collect_mailbox()?;
+        }
         while let Some(batch) = self.queue.pop_front() {
             let old_hover = self.pointer.hover.clone();
             let mut report = UiBatchReport {
@@ -740,7 +975,7 @@ impl UiTree {
                     continue;
                 }
                 let id = command.node();
-                let result = if exceeded
+                let mut result = if exceeded
                     || work.commands >= COMMAND_BUDGET
                     || work.result.events >= EVENT_BUDGET
                 {
@@ -750,10 +985,16 @@ impl UiTree {
                     work.commands += 1;
                     self.apply(command, handler, work)
                 };
+                self.collect_mailbox()?;
+                if result != Err(UiError::BudgetExceeded) && self.theme.has_pending_styles() {
+                    // Later commands validate against the effective state of
+                    // earlier commands, including any visibility changes.
+                    result = result.and(self.settle_interaction_styles(handler, work));
+                    self.collect_mailbox()?;
+                }
                 if result == Err(UiError::BudgetExceeded) {
                     exceeded = true;
                 }
-                self.collect_mailbox()?;
                 report.outcomes.push(UiCommandOutcome {
                     sequence,
                     node: Some(id),
@@ -765,7 +1006,15 @@ impl UiTree {
                 self.cancel_queue(UiError::BudgetExceeded, handler, work)?;
                 break;
             }
-            if let Err(error) = self.stationary(&old_hover, handler, work) {
+            let result = self.stationary(&old_hover, handler, work).and_then(|()| {
+                if self.theme.has_pending_styles() {
+                    self.collect_mailbox()?;
+                    self.settle_interaction_styles(handler, work)?;
+                    self.collect_mailbox()?;
+                }
+                Ok(())
+            });
+            if let Err(error) = result {
                 if error == UiError::BudgetExceeded {
                     self.cancel_queue(error, handler, work)?;
                     break;
@@ -794,7 +1043,7 @@ impl UiTree {
         if !some_enabled {
             return Ok(());
         }
-        self.layout(self.viewport)?;
+        self.layout_for_input(self.viewport, handler, work)?;
         let next = self.geometric_path()?;
         let qualifies = old.iter().chain(next.iter()).any(|id| {
             self.node(*id).map_or_else(
@@ -803,6 +1052,7 @@ impl UiTree {
             )
         });
         if qualifies {
+            self.pointer_press_inside(&next)?;
             self.reconcile(next, handler, work)?;
         }
         Ok(())
@@ -826,13 +1076,7 @@ impl UiTree {
                 self.insert_reserved(reservation.id, parent, index, style)
             }
             Command::Style(id, style) => {
-                self.validate_style(&style)?;
-                let suppresses = self.node(id)?.style.layout.display != Display::None
-                    && style.layout.display == Display::None;
-                if suppresses {
-                    self.cleanup(id, false, handler, work)?;
-                }
-                self.set_style(id, style)?;
+                self.set_local_style(id, style, handler, work)?;
                 Ok(())
             }
             Command::Content(id, content) => self.set_content(id, content),
@@ -851,6 +1095,7 @@ impl UiTree {
                 if self.node(id)?.hidden == visible {
                     if !visible {
                         self.cleanup(id, false, handler, work)?;
+                        self.lose_interaction(FocusScope::Subtree(id))?;
                     }
                     self.node_mut(id)?.hidden = !visible;
                     self.dirty_layout(id, true, false)?;
@@ -869,6 +1114,7 @@ impl UiTree {
                     .capture
                     .map_or(Ok(0), |holder| self.path(holder).map(|path| path.len()))?;
                 self.check_budget(work, self.pointer.hover.len() + capture_cost)?;
+                self.lose_interaction(FocusScope::Descendants(id))?;
                 for child in children {
                     self.cleanup(child, true, handler, work)?;
                     self.remove_raw(child)?;
@@ -876,13 +1122,20 @@ impl UiTree {
                 Ok(())
             }
             Command::Reparent(id, parent, index) => {
-                self.validate_reparent(id, parent, index)?;
+                let (old_parent, old_index) = self.validate_reparent(id, parent, index)?;
+                if old_parent == parent && old_index == index {
+                    return Ok(());
+                }
+                let parent_suppressed = self.suppressed(parent)?;
+                let parent_disabled = self.effectively_disabled(parent)?;
+                let inherited_disabled_changed = parent != old_parent
+                    && parent_disabled != self.effectively_disabled(old_parent)?;
                 let captured = self
                     .pointer
                     .capture
                     .is_some_and(|holder| self.descendant(holder, id).unwrap_or(false));
                 if captured
-                    && !self.suppressed(parent)?
+                    && !parent_suppressed
                     && let Some(holder) = self.pointer.capture
                 {
                     let old_path = self.path(holder)?;
@@ -894,12 +1147,23 @@ impl UiTree {
                     next.extend(old_path.into_iter().skip(suffix));
                     self.check_hover_budget(&next, work)?;
                 }
-                if self.suppressed(parent)? {
+                if parent_suppressed {
                     self.cleanup(id, false, handler, work)?;
                 }
-                self.reparent(id, parent, index)?;
+                if parent_suppressed || parent_disabled {
+                    self.lose_interaction(FocusScope::Subtree(id))?;
+                } else if old_parent != parent
+                    && let Some(focused) = self.focused_node()
+                    && self.descendant(focused, id)?
+                {
+                    self.interaction.keyboard.clear_sequence();
+                }
+                self.reparent_raw(id, parent, index, old_parent, old_index)?;
+                if inherited_disabled_changed {
+                    self.publish_subtree_interaction(id)?;
+                }
                 if captured && self.pointer.capture.is_some() {
-                    self.layout(self.viewport)?;
+                    self.layout_for_input(self.viewport, handler, work)?;
                     self.reconcile(self.effective_path()?, handler, work)?;
                 }
                 Ok(())
@@ -916,9 +1180,15 @@ impl UiTree {
                         Err(UiError::CaptureOwned)
                     };
                 }
-                self.layout(self.viewport)?;
+                self.layout_for_input(self.viewport, handler, work)?;
                 let next = self.path(id)?;
                 self.check_hover_budget(&next, work)?;
+                if let Some(press) = &self.interaction.armed
+                    && matches!(press.input, ArmedInput::Pointer { .. })
+                    && !next.contains(&press.target)
+                {
+                    self.take_arm(|source| matches!(source, ArmedInput::Pointer { .. }))?;
+                }
                 self.pointer.capture = Some(id);
                 self.reconcile(next, handler, work)
             }
@@ -930,11 +1200,24 @@ impl UiTree {
                 if self.pointer.capture != Some(id) {
                     return Err(UiError::CaptureOwned);
                 }
-                self.layout(self.viewport)?;
+                self.layout_for_input(self.viewport, handler, work)?;
                 let next = self.geometric_path()?;
                 self.check_hover_budget(&next, work)?;
                 self.pointer.capture = None;
                 self.reconcile(next, handler, work)
+            }
+            Command::Focus(id) => self.request_focus(id),
+            Command::ClearFocus(_) => self.transition_focus(None, None),
+            Command::FocusPolicy(id, policy) => self.change_focus_policy(id, policy),
+            Command::FocusReturn(id, target) => self.set_focus_return_target(id, target),
+            Command::Disabled(id, disabled) => self.change_disabled(id, disabled),
+            Command::Keymap(id, keymap) => self.set_keymap(id, keymap),
+            Command::InvokeAction(id, action) => {
+                if self.perform_action(id, &action, ActionSource::Programmatic, None)? {
+                    Ok(())
+                } else {
+                    Err(UiError::ActionUnavailable(action))
+                }
             }
         }
     }

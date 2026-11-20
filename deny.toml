@@ -10,6 +10,7 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 [licenses]
 # Reject unlisted licenses, including copyleft; dual licenses may select a permissive branch.
 allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+exceptions = [{ name = "notify", version = "=8.2.2", allow = ["CC0-1.0"] }]
 
 [bans]
 multiple-versions = "warn"

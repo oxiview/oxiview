@@ -83,6 +83,8 @@ fn key(
     app.process(
         &WindowEvent::Key {
             code,
+            logical: code.us_logical_key(),
+            modifiers: Default::default(),
             pressed: true,
             repeat: false,
             timestamp: now,
@@ -92,6 +94,8 @@ fn key(
     app.process(
         &WindowEvent::Key {
             code,
+            logical: code.us_logical_key(),
+            modifiers: Default::default(),
             pressed: false,
             repeat: false,
             timestamp: now,
@@ -216,7 +220,8 @@ fn draw(
     })
 }
 
-fn route(snapshot: &Snapshot) -> Option<Direction> {
+/// Chooses a safe next turn for reproducible Snake acceptance runs.
+pub fn route(snapshot: &Snapshot) -> Option<Direction> {
     let start = *snapshot.body.first()?;
     let food = snapshot.food?;
     let mut blocked: HashSet<Cell> = snapshot.body.iter().copied().collect();

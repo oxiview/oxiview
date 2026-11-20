@@ -1,5 +1,26 @@
 # Dependency management
 
+## M5 development theme files
+
+The styling port uses the existing `toml` workspace dependency to parse
+versioned theme files into owned typed declarations. The app composition root
+pins `notify =8.2.2` for native file notifications. It watches the parent
+directory so an editor can replace the theme file by renaming a sibling file.
+The standard library supplies file I/O but has no file notification API.
+
+Notify 8.2.2 builds with Rust 1.88 and has a scoped CC0-1.0 license exception
+in `deny.toml`. It uses FSEvents on macOS, inotify on Linux and
+`ReadDirectoryChangesW` on Windows through Rust system bindings. The default
+features are disabled and macOS FSEvents is selected explicitly. The workspace
+reuses `libc`, `log`, `walkdir`, and the Core Foundation bindings. The app
+adds nine watcher packages across Cargo targets. The unpacked Notify release
+is approximately 324 KiB. The app exposes owned errors and theme values. The
+optional file source starts its worker when requested by an application. Local
+dependency checks review the resolved platform bindings, licenses and advisories.
+
+[Notify release](https://docs.rs/crate/notify/8.2.2) ·
+[Notify platform support](https://docs.rs/crate/notify/8.2.2/source/README.md)
+
 ## M4 Vello GPU adapter
 
 The GPU adapter pins `vello_gpu =0.4.0` with native `wgpu`, text, image sampling,

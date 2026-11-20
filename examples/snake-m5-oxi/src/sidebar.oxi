@@ -1,0 +1,264 @@
+use crate::{Ui, controls::{ButtonProps, action_button}};
+use oxiview_core::{keyed_for, show};
+use oxiview_reactive::{Memo, Signal};
+use oxiview_style::{Alignment, ContentAlignment, Edges, LayoutStyle, Length};
+use snake::{
+    application::Action,
+    game::{Difficulty, Direction},
+    presentation::{BORDER, INK, MUTED, WHITE, RunSummary, blank, centered_label,
+                   color, column, label, px, row, surface},
+};
+use std::{rc::Rc, sync::atomic::Ordering};
+
+view button(props: ButtonProps) {
+    <action_button props={props}/>
+}
+
+struct ScoreProps {
+    ui: Ui,
+    caption: &'static str,
+    value: Memo<u32>,
+    accent: bool,
+}
+view score_card(props: ScoreProps) {
+    let ScoreProps {
+        ui,
+        caption,
+        value,
+        accent,
+    } = props;
+    let mut style = surface(
+        LayoutStyle {
+            height: px(100.0),
+            flex_grow: 1.0,
+            flex_basis: px(0.0),
+            padding: Edges::all(px(15.0)),
+            row_gap: px(6.0),
+            border_width: 1.0,
+            ..column()
+        },
+        if accent { [226, 237, 210] } else { WHITE },
+        16.0,
+    );
+    style.border_color = color(if accent { [205, 222, 184] } else { BORDER });
+    let caption = label(&ui, caption, 11.0, 650, MUTED).theme_type("muted");
+    let number = label(&ui, "0", 36.0, 800, INK).theme_type("text").bind_text(move || Ok(value.get()?.to_string()));
+    <Node theme_type={if accent { "score_accent" } else { "score" }} style_patch={crate::styles::geometry(style)}> {caption} {number} </Node>
+}
+
+view history_row(ui: Ui, run: Signal<RunSummary>) {
+    ui.counters.history_mounts.fetch_add(1, Ordering::SeqCst);
+    let title = label(&ui, "Run", 13.0, 500, MUTED).theme_type("muted")
+        .bind_text(move || {
+            let item = run.get()?;
+            Ok(format!(
+                "Run {:02}  ·  {}",
+                item.id,
+                if item.won {
+                    "Cleared".into()
+                } else {
+                    format!("Level {}", item.level)
+                }
+            ))
+        })
+        .style(blank(LayoutStyle {
+            flex_grow: 1.0,
+            min_width: px(0.0),
+            ..Default::default()
+        }));
+    let score = label(&ui, "0", 14.0, 700, INK).theme_type("text").bind_text(move || Ok(run.get()?.score.to_string()));
+    <Node style={history_line()}> {title} {score} </Node>
+}
+
+pub(crate) view sidebar(ui: Ui) {
+    let score = ScoreProps {
+        ui: ui.clone(),
+        caption: "SCORE",
+        value: ui.score,
+        accent: true,
+    };
+    let best = ScoreProps {
+        ui: ui.clone(),
+        caption: "SESSION BEST",
+        value: ui.best,
+        accent: false,
+    };
+    let primary = ButtonProps {
+        ui: ui.clone(),
+        action: Action::Primary,
+        caption: "Start game",
+        primary: true,
+        compact: false,
+        overlay: false,
+    };
+    let restart = ButtonProps {
+        ui: ui.clone(),
+        action: Action::NewGame,
+        caption: "New game",
+        primary: false,
+        compact: false,
+        overlay: false,
+    };
+    let pace_heading = label(&ui, "PACE", 11.0, 700, MUTED).theme_type("muted");
+    let choices: Vec<_> = [Difficulty::Chill, Difficulty::Classic, Difficulty::Swift]
+        .into_iter()
+        .map(|difficulty| {
+            let props = ButtonProps {
+                ui: ui.clone(),
+                action: Action::Difficulty(difficulty),
+                caption: difficulty.name(),
+                primary: false,
+                compact: true,
+                overlay: false,
+            };
+            button(props)
+        })
+        .collect();
+    let make_direction = |direction, caption| {
+        let props = ButtonProps {
+            ui: ui.clone(),
+            action: Action::Turn(direction),
+            caption,
+            primary: false,
+            compact: true,
+            overlay: false,
+        };
+        button(props)
+    };
+    let up = make_direction(Direction::Up, "↑");
+    let left = make_direction(Direction::Left, "←");
+    let down = make_direction(Direction::Down, "↓");
+    let right = make_direction(Direction::Right, "→");
+    let instructions = centered_label(&ui, "Direction controls", 11.0, 600, MUTED).theme_type("muted");
+    let history_title = label(&ui, "RECENT RUNS", 11.0, 700, MUTED).theme_type("muted");
+    let empty_ui = ui.clone();
+    let empty_history = show(ui.history_empty, move || {
+        Ok(label(
+            &empty_ui,
+            "Your completed runs\nwill appear here.",
+            13.0,
+            400,
+            MUTED,
+        ).theme_type("muted"))
+    })
+    .style(blank(column()));
+    let history_ui = ui.clone();
+    let history_slot = Rc::clone(&ui.slots.history);
+    let history = keyed_for(
+        ui.history,
+        |run| run.id,
+        move |run| Ok(history_row(history_ui.clone(), run)),
+    )
+    .style(blank(LayoutStyle {
+        row_gap: px(5.0),
+        ..column()
+    }))
+    .on_mount(move |id| history_slot.set(Some(id)));
+    <Node style={sidebar_panel()}>
+        <Node style={scores()}>
+            <score_card props={score}/>
+            <score_card props={best}/>
+        </Node>
+        <action_button props={primary}/>
+        <action_button props={restart}/>
+        <Node style={pace_section()}>
+            {pace_heading}
+            <Node style={pace_options()} children={choices}/>
+        </Node>
+        <Node style={direction_pad()}>
+            <Node style={up_row()}>{up}</Node>
+            <Node style={turn_row()}>{left}{down}{right}</Node>
+            {instructions}
+        </Node>
+        <Node style={history_panel()}>
+            {history_title}{empty_history}{history}
+        </Node>
+    </Node>
+}
+
+style history_line() {
+    layout: LayoutStyle {
+        height: px(23.0),
+        flex_shrink: 0.0,
+        column_gap: px(8.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style sidebar_panel() {
+    layout: LayoutStyle {
+        width: px(256.0),
+        flex_shrink: 0.0,
+        row_gap: px(12.0),
+        ..column()
+    },
+    hit_test: false,
+}
+
+style scores() {
+    layout: LayoutStyle {
+        height: px(100.0),
+        flex_shrink: 0.0,
+        column_gap: px(10.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style pace_section() {
+    layout: LayoutStyle {
+        row_gap: px(8.0),
+        flex_shrink: 0.0,
+        margin: Edges { top: px(4.0), ..Edges::all(px(0.0)) },
+        ..column()
+    },
+    hit_test: false,
+}
+
+style pace_options() {
+    layout: LayoutStyle {
+        height: px(32.0),
+        column_gap: px(6.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style direction_pad() {
+    layout: LayoutStyle {
+        row_gap: px(5.0),
+        align_items: Alignment::Center,
+        flex_shrink: 0.0,
+        ..column()
+    },
+    hit_test: false,
+}
+
+style up_row() {
+    layout: LayoutStyle {
+        justify_content: ContentAlignment::Center,
+        ..row()
+    },
+    hit_test: false,
+}
+
+style turn_row() {
+    layout: LayoutStyle {
+        column_gap: px(6.0),
+        justify_content: ContentAlignment::Center,
+        ..row()
+    },
+    hit_test: false,
+}
+
+style history_panel() {
+    layout: LayoutStyle {
+        flex_grow: 1.0,
+        min_height: px(90.0),
+        row_gap: px(9.0),
+        padding: Edges { top: px(7.0), ..Edges::all(px(0.0)) },
+        ..column()
+    },
+    hit_test: false,
+}

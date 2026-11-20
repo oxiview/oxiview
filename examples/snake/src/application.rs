@@ -519,6 +519,7 @@ pub struct SnakeApp {
     model: Game<SeededRng>,
     clock: TickClock,
     actions: Receiver<Action>,
+    physical_shortcuts: bool,
     errors: Receiver<String>,
     viewport: Size,
     now: Duration,
@@ -539,6 +540,24 @@ impl SnakeApp {
         config: Config,
         counters: Arc<Counters>,
         screen: Screen,
+    ) -> Result<Self, oxiview_core::Error> {
+        Self::mount_game(config, counters, screen, true)
+    }
+
+    /// Mounts a screen whose controls and Keymaps handle keyboard input.
+    pub fn with_action_screen(
+        config: Config,
+        counters: Arc<Counters>,
+        screen: impl FnOnce(ScreenProps) -> View + 'static,
+    ) -> Result<Self, oxiview_core::Error> {
+        Self::mount_game(config, counters, screen, false)
+    }
+
+    fn mount_game(
+        config: Config,
+        counters: Arc<Counters>,
+        screen: impl FnOnce(ScreenProps) -> View + 'static,
+        physical_shortcuts: bool,
     ) -> Result<Self, oxiview_core::Error> {
         let model = Game::new(
             Board::default(),
@@ -615,7 +634,7 @@ impl SnakeApp {
             .build()
             .map_err(app_error)?;
         let root = tree.root();
-        tree.mount(root, view! { <screen props={props}/> })?;
+        tree.mount(root, component(move || Ok(screen(props))))?;
         let mut app = Self {
             tree,
             _scope: scope,
@@ -623,6 +642,7 @@ impl SnakeApp {
             model,
             clock: TickClock::default(),
             actions: receiver,
+            physical_shortcuts,
             errors,
             viewport,
             now: Duration::ZERO,
@@ -635,6 +655,36 @@ impl SnakeApp {
         app.sync_ui()?;
         Ok(app)
     }
+    /// Provides read access to the mounted screen's retained tree.
+    pub fn tree(&self) -> &UiTree {
+        &self.tree
+    }
+
+    /// Accesses the retained tree for application-owned focus, Actions and themes.
+    pub fn tree_mut(&mut self) -> &mut UiTree {
+        &mut self.tree
+    }
+
+    /// The shared game signals, action sender and mounted control identities.
+    pub fn ui(&self) -> &Ui {
+        &self.ui
+    }
+
+    /// Gives the optional diagnostics overlay the owning window's wake handle.
+    pub fn set_waker(&mut self, waker: &WindowWaker) {
+        if let Some(debug) = &mut self.debug {
+            debug.set_waker(waker);
+        }
+    }
+
+    /// Applies screen changes made by an application around the shared game.
+    pub fn flush_screen(&mut self, scheduler: &mut Scheduler) -> Result<(), oxiview_core::Error> {
+        if self.sync_ui()? {
+            scheduler.invalidate();
+        }
+        Ok(())
+    }
+
     /// Returns immutable game state for replay/acceptance checks.
     pub fn snapshot(&self) -> Snapshot {
         self.model.snapshot()
@@ -700,6 +750,24 @@ impl SnakeApp {
         &mut self,
         event: &WindowEvent,
         scheduler: &mut Scheduler,
+    ) -> Result<(), oxiview_core::Error> {
+        self.process_event(event, scheduler, false)
+    }
+
+    /// Processes a shortcut recorder's event, consuming the key before Action lookup.
+    pub fn process_captured_key(
+        &mut self,
+        event: &WindowEvent,
+        scheduler: &mut Scheduler,
+    ) -> Result<(), oxiview_core::Error> {
+        self.process_event(event, scheduler, true)
+    }
+
+    fn process_event(
+        &mut self,
+        event: &WindowEvent,
+        scheduler: &mut Scheduler,
+        captured: bool,
     ) -> Result<(), oxiview_core::Error> {
         if self.closed {
             return Ok(());
@@ -767,7 +835,12 @@ impl SnakeApp {
         ) {
             self.pause_for_interruption("Paused while the window is away.")?;
         }
-        let dispatch = self.tree.dispatch(event, self.viewport, |_, _, _| {})?;
+        let dispatch = if captured {
+            self.tree
+                .dispatch_consumed_key(event, self.viewport, |_, _, _| {})?
+        } else {
+            self.tree.dispatch(event, self.viewport, |_, _, _| {})?
+        };
         self.observe_reports(dispatch.reports);
         if matches!(event, WindowEvent::Destroyed) {
             self.model.pause();
@@ -782,12 +855,14 @@ impl SnakeApp {
         if let Ok(error) = self.errors.try_recv() {
             return Err(app_error(error));
         }
-        if let WindowEvent::Key {
-            code,
-            pressed: true,
-            repeat: false,
-            ..
-        } = event
+        if self.physical_shortcuts
+            && !captured
+            && let WindowEvent::Key {
+                code,
+                pressed: true,
+                repeat: false,
+                ..
+            } = event
         {
             let action = match code {
                 KeyCode::ArrowUp | KeyCode::KeyW => Some(Action::Turn(Direction::Up)),
@@ -1045,9 +1120,7 @@ impl Application for SnakeApp {
         scheduler: &mut Scheduler,
         waker: &WindowWaker,
     ) -> Result<(), oxiview_core::Error> {
-        if let Some(debug) = &mut self.debug {
-            debug.set_waker(waker);
-        }
+        self.set_waker(waker);
         self.process(event, scheduler)
     }
     fn paint(

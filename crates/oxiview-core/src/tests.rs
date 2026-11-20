@@ -223,6 +223,7 @@ fn resize_token_waits_for_a_presented_retry() {
             Capabilities {
                 frame_policies: vec![FramePolicy::OnDemand],
                 native_surface: false,
+                system_preferences: vec![],
             }
         }
         fn now(&self) -> Duration {

@@ -186,6 +186,27 @@
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
+    },
+    "interaction/action_eight_contexts": {
+      "value": 291.3,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "interaction/color_token_16_of_256": {
+      "value": 6368.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "interaction/tab_256": {
+      "value": 1607.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
     }
   }
 }

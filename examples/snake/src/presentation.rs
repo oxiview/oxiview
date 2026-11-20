@@ -299,6 +299,12 @@ pub struct ScreenProps {
 }
 
 impl Ui {
+    /// Queues a game operation for the window's next safe input boundary.
+    pub fn request_action(&self, action: Action) {
+        // A closed receiver means the window has already released its game.
+        let _ = self.actions.send(action);
+    }
+
     /// Builds the same capture, cancel and release-inside handler for both screens.
     pub fn button_pointer(
         self,

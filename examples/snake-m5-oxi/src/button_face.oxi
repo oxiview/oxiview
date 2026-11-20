@@ -1,0 +1,4 @@
+<Node theme_type={kind} style_patch={face} focusable={FocusPolicy::Tab}
+      on_mount={move |node| slot.set(Some(node))}>
+    {title}
+</Node>

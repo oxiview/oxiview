@@ -1,6 +1,9 @@
 //! Unstable composition root for headless CPU and native macOS GPU windows.
 //! Application and presenter state are initialized on each window thread.
 
+mod theme_file;
+pub use theme_file::{ThemeFile, ThemeReloadError};
+
 use oxiview_core::{Application, PaintedScene, PresentationOutcome, Presenter};
 pub use oxiview_core::{
     RichText, TextAlign, TextSpan, TextSpanStyle, TextStyle, TextSystem, rich_text, text,

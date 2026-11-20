@@ -42,3 +42,6 @@ Language: **English**
 | [0036](0036-fifo-drawable-readiness.md) | Pace native frames by drawable availability | 3 Frame scheduling / 11 Rendering |
 | [0037](0037-optional-precompiled-oxi.md) | Optional precompiled .oxi sources share the Rust Builder contract | 5 Components and API |
 | [0038](0038-vello-gpu-and-glyph-atlas.md) | Use Vello GPU and a device-owned glyph atlas | 9 Text stack / 11 Rendering |
+| [0039](0039-keymap-prefix-conflicts.md) | Reject ambiguous shortcut prefixes within a focus context | 10 IME and input |
+| [0040](0040-local-style-over-theme-states.md) | Give explicit local properties precedence over theme state rules | 7 Styling and themes |
+| [0041](0041-focus-recovery-in-tab-order.md) | Recover focus at the next eligible Tab stop | 6 Retained tree / 10 IME and input |

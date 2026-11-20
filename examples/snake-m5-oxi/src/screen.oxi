@@ -1,0 +1,134 @@
+use crate::{Ui, board::game_panel, settings, sidebar::sidebar, styles::geometry};
+use oxiview_core::show;
+use oxiview_base::CornerRadii;
+use oxiview_style::{Alignment, ContentAlignment, Edges, LayoutStyle, Length};
+use snake::{
+    game::Phase,
+    presentation::{INK, MUTED, PAPER, blank, centered_label, column,
+                   color, label, phase_caption, px, row},
+};
+use std::sync::atomic::Ordering;
+
+/// Constructs the persistent Snake screen from the shared application state.
+pub(crate) view screen(ui: Ui) {
+    ui.counters.screen_mounts.fetch_add(1, Ordering::SeqCst);
+    let title = label(&ui, "Snake", 38.0, 800, INK).theme_type("text");
+    let subtitle = label(&ui, "Collect food. Keep moving.", 14.0, 400, MUTED).theme_type("muted");
+    let open = settings::opener(&ui);
+    let panel_ui = ui.clone();
+    let panel = show(ui.settings.open, move || Ok(settings::panel(panel_ui.clone()))).style(blank(column()));
+    let phase = ui.phase;
+    let badge_label = centered_label(&ui, "Ready", 13.0, 650, INK)
+        .bind_text(move || Ok(phase_caption(phase.get()?).into()));
+    let game_props = ui.clone();
+    let sidebar_props = ui.clone();
+    let state = ui.state;
+    let notice = ui.notice;
+    let note = label(&ui, "Press Enter or choose Start game.", 12.0, 400, MUTED).theme_type("muted")
+        .bind_text(move || {
+            let game = state.get()?;
+            let note = notice.get()?;
+            Ok(if note.is_empty() {
+                format!("Level {}  ·  {} pace", game.level, game.difficulty.name())
+            } else {
+                note
+            })
+        })
+        .style(blank(LayoutStyle {
+            flex_grow: 1.0,
+            min_width: px(0.0),
+            ..Default::default()
+        }));
+    let hint = ui.settings.footer;
+    let keys = label(&ui, "", 12.0, 500, MUTED).theme_type("muted").bind_text(move || hint.get()).style(blank(
+        LayoutStyle {
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+    ));
+    <Node theme_type={"window"} style_patch={geometry(window_surface())}>
+        <Node style={header()}>
+            <Node style={heading()}>{title}{subtitle}</Node>
+            {open}
+            <Node bind_style={move || Ok(phase_badge(phase.get()?))}>
+                {badge_label}
+            </Node>
+        </Node>
+        {panel}
+        <Node style={play_area()}>
+            <game_panel props={game_props}/>
+            <sidebar props={sidebar_props}/>
+        </Node>
+        <Node style={footer()}>{note}{keys}</Node>
+    </Node>
+}
+
+style header() {
+    layout: LayoutStyle {
+        height: px(64.0),
+        flex_shrink: 0.0,
+        column_gap: px(20.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style heading() {
+    layout: LayoutStyle {
+        flex_grow: 1.0,
+        row_gap: px(1.0),
+        ..column()
+    },
+    hit_test: false,
+}
+
+style play_area() {
+    layout: LayoutStyle {
+        flex_grow: 1.0,
+        min_height: px(250.0),
+        column_gap: px(20.0),
+        align_items: Alignment::Stretch,
+        ..row()
+    },
+    hit_test: false,
+}
+
+style footer() {
+    layout: LayoutStyle {
+        height: px(22.0),
+        flex_shrink: 0.0,
+        column_gap: px(12.0),
+        ..row()
+    },
+    hit_test: false,
+}
+
+style window_surface() {
+    layout: LayoutStyle {
+        width: Length::Percent(1.0),
+        height: Length::Percent(1.0),
+        padding: Edges::all(px(22.0)),
+        row_gap: px(12.0),
+        ..column()
+    },
+    background: color(PAPER),
+    hit_test: false,
+}
+
+style phase_badge(phase: Phase) {
+    layout: LayoutStyle {
+        width: px(124.0),
+        height: px(32.0),
+        justify_content: ContentAlignment::Center,
+        align_items: Alignment::Center,
+        flex_shrink: 0.0,
+        ..row()
+    },
+    background: color(match phase {
+        Phase::Running | Phase::Won => [226, 237, 210],
+        Phase::Over(_) => [249, 222, 209],
+        _ => [232, 235, 225],
+    }),
+    border_radii: CornerRadii::uniform(16.0),
+    hit_test: false,
+}

@@ -6,6 +6,7 @@ snake_package=${snake_example_dir##*/}
 case "$snake_package" in
     snake) snake_name="Snake" ;;
     snake-oxi) snake_name="Snake Oxi" ;;
+    snake-m5-oxi) snake_name="Snake M5 Oxi" ;;
     *) exit 2 ;;
 esac
 snake_repo_root=$(CDPATH= cd -- "$snake_example_dir/../.." && pwd)

@@ -3,7 +3,7 @@ use crate::PaintedScene;
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect, Size};
 use oxiview_layout::LayoutBox;
 use oxiview_scene::{Brush, Clip, NodeId as SceneNodeId, NodeKind, Primitive, Scene};
-use oxiview_style::{Display, Overflow, Position};
+use oxiview_style::{Display, FocusRing, Overflow, Position};
 use std::collections::HashMap;
 
 struct PaintItem {
@@ -48,6 +48,7 @@ struct PaintFrame {
 struct DrawHandles {
     background: Option<SceneNodeId>,
     border: Option<SceneNodeId>,
+    focus_ring: Option<SceneNodeId>,
     custom: Vec<SceneNodeId>,
 }
 
@@ -55,6 +56,7 @@ struct DrawHandles {
 pub(super) struct DrawChanges {
     pub(super) background: bool,
     pub(super) border: bool,
+    pub(super) focus_ring: bool,
     pub(super) custom: bool,
 }
 
@@ -103,6 +105,11 @@ impl DrawHandles {
                     NodeKind::Draw(border.primitive(node.style.border_color)),
                 )?;
             }
+            if changes.focus_ring
+                && let Some((id, primitive)) = self.focus_ring.zip(painting.focus_ring(node))
+            {
+                scene.replace(id, NodeKind::Draw(primitive))?;
+            }
         }
         if changes.custom {
             // A length change invalidates the Scene and its handles before paint.
@@ -122,20 +129,27 @@ impl UiTree {
             return Err(UiError::InvalidViewport);
         }
         self.layout(viewport)?;
+        if let Some(cache) = &self.paint_cache
+            && cache.scale == scale
+            && cache.changes.is_empty()
+        {
+            self.diagnostics.scene_cache_hits = self.diagnostics.scene_cache_hits.saturating_add(1);
+            self.paint_dirty = false;
+            return Ok(cache.snapshot());
+        }
+        self.repaint(scale)
+    }
+
+    fn repaint(&mut self, scale: f64) -> Result<PaintedScene, UiError> {
         if let Some(mut cache) = self.paint_cache.take()
             && cache.scale == scale
         {
             let changed_nodes = cache.changes.len();
-            if changed_nodes == 0 {
-                self.diagnostics.scene_cache_hits =
-                    self.diagnostics.scene_cache_hits.saturating_add(1);
-            } else {
-                let _span = tracing::info_span!("ui_paint_update", nodes = changed_nodes).entered();
-                // A failed replacement drops this cache. Earlier snapshots are
-                // independent, and the next paint rebuilds from the live tree.
-                cache.update(self)?;
-                self.diagnostics.record_scene_update(changed_nodes);
-            }
+            let _span = tracing::info_span!("ui_paint_update", nodes = changed_nodes).entered();
+            // A failed replacement drops this cache. Earlier snapshots are
+            // independent, and the next paint rebuilds from the live tree.
+            cache.update(self)?;
+            self.diagnostics.record_scene_update(changed_nodes);
             let painted = cache.snapshot();
             self.paint_cache = Some(cache);
             self.paint_dirty = false;
@@ -237,8 +251,7 @@ impl UiTree {
         Ok(None)
     }
 
-    fn z_eligible(&self, id: NodeId) -> Result<bool, UiError> {
-        let node = self.node(id)?;
+    fn z_eligible(&self, node: &Node) -> Result<bool, UiError> {
         if node.style.layout.position != Position::Static {
             return Ok(true);
         }
@@ -249,12 +262,6 @@ impl UiTree {
             ));
         }
         Ok(false)
-    }
-    fn context(&self, id: NodeId) -> Result<bool, UiError> {
-        let style = &self.node(id)?.style;
-        Ok(id == self.root
-            || style.opacity < 1.0
-            || (style.z_index.is_some() && self.z_eligible(id)?))
     }
     fn items(&self, root: NodeId) -> Result<Vec<PaintItem>, UiError> {
         let mut items = Vec::new();
@@ -267,13 +274,13 @@ impl UiTree {
             if node.hidden || node.style.layout.display == Display::None {
                 continue;
             }
-            let context = self.context(id)?;
-            let positioned = positioned_ancestor || node.style.layout.position != Position::Static;
-            let z = if self.z_eligible(id)? {
-                node.style.z_index.unwrap_or(0)
-            } else {
-                0
+            let z_index = match node.style.z_index {
+                Some(z) if self.z_eligible(node)? => Some(z),
+                _ => None,
             };
+            let context = node.style.opacity < 1.0 || z_index.is_some();
+            let positioned = positioned_ancestor || node.style.layout.position != Position::Static;
+            let z = z_index.unwrap_or(0);
             let phase = if context && z < 0 {
                 0
             } else if context && z > 0 {
@@ -287,7 +294,7 @@ impl UiTree {
                 id,
                 context,
                 phase,
-                z: if context { z } else { 0 },
+                z,
                 ordinal: items.len(),
             });
             if !context {
@@ -326,14 +333,19 @@ impl UiTree {
                 NodeKind::Opacity(self.node(id)?.style.opacity),
             )?;
         }
-        self.paint_node(frame, scope, id, scale)?;
+        let mut focus_rings = Vec::new();
+        self.paint_node(frame, scope, id, scale, &mut focus_rings)?;
         for item in self.items(id)? {
             if item.context {
                 self.paint_context(frame, scope, item.id, Some(id), scale)?;
             } else {
                 let clipped = self.ancestor_clips(&mut frame.scene, scope, item.id, Some(id))?;
-                self.paint_node(frame, clipped, item.id, scale)?;
+                self.paint_node(frame, clipped, item.id, scale, &mut focus_rings)?;
             }
+        }
+        for node in focus_rings {
+            let clipped = self.ancestor_clips(&mut frame.scene, scope, node, Some(id))?;
+            self.paint_focus_ring(frame, clipped, node)?;
         }
         Ok(())
     }
@@ -371,6 +383,7 @@ impl UiTree {
         parent: SceneNodeId,
         id: NodeId,
         scale: f64,
+        focus_rings: &mut Vec<NodeId>,
     ) -> Result<(), UiError> {
         let node = self.node(id)?;
         let rect = self.bounds(id)?;
@@ -389,6 +402,27 @@ impl UiTree {
             draws
         };
         frame.draws.insert(id, draws);
+        if node_focus_ring(node).is_some() {
+            focus_rings.push(id);
+        }
+        Ok(())
+    }
+
+    fn paint_focus_ring(
+        &self,
+        frame: &mut PaintFrame,
+        parent: SceneNodeId,
+        id: NodeId,
+    ) -> Result<(), UiError> {
+        let node = self.node(id)?;
+        let rect = self.bounds(id)?;
+        let radii = normalized_radii(rect, node.style.border_radii);
+        if let Some(ring) =
+            node_focus_ring(node).and_then(|ring| focus_ring_shape(rect, radii, ring))
+            && let Some(draws) = frame.draws.get_mut(&id)
+        {
+            draws.focus_ring = Some(append(&mut frame.scene, parent, NodeKind::Draw(ring))?);
+        }
         Ok(())
     }
     fn padding_clip(&self, id: NodeId) -> Result<(Rect, CornerRadii), UiError> {
@@ -448,6 +482,10 @@ impl NodePainting {
             .map(|radii| Primitive::Fill(self.rect, radii, Brush::Solid(color)))
     }
 
+    fn focus_ring(&self, node: &Node) -> Option<Primitive> {
+        focus_ring_shape(self.rect, self.background_radii?, node_focus_ring(node)?)
+    }
+
     fn emit(
         &self,
         scene: &mut Scene,
@@ -487,6 +525,24 @@ impl BorderPainting {
     fn primitive(&self, color: Color) -> Primitive {
         Primitive::Stroke(self.rect, self.radii, self.width, Brush::Solid(color))
     }
+}
+
+fn node_focus_ring(node: &Node) -> Option<FocusRing> {
+    node.theme.as_ref()?.focus_ring
+}
+
+fn focus_ring_shape(rect: Rect, radii: CornerRadii, ring: FocusRing) -> Option<Primitive> {
+    let size = rect.size();
+    let width = ring.width.min(size.width() / 2.0).min(size.height() / 2.0);
+    (width > 0.0).then(|| {
+        let inset_width = width / 2.0;
+        Primitive::Stroke(
+            inset(rect, inset_width),
+            reduce_radii(radii, inset_width),
+            width,
+            Brush::Solid(ring.color),
+        )
+    })
 }
 
 fn padding_box(rect: Rect, radii: CornerRadii, width: f64) -> (Rect, CornerRadii) {

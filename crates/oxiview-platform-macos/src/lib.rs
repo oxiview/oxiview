@@ -7,5 +7,7 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(all(target_os = "macos", feature = "diagnostics"))]
+pub use macos::diagnostic_m5_input_probe;
 #[cfg(target_os = "macos")]
 pub use macos::{MacOsControl, MacOsPlatform};

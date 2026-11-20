@@ -26,6 +26,14 @@ use std::{
     time::Duration,
 };
 
+mod keyboard;
+#[cfg(feature = "diagnostics")]
+mod m5_input_probe;
+mod preferences;
+
+#[cfg(feature = "diagnostics")]
+pub use m5_input_probe::diagnostic_m5_input_probe;
+
 // Core Foundation's source is explicitly registered in both the ordinary common
 // modes and our resize-only mode. The latter services commands/display links
 // without recursively dispatching AppKit input or committing its resize transaction.
@@ -73,9 +81,11 @@ fn seconds(value: f64) -> Duration {
 // seconds of mach absolute uptime. Keep that origin (not process-relative time),
 // so input capture timestamps require only seconds-to-Duration conversion.
 fn capabilities() -> Capabilities {
+    use SystemPreference::*;
     Capabilities {
         frame_policies: vec![FramePolicy::OnDemand],
         native_surface: true,
+        system_preferences: vec![Appearance, AccentColor, IncreasedContrast, ReducedMotion],
     }
 }
 fn failure(message: &str) -> Error {
@@ -155,6 +165,7 @@ impl Shared {
 struct Endpoint {
     shared: Arc<Shared>,
     terminal: bool,
+    initial_preferences: SystemPreferences,
 }
 impl Endpoint {
     fn receive(
@@ -240,6 +251,9 @@ impl WindowEndpoint for Endpoint {
     fn capabilities(&self) -> Capabilities {
         capabilities()
     }
+    fn preferences(&self) -> SystemPreferences {
+        self.initial_preferences
+    }
     fn now(&self) -> Duration {
         native_time()
     }
@@ -321,11 +335,23 @@ struct Native {
     timeout: Duration,
     sequence: Cell<u64>,
     scale: Cell<f64>,
+    preferences: Cell<SystemPreferences>,
     initial: Cell<bool>,
     interval: Cell<Duration>,
     target: Cell<Duration>,
     used_slot: Cell<Duration>,
     closed: Cell<bool>,
+}
+impl Native {
+    fn refresh_preferences(&self) {
+        if !self.closed.get() {
+            let preferences = preferences::snapshot(&self.view);
+            if self.preferences.replace(preferences) != preferences {
+                self.shared
+                    .emit(WindowEvent::PreferencesChanged { preferences });
+            }
+        }
+    }
 }
 thread_local! { static WINDOWS: RefCell<Vec<Rc<Native>>> = const { RefCell::new(Vec::new()) }; }
 fn natives() -> Vec<Rc<Native>> {
@@ -655,6 +681,12 @@ define_class!(
         }); }
         #[unsafe(method(viewDidChangeBackingProperties))]
         fn backing(&self) { boundary(|| { if let Some(w) = self.ivars().id.get().and_then(find) { resize(&w); } }); }
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn changed_appearance(&self) { boundary(|| {
+            // SAFETY: Forward this NSView override to the exact superclass method.
+            unsafe { let _: () = msg_send![super(self), viewDidChangeEffectiveAppearance]; }
+            if let Some(w) = self.ivars().id.get().and_then(find) { w.refresh_preferences(); }
+        }); }
         #[unsafe(method(tick:))]
         fn tick(&self, link: &CADisplayLink) { boundary(|| {
             link.setPaused(true);
@@ -742,18 +774,21 @@ impl ContentView {
     }
     fn key(&self, event: &NSEvent, pressed: bool) {
         if let Some(w) = self.ivars().id.get().and_then(find) {
-            let code = key(event.keyCode());
-            let repeat = pressed && event.isARepeat();
-            w.shared.emit(WindowEvent::Key {
-                code,
-                pressed,
-                repeat,
-                timestamp: seconds(event.timestamp()),
-            });
+            // AppKit routes native key equivalents before the responder's keyDown:.
+            let transition = keyboard::transition(event, pressed);
+            let escape_press = matches!(
+                transition,
+                WindowEvent::Key {
+                    code: KeyCode::Escape,
+                    pressed: true,
+                    repeat: false,
+                    ..
+                }
+            );
+            w.shared.emit(transition);
             // The raw key callback replaces NSResponder's keyDown:. During a drag
             // let AppKit deliver its cancellation command to cancelOperation:.
-            if code == KeyCode::Escape && pressed && !repeat && NSEvent::pressedMouseButtons() != 0
-            {
+            if escape_press && NSEvent::pressedMouseButtons() != 0 {
                 self.interpretKeyEvents(&NSArray::from_slice(&[event]));
             }
         }
@@ -884,25 +919,6 @@ fn button(code: isize) -> PointerButton {
         n => PointerButton::Other(u16::try_from(n).unwrap_or(u16::MAX)),
     }
 }
-fn key(code: u16) -> KeyCode {
-    match code {
-        53 => KeyCode::Escape,
-        36 | 76 => KeyCode::Enter,
-        49 => KeyCode::Space,
-        48 => KeyCode::Tab,
-        51 => KeyCode::Backspace,
-        123 => KeyCode::ArrowLeft,
-        124 => KeyCode::ArrowRight,
-        125 => KeyCode::ArrowDown,
-        126 => KeyCode::ArrowUp,
-        0 => KeyCode::KeyA,
-        2 => KeyCode::KeyD,
-        1 => KeyCode::KeyS,
-        13 => KeyCode::KeyW,
-        _ => KeyCode::Unidentified,
-    }
-}
-
 /// AppKit event-loop entry point. Construct anywhere; run on the process main thread.
 #[derive(Default)]
 pub struct MacOsPlatform {
@@ -1275,6 +1291,7 @@ impl EventLoopContext for Context {
             );
             link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), resize_mode());
         }
+        let initial_preferences = preferences::snapshot(&view);
         let native = Rc::new(Native {
             window,
             view,
@@ -1285,6 +1302,7 @@ impl EventLoopContext for Context {
             timeout: attributes.resize_timeout,
             sequence: Cell::new(0),
             scale: Cell::new(1.0),
+            preferences: Cell::new(initial_preferences),
             initial: Cell::new(true),
             interval: Cell::new(Duration::from_nanos(16_666_667)),
             target: Cell::new(Duration::ZERO),
@@ -1308,6 +1326,7 @@ impl EventLoopContext for Context {
             endpoint: Box::new(Endpoint {
                 shared,
                 terminal: false,
+                initial_preferences,
             }),
         })
     }
@@ -1336,6 +1355,7 @@ impl Platform for MacOsPlatform {
             let app = NSApplication::sharedApplication(mtm);
             app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
             app.finishLaunching();
+            let _preference_observers = preferences::observe(mtm);
             let mut context = Context {
                 #[cfg(feature = "diagnostics")]
                 diagnostics: self.diagnostics,
@@ -1350,6 +1370,9 @@ impl Platform for MacOsPlatform {
             }
             service();
             for w in natives() {
+                // Sample before the first resize even if AppKit has not yet
+                // drained main-queue notifications posted during initialization.
+                w.refresh_preferences();
                 w.initial.set(false);
                 resize(&w);
             }
@@ -1371,6 +1394,19 @@ impl Platform for MacOsPlatform {
 mod tests {
     use super::*;
     #[test]
+    fn capabilities_report_observable_preferences() {
+        let fields = capabilities().system_preferences;
+        assert_eq!(
+            fields,
+            [
+                SystemPreference::Appearance,
+                SystemPreference::AccentColor,
+                SystemPreference::IncreasedContrast,
+                SystemPreference::ReducedMotion,
+            ]
+        );
+    }
+    #[test]
     fn slot_recalibration_does_not_deliver_twice() {
         let interval = Duration::from_millis(10);
         let used = Duration::from_millis(100);
@@ -1390,25 +1426,7 @@ mod tests {
         assert_eq!(feedback.offset(), Duration::from_nanos(16_666_667));
     }
     #[test]
-    fn physical_key_subset_and_buttons() {
-        for (code, expected) in [
-            (53, KeyCode::Escape),
-            (36, KeyCode::Enter),
-            (49, KeyCode::Space),
-            (48, KeyCode::Tab),
-            (51, KeyCode::Backspace),
-            (123, KeyCode::ArrowLeft),
-            (124, KeyCode::ArrowRight),
-            (125, KeyCode::ArrowDown),
-            (126, KeyCode::ArrowUp),
-            (0, KeyCode::KeyA),
-            (2, KeyCode::KeyD),
-            (1, KeyCode::KeyS),
-            (13, KeyCode::KeyW),
-            (999, KeyCode::Unidentified),
-        ] {
-            assert_eq!(key(code), expected);
-        }
+    fn pointer_buttons() {
         assert_eq!(button(0), PointerButton::Primary);
         assert_eq!(button(1), PointerButton::Secondary);
         assert_eq!(button(2), PointerButton::Middle);

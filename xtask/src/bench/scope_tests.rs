@@ -34,6 +34,11 @@ const DIVAN_M4: &str = "text_pipeline fastest │ slowest │ median │ mean �
 ├─ shape_wrapped_paragraph 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 5120
 ╰─ warm_label_glyphs_2x 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 51200";
 
+const DIVAN_M5: &str = "interaction fastest │ slowest │ median │ mean │ samples │ iters
+├─ tab_256 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80
+├─ action_eight_contexts 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80
+╰─ color_token_16_of_256 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80";
+
 fn fixture_machine() -> Machine {
     Machine {
         model: "Fixture model".into(),
@@ -171,6 +176,19 @@ impl Fixture {
                         "text_pipeline::shape_rich_paragraph",
                         "text_pipeline::cold_label_glyphs_2x",
                         "text_pipeline::warm_label_glyphs_2x",
+                    ],
+                    Scope::M5 => &[
+                        "bench",
+                        "--locked",
+                        "-p",
+                        "oxiview-core",
+                        "--bench",
+                        "interaction",
+                        "--",
+                        "--exact",
+                        "interaction::tab_256",
+                        "interaction::action_eight_contexts",
+                        "interaction::color_token_16_of_256",
                     ],
                 };
                 assert!(command.get_args().eq(expected.iter().copied()));
@@ -346,6 +364,7 @@ fn each_milestone_records_only_its_metrics_and_preserves_earlier_baselines() {
     for (scope, label, names, rounds) in [
         (Scope::M3, "m3", M3_METRICS, DIVAN_M3),
         (Scope::M4, "m4", M4_METRICS, DIVAN_M4),
+        (Scope::M5, "m5", M5_METRICS, DIVAN_M5),
     ] {
         let baseline = || -> Value {
             serde_json::from_slice(&fs::read(fixture.path()).expect("machine baseline"))

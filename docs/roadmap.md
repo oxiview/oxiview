@@ -25,7 +25,7 @@ in progress, the table names what is already usable and what remains open.
 | M3 | [Reactivity and components](plans/m3-reactivity-and-components.md) ✅ | Signals, scopes, Show/For, Builders, optional Rust `view!`, function components, local executor and background pool. Snake passed native review and replay. Four reactive and component workloads passed performance baseline comparison. | 0005, 0006, 0035 |
 | M3+1 | [Precompiled .oxi sources and Snake](plans/m3-plus-1-oxi.md) ✅ | Optional view fragments, named views, typed styles and reusable Rust logic. The `snake-oxi` example reproduces Snake through the same Builders and replay. | 0006, 0008, 0037 |
 | M4 | [Real text and Snake](plans/m4-text-and-snake.md) ✅ | Rich text, Flex/Grid text baselines, hybrid glyph rendering, COLRv1 and the Vello GPU glyph atlas. Snake passed native text review. The owner accepted eight snapshots and four performance baselines. | 0010, 0012, 0038 |
-| M5 | Focus, keyboard, and themes | Focus and Tab order; Action/Keymap; state variants; tokens and theme hot reload; system preference signals | 0008, 0011 |
+| M5 | [Focus, keyboard, and themes](plans/m5-focus-keyboard-and-themes.md) ✅ | Focus traversal and recovery, layered Keymaps, state variants, theme hot reload and system preferences. Snake M5 passed native settings review and persistent rebinding replay. Three snapshots and three benchmark baselines were accepted. | 0008, 0011, 0017, 0039–0041 |
 | M6 | Text editing | Editing core; IME preedit; selection; undo; fuzzing | 0010, 0011 |
 | M7 | Basic widgets and scrolling | Basic widgets; scrolling and inertia; virtual lists and tables | 0001 |
 | M8 | Animation | Springs/easing; interruption; compositing fast path; timeline orchestration | 0015 |

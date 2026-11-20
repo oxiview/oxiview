@@ -33,3 +33,8 @@ harness = false
 name = "components"
 path = "../../benches/components.rs"
 harness = false
+
+[[bench]]
+name = "interaction"
+path = "../../benches/interaction.rs"
+harness = false

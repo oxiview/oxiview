@@ -1,5 +1,5 @@
-use crate::Error;
-use oxiview_base::{NativeSurfaceHandle, Point, Size};
+use crate::{Error, KeyCode, KeyModifiers, LogicalKey};
+use oxiview_base::{Color, NativeSurfaceHandle, Point, Size};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -68,6 +68,25 @@ pub struct Capabilities {
     /// Whether this backend supplies a native presentation object.
     /// Headless backends report false and return no native surface handle.
     pub native_surface: bool,
+    /// Preference fields the backend can observe or inject. A snapshot carries
+    /// the values currently available for its particular window.
+    pub system_preferences: Vec<SystemPreference>,
+}
+
+/// Identifies a system preference in a backend capability query.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SystemPreference {
+    /// Effective light or dark appearance.
+    Appearance,
+    /// System accent color.
+    AccentColor,
+    /// Increased display contrast.
+    IncreasedContrast,
+    /// Preference for reduced motion.
+    ReducedMotion,
+    /// Logical text-size multiplier.
+    TextScale,
 }
 
 /// A platform-neutral pointer button.
@@ -84,38 +103,29 @@ pub enum PointerButton {
     Other(u16),
 }
 
-/// Physical key positions for the M1 demo, without text input or key mapping.
+/// Effective light or dark system appearance for a window.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeyCode {
-    /// Escape key.
-    Escape,
-    /// Enter/return key.
-    Enter,
-    /// Space bar.
-    Space,
-    /// Tab key.
-    Tab,
-    /// Backspace key.
-    Backspace,
-    /// Left arrow.
-    ArrowLeft,
-    /// Right arrow.
-    ArrowRight,
-    /// Up arrow.
-    ArrowUp,
-    /// Down arrow.
-    ArrowDown,
-    /// Physical A position on a US keyboard.
-    KeyA,
-    /// Physical D position on a US keyboard.
-    KeyD,
-    /// Physical S position on a US keyboard.
-    KeyS,
-    /// Physical W position on a US keyboard.
-    KeyW,
-    /// A key outside the demo subset, not a native key code.
-    Unidentified,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SystemAppearance {
+    /// Light appearance.
+    Light,
+    /// Dark appearance.
+    Dark,
+}
+
+/// Owned preferences for a window. Each missing field reports an unavailable value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SystemPreferences {
+    /// Effective system appearance.
+    pub appearance: Option<SystemAppearance>,
+    /// System accent in the framework's sRGB color representation.
+    pub accent_color: Option<Color>,
+    /// Whether to increase contrast.
+    pub increased_contrast: Option<bool>,
+    /// Whether to reduce motion.
+    pub reduced_motion: Option<bool>,
+    /// Finite positive multiplier for logical font sizes, independent of display scale.
+    pub text_scale: Option<f64>,
 }
 
 /// Ordered event delivered by one window's endpoint.
@@ -171,16 +181,25 @@ pub enum WindowEvent {
         /// Monotonic interruption capture time.
         timestamp: Duration,
     },
-    /// Raw physical key transition, without IME or key mapping.
+    /// Physical and logical shortcut key transition. Text commits are separate.
     Key {
-        /// Physical key.
+        /// Layout-independent physical position.
         code: KeyCode,
+        /// Shortcut identity in the keyboard layout active at capture.
+        logical: LogicalKey,
+        /// Modifiers held at capture.
+        modifiers: KeyModifiers,
         /// True for a press, false for a release.
         pressed: bool,
         /// True only for repeated key presses.
         repeat: bool,
         /// Monotonic input capture time.
         timestamp: Duration,
+    },
+    /// A system preference snapshot delivered on the assigned window thread.
+    PreferencesChanged {
+        /// Current preferences, including any unavailable fields.
+        preferences: SystemPreferences,
     },
     /// Scale changed; precedes the corresponding `Resized` event.
     ScaleFactorChanged {
@@ -347,6 +366,11 @@ pub trait WindowEndpoint: Send {
     fn id(&self) -> WindowId;
     /// Queries window support on the assigned window thread.
     fn capabilities(&self) -> Capabilities;
+    /// Returns the snapshot captured at window creation. Any later changes,
+    /// including ones before the first resize, arrive in the event queue.
+    fn preferences(&self) -> SystemPreferences {
+        SystemPreferences::default()
+    }
     /// Samples the backend's monotonic clock on the assigned window thread.
     fn now(&self) -> Duration;
     /// Blocks on the assigned window thread until an event arrives, without polling.

@@ -8,8 +8,10 @@
 //! waits respond to virtual-clock advancement rather than wall-clock sleeping.
 
 mod interface;
+mod keyboard;
 
 pub use interface::*;
+pub use keyboard::{KeyCode, KeyModifiers, LogicalKey, ShortcutPlatform};
 
 /// Platform failures in owned, platform-neutral terms.
 #[derive(Debug, thiserror::Error)]

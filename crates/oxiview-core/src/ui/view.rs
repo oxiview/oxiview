@@ -1,11 +1,13 @@
 use super::{
     NodeId, NodeMeasure, NodeSemantics, UiCommandSender, UiCommands, UiError, UiPointerEvent,
     UiTree,
+    focus::FocusScope,
     input::{Command, NodeHandler},
+    theme::{ViewStyles, merge_patch},
 };
 use oxiview_reactive::{Owner, ReactiveError, Scope, Signal, batch, effect, signal};
 use oxiview_scene::Primitive;
-use oxiview_style::{Display, Style};
+use oxiview_style::{Display, StateVariant, Style, StylePatch};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -22,6 +24,7 @@ pub(super) type Setup = Box<dyn FnOnce(&mut UiTree, NodeId, Owner) -> Result<(),
 pub struct View {
     factory: Option<Factory>,
     style: Option<Style>,
+    theme: Option<Box<ViewStyles>>,
     children: Vec<View>,
     handler: Option<Box<NodeHandler>>,
     content: Option<Vec<Primitive>>,
@@ -36,6 +39,7 @@ pub fn node() -> View {
     View {
         factory: None,
         style: None,
+        theme: None,
         children: Vec::new(),
         handler: None,
         content: None,
@@ -54,9 +58,26 @@ pub fn component(factory: impl FnOnce() -> Result<View, UiError> + 'static) -> V
     }
 }
 impl View {
-    /// Sets initial typed style.
+    /// Sets complete initial local style, including values equal to their defaults.
     pub fn style(mut self, style: Style) -> Self {
         self.style = Some(style);
+        self
+    }
+    /// Selects an explicit widget type for this node's theme rules.
+    pub fn theme_type(mut self, widget: impl Into<String>) -> Self {
+        self.theme.get_or_insert_with(Box::default).widget = Some(Rc::from(widget.into()));
+        self
+    }
+    /// Adds sparse local properties above theme rules and complete local values.
+    pub fn style_patch(mut self, patch: StylePatch) -> Self {
+        let styles = self.theme.get_or_insert_with(Box::default);
+        merge_patch(&mut styles.base, Some(Box::new(patch)));
+        self
+    }
+    /// Adds local properties for one interaction state, above the local base.
+    pub fn style_variant(mut self, state: StateVariant, patch: StylePatch) -> Self {
+        let styles = self.theme.get_or_insert_with(Box::default);
+        merge_patch(&mut styles.variants[state as usize], Some(Box::new(patch)));
         self
     }
     /// Appends an ordered child description.
@@ -123,6 +144,13 @@ impl View {
     fn merge_component(mut inner: View, mut outer: View) -> View {
         if outer.style.is_some() {
             inner.style = outer.style.take();
+        }
+        if let Some(outer) = outer.theme.take() {
+            if let Some(inner) = &mut inner.theme {
+                inner.overlay(*outer);
+            } else {
+                inner.theme = Some(outer);
+            }
         }
         if outer.handler.is_some() {
             inner.handler = outer.handler.take();
@@ -200,8 +228,16 @@ impl UiTree {
             self.node_mut(root)?.scopes.push(scope);
             return Ok(root);
         }
+        let complete = if view.theme.is_some() {
+            view.style.clone()
+        } else {
+            None
+        };
         let root = self.append_scoped(parent, view.style.take().unwrap_or_default(), scope)?;
         let result = in_owner(owner, || {
+            if let Some(styles) = view.theme.take() {
+                self.install_node_styles(root, *styles, complete)?;
+            }
             if let Some(handler) = view.handler.take() {
                 self.node_mut(root)?.handler = Some(Rc::new(RefCell::new(handler)));
             }
@@ -351,6 +387,20 @@ where
                         let mut entries = entries
                             .try_borrow_mut()
                             .map_err(|_| UiError::CommandBufferBusy)?;
+                        let removed_roots: HashSet<_> = entries
+                            .iter()
+                            .filter(|(key, _)| !keys.contains(*key))
+                            .map(|(_, entry)| entry.root)
+                            .filter(|&id| tree.parent(id) == Ok(Some(container)))
+                            .collect();
+                        let removed: Vec<_> = tree
+                            .children(container)?
+                            .iter()
+                            .copied()
+                            .filter(|id| removed_roots.contains(id))
+                            .collect();
+                        let scope = FocusScope::Subtrees(&removed_roots);
+                        let recovery = tree.plan_focus_loss(scope)?;
                         let mut created = Vec::new();
                         for (key, value) in &desired {
                             if entries
@@ -388,15 +438,9 @@ where
                         // Once mounted, new rows must remain discoverable even if a
                         // later lifecycle callback or item binding rejects this update.
                         entries.extend(created);
-                        let removed: HashSet<_> = entries
-                            .iter()
-                            .filter(|(key, _)| !keys.contains(*key))
-                            .map(|(_, entry)| entry.root)
-                            .collect();
-                        for child in tree.children(container)?.to_vec() {
-                            if removed.contains(&child) {
-                                tree.apply(Command::Remove(child), handler, work)?;
-                            }
+                        tree.apply_focus_loss(scope, recovery)?;
+                        for child in removed {
+                            tree.apply(Command::Remove(child), handler, work)?;
                         }
                         entries.retain(|key, _| keys.contains(key));
                         for (index, (key, _)) in desired.iter().enumerate() {

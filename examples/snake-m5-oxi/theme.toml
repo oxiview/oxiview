@@ -1,0 +1,108 @@
+version = 1
+
+[tokens.colors]
+paper = "#f5f6ef"
+surface = "#fffffa"
+panel = "#e5eddf"
+ink = "#203428"
+muted = "#536451"
+accent_surface = "#c7e8ab"
+button = "#fafbf6"
+hover = "#e5eddf"
+pressed = "#bacfba"
+line = "#c1cdbd"
+primary = "#b8e876"
+on_primary = "#203428"
+on_restart = "#ffffff"
+system_accent = "#3868b3"
+
+[tokens.spacing]
+control = 5
+
+[tokens.radii]
+control = 8
+
+[tokens.font_sizes]
+control = 13
+
+[dark.colors]
+paper = "#15231e"
+surface = "#23362e"
+panel = "#30473b"
+ink = "#f1f5e9"
+muted = "#b4c5b7"
+accent_surface = "#354e35"
+button = "#32493d"
+hover = "#425c4b"
+pressed = "#546f5c"
+line = "#637d6a"
+primary = "#9fcd72"
+system_accent = "#92bafc"
+
+[high_contrast.colors]
+system_accent = "#e77e0e"
+line = "#8e927a"
+
+[rules.window]
+background = "@paper"
+
+[rules.settings]
+background = "@panel"
+border_radii = 12
+
+[rules.score]
+background = "@surface"
+border_color = "@line"
+
+[rules.score_accent]
+background = "@accent_surface"
+border_color = "@line"
+
+[rules.text]
+text_color = "@ink"
+
+[rules.muted]
+text_color = "@muted"
+
+[rules.button_label]
+text_color = "@ink"
+text_size = "@control"
+
+[rules.primary_label]
+text_color = "@on_primary"
+
+[rules.restart_label]
+text_color = "@on_restart"
+
+[rules.button]
+background = "@button"
+border_color = "@line"
+border_radii = "@control"
+padding = "@control"
+
+[rules.button.hovered]
+background = "@hover"
+
+[rules.button.pressed]
+background = "@pressed"
+opacity = 0.86
+
+[rules.button.disabled]
+opacity = 0.48
+
+[rules.button.focused]
+focus_ring = { color = "@system_accent", width = 2 }
+
+[rules.primary]
+background = "@primary"
+border_color = "@primary"
+border_radii = "@control"
+
+[rules.primary.pressed]
+opacity = 0.82
+
+[rules.primary.focused]
+focus_ring = { color = "@system_accent", width = 3 }
+
+[rules.board.focused]
+focus_ring = { color = "@system_accent", width = 3 }

@@ -11,7 +11,11 @@ workspace = true
 
 [features]
 default = []
-diagnostics = ["dep:libc"]
+diagnostics = ["dep:libc", "objc2-foundation/NSDate", "objc2-foundation/NSTimer"]
+
+[[example]]
+name = "m5_input_probe"
+required-features = ["diagnostics"]
 
 [dependencies]
 oxiview-platform.workspace = true
@@ -23,6 +27,6 @@ libc = { workspace = true, optional = true }
 block2.workspace = true
 objc2-metal.workspace = true
 objc2.workspace = true
-objc2-foundation.workspace = true
-objc2-app-kit.workspace = true
+objc2-foundation = { workspace = true, features = ["NSNotification", "NSOperation", "block2"] }
+objc2-app-kit = { workspace = true, features = ["NSAccessibility", "NSAppearance", "NSColor", "NSColorSpace", "NSWorkspace", "block2"] }
 objc2-quartz-core.workspace = true

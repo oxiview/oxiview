@@ -1,0 +1,11 @@
+use oxiview_style::{Style, StylePatch};
+
+// Keep the authored geometry while the theme supplies surface colors.
+pub(crate) fn geometry(style: Style) -> StylePatch {
+    StylePatch {
+        layout: style.layout.into(),
+        hit_test: Some(style.hit_test),
+        border_radii: Some(style.border_radii),
+        ..Default::default()
+    }
+}
