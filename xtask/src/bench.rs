@@ -401,11 +401,18 @@ const M2_METRICS: &[&str] = &[
     "ui_tree/hit_testing",
     "ui_tree/paint_only_update",
 ];
+const M3_METRICS: &[&str] = &[
+    "components/batched_memo_diamond",
+    "components/bound_style_update",
+    "components/show_mount_and_dispose",
+    "components/keyed_reorder_32",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scope {
     Full,
     M2,
+    M3,
 }
 
 impl Scope {
@@ -413,6 +420,7 @@ impl Scope {
         match self {
             Self::Full => "bench",
             Self::M2 => "bench-m2",
+            Self::M3 => "bench-m3",
         }
     }
 
@@ -420,6 +428,7 @@ impl Scope {
         match name {
             "bench" => Some(Self::Full),
             "bench-m2" => Some(Self::M2),
+            "bench-m3" => Some(Self::M3),
             _ => None,
         }
     }
@@ -446,11 +455,25 @@ impl Scope {
                 "bench-m2-2.log",
                 "bench-m2-3.log",
             ],
+            Self::M3 => &[
+                "bench-m3-results.json",
+                "bench-m3-1.log",
+                "bench-m3-2.log",
+                "bench-m3-3.log",
+            ],
         }
     }
 
     pub(crate) fn results_file(self) -> &'static str {
         self.artifacts()[0]
+    }
+
+    fn selection(self) -> Option<(&'static str, &'static [&'static str])> {
+        match self {
+            Self::Full => None,
+            Self::M2 => Some(("M2", M2_METRICS)),
+            Self::M3 => Some(("M3", M3_METRICS)),
+        }
     }
 
     fn divan_args(self) -> &'static [&'static str] {
@@ -468,6 +491,14 @@ impl Scope {
                 "--bench",
                 "ui_tree",
             ],
+            Self::M3 => &[
+                "bench",
+                "--locked",
+                "-p",
+                "oxiview-core",
+                "--bench",
+                "components",
+            ],
         }
     }
 
@@ -475,6 +506,7 @@ impl Scope {
         match self {
             Self::Full => "cargo xtask bench --record",
             Self::M2 => "cargo xtask bench --m2 --record",
+            Self::M3 => "cargo xtask bench --m3 --record",
         }
     }
 }
@@ -506,8 +538,11 @@ impl BenchCheck {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        if self.scope == Scope::M2 {
-            log.push_str("Scope: M2 layout and UI tree (8 metrics)\n");
+        let selection = self.scope.selection();
+        match self.scope {
+            Scope::Full => {}
+            Scope::M2 => log.push_str("Scope: M2 layout and UI tree (8 metrics)\n"),
+            Scope::M3 => log.push_str("Scope: M3 reactivity and components (4 metrics)\n"),
         }
         let machine = probe_machine()?;
         let id = machine_id(&machine);
@@ -551,10 +586,10 @@ impl BenchCheck {
                 .args(self.scope.divan_args())
                 .current_dir(root)
                 .env("CARGO_TERM_COLOR", "never");
-            if self.scope == Scope::M2 {
+            if let Some((_, names)) = selection {
                 command
                     .args(["--", "--exact"])
-                    .args(M2_METRICS.iter().map(|name| name.replace('/', "::")));
+                    .args(names.iter().map(|name| name.replace('/', "::")));
             }
             for (key, _) in std::env::vars_os() {
                 if key.to_string_lossy().starts_with("DIVAN_") {
@@ -586,16 +621,16 @@ impl BenchCheck {
         {
             return Err("Metric sets differ across the three runs".into());
         }
-        if self.scope == Scope::M2
+        if let Some((milestone, names)) = selection
             && let Some(name) = rounds[0]
                 .keys()
-                .find(|name| !M2_METRICS.contains(&name.as_str()))
+                .find(|name| !names.contains(&name.as_str()))
         {
-            return Err(format!("Unexpected M2 metric: {name}"));
+            return Err(format!("Unexpected {milestone} metric: {name}"));
         }
         let mut metrics = match self.scope {
             Scope::Full => pending(),
-            Scope::M2 => BTreeMap::new(),
+            Scope::M2 | Scope::M3 => BTreeMap::new(),
         };
         for name in rounds[0].keys() {
             let mut samples: Vec<_> = rounds.iter().map(|round| round[name]).collect();
@@ -618,7 +653,7 @@ impl BenchCheck {
         }
         let measured = match self.scope {
             Scope::Full => measure_native(root),
-            Scope::M2 => Ok(BTreeMap::new()),
+            Scope::M2 | Scope::M3 => Ok(BTreeMap::new()),
         };
         let mut native = match measured {
             Ok(measurements) => measurements,
@@ -718,21 +753,23 @@ impl BenchCheck {
             results.push(serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old,
                 "hard_check_pass": hard.and_then(|m| m.hard_pass), "details": hard.map(|m| &m.details)}));
         }
-        let expected: Vec<&str> = match self.scope {
-            Scope::Full => previous
+        let expected: Vec<&str> = match selection {
+            None => previous
                 .iter()
                 .flat_map(|baseline| baseline.metrics.keys().map(String::as_str))
                 .collect(),
-            Scope::M2 => M2_METRICS.to_vec(),
+            Some((_, names)) => names.to_vec(),
         };
         for name in expected {
             if !metrics.contains_key(name) {
                 status = Status::Fail;
-                match self.scope {
-                    Scope::Full => log.push_str(&format!(
+                match selection {
+                    None => log.push_str(&format!(
                         "Missing recorded metric: {name}; silent removal is prohibited\n"
                     )),
-                    Scope::M2 => log.push_str(&format!("Missing M2 measurement: {name}\n")),
+                    Some((milestone, _)) => {
+                        log.push_str(&format!("Missing {milestone} measurement: {name}\n"))
+                    }
                 }
                 let old = previous
                     .as_ref()
@@ -750,8 +787,8 @@ impl BenchCheck {
             ));
         }
         let mut report = serde_json::json!({"machine_id":id,"metrics":results});
-        if self.scope == Scope::M2 {
-            report["scope"] = "m2".into();
+        if let Some((milestone, _)) = selection {
+            report["scope"] = milestone.to_ascii_lowercase().into();
         }
         fs::write(
             artifacts.join(self.scope.results_file()),
@@ -762,10 +799,10 @@ impl BenchCheck {
             return Err(error);
         }
         if self.record && status == Status::Pass {
-            let content = match (self.scope, original.as_deref()) {
-                (Scope::M2, Some(text)) => record::merge_m2(text, &metrics)?,
+            let content = match (selection, original.as_deref()) {
+                (Some(_), Some(text)) => record::merge_measured(text, &metrics)?,
                 (scope, _) => {
-                    if scope == Scope::M2 {
+                    if scope.is_some() {
                         metrics.extend(pending());
                     }
                     let baseline = Baseline {

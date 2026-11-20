@@ -38,6 +38,102 @@ fn ui(error: ReactiveError) -> UiError {
 }
 
 #[test]
+fn keyed_for_retries_a_failed_item_binding_without_remounting_new_rows() {
+    let scope = Scope::new().unwrap();
+    let rows = scope.run(|| signal(vec![(1_u8, 10_i32)])).unwrap();
+    let view = keyed_for(
+        rows,
+        |row| row.0,
+        |row| {
+            Ok(node().bind_style(move || {
+                let (_, width) = row.get()?;
+                if width < 0 {
+                    return Err(ReactiveError::User("negative row width".into()));
+                }
+                Ok(style(f64::from(width)))
+            }))
+        },
+    );
+    let mut tree = UiTree::new().unwrap();
+    let container = tree.mount(tree.root(), view).unwrap();
+    let first = tree.children(container).unwrap()[0];
+
+    rows.set(vec![(2, 20), (1, -1)]).unwrap();
+    let failed = tree.flush_updates(viewport(), |_, _, _| {}).unwrap();
+    assert!(
+        failed.reports.iter().flat_map(|report| &report.outcomes)
+            .any(|outcome| matches!(&outcome.result, Err(UiError::Reactive(message)) if message.contains("negative row width")))
+    );
+    let second = tree.children(container).unwrap()[0];
+    assert_eq!(tree.children(container).unwrap(), &[second, first]);
+
+    rows.set(vec![(1, 30), (2, 40)]).unwrap();
+    let recovered = tree.flush_updates(viewport(), |_, _, _| {}).unwrap();
+    assert!(
+        recovered
+            .reports
+            .iter()
+            .flat_map(|report| &report.outcomes)
+            .all(|outcome| outcome.result.is_ok())
+    );
+    assert_eq!(tree.children(container).unwrap(), &[first, second]);
+    assert_eq!(
+        tree.style(first).unwrap().layout.width,
+        Length::Points(30.0)
+    );
+    assert_eq!(
+        tree.style(second).unwrap().layout.width,
+        Length::Points(40.0)
+    );
+}
+
+#[test]
+fn keyed_for_discards_staged_rows_when_a_later_factory_fails() {
+    let scope = Scope::new().unwrap();
+    let rows = scope.run(|| signal(vec![1_u8])).unwrap();
+    let staged = Rc::new(Cell::new(None));
+    let observed = Rc::clone(&staged);
+    let view = keyed_for(
+        rows,
+        |value| *value,
+        move |item| {
+            match item.get().map_err(ui)? {
+                2 => observed.set(Some(item)),
+                3 => return Err(UiError::Reactive("row factory failed".into())),
+                _ => {}
+            }
+            Ok(node())
+        },
+    );
+    let mut tree = UiTree::new().unwrap();
+    let container = tree.mount(tree.root(), view).unwrap();
+    let original = tree.children(container).unwrap()[0];
+    rows.set(vec![2, 3]).unwrap();
+    let failed = tree.flush_updates(viewport(), |_, _, _| {}).unwrap();
+    assert!(
+        failed
+            .reports
+            .iter()
+            .flat_map(|report| &report.outcomes)
+            .any(|outcome| outcome.result.is_err())
+    );
+    assert_eq!(tree.children(container).unwrap(), &[original]);
+    assert_eq!(staged.get().unwrap().get(), Err(ReactiveError::Disposed));
+    rows.set(vec![2, 1]).unwrap();
+    let recovered = tree.flush_updates(viewport(), |_, _, _| {}).unwrap();
+    assert!(
+        recovered
+            .reports
+            .iter()
+            .flat_map(|report| &report.outcomes)
+            .all(|outcome| outcome.result.is_ok())
+    );
+    assert_eq!(tree.children(container).unwrap().len(), 2);
+    assert_eq!(tree.children(container).unwrap()[1], original);
+    assert_eq!(staged.get().unwrap().get(), Ok(2));
+}
+
+#[test]
 fn function_component_runs_once_and_binding_disposes_with_node() {
     let app_scope = Scope::new().unwrap();
     let width = app_scope.run(|| signal(80.0)).unwrap();

@@ -50,7 +50,10 @@ fn members(object: &str) -> Result<BTreeMap<String, Range<usize>>> {
     }
 }
 
-pub(super) fn merge_m2(original: &str, measured: &BTreeMap<String, Metric>) -> Result<String> {
+pub(super) fn merge_measured(
+    original: &str,
+    measured: &BTreeMap<String, Metric>,
+) -> Result<String> {
     let object = original.trim_start();
     let leading = original.len() - object.len();
     let fields = members(object)?;
@@ -63,7 +66,9 @@ pub(super) fn merge_m2(original: &str, measured: &BTreeMap<String, Metric>) -> R
         if let Some(range) = existing.get(name) {
             let start = offset + range.start;
             let fields = members(&original[start..offset + range.end])?;
-            let value = fields.get("value").ok_or("Missing recorded M2 value")?;
+            let value = fields
+                .get("value")
+                .ok_or("Missing recorded benchmark value")?;
             edits.push((
                 start + value.start..start + value.end,
                 serde_json::to_string(&metric.value).map_err(|e| e.to_string())?,

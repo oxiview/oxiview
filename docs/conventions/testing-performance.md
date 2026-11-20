@@ -12,7 +12,7 @@ Define versions only in root `[workspace.dependencies]`; crates inherit `divan.w
 
 ## Measurement and parsing
 
-Full bench runs `cargo bench --workspace --benches --locked` sequentially three times using the optimized bench profile. The image comparison uses 100 samples per run and 10 iterations per sample. Both benchmark scopes read Divan's median from each run and take the median of those three values as the final result in ns. The median summarizes the observed samples. Keep power, cooling, build configuration, and background load stable and run performance tests one at a time.
+Full bench runs `cargo bench --workspace --benches --locked` sequentially three times using the optimized bench profile. The image comparison uses 100 samples per run and 10 iterations per sample. Each benchmark scope reads Divan's median from each run and takes the median of those three values as the final result in ns. Keep power, cooling, build configuration, and background load stable and run performance tests one at a time.
 
 Divan currently emits terminal statistics tables. The parser validates headers and column counts, reconstructs tree names as `target/function/argument`, and supports ps/ns/µs/μs/us/ms/s. It requires finite positive values and nonzero sample counts, rejecting duplicate metrics, empty output, and inconsistent metric sets across runs. Clear inherited `DIVAN_*` overrides so filtering or test mode cannot alter measurement. New benchmarks use whitespace-free names without counter rows or custom output. Format changes require parser and test updates; parsing failure must never count as success. Standard libtest output with zero benchmarks is ignored.
 
@@ -66,6 +66,28 @@ fail the comparison. Differing metric sets between rounds or an unexpected
 metric are output errors. Snapshot acceptance and native visual and input
 review are separate acceptance steps. [Benchmark comparison](../../xtask/src/bench.rs) · [M2 acceptance gates](../plans/m2-node-tree-and-layout.md#verification-and-approval-gates)
 
+## M3 reactivity and component benchmarks
+
+`cargo xtask bench --m3` measures four CPU workloads on the thread-local
+reactive runtime and a retained UI tree. The benchmark process creates
+its own scopes, signals and views without opening a window. Graph
+construction, initial mounting and preparation of row-order inputs happen
+outside the timed loop. Component workloads apply queued updates through
+`UiTree::flush_updates` and check the command outcomes. [Benchmark source](../../benches/components.rs)
+
+| Report metric | One timed iteration | Samples per run | Iterations per sample |
+| --- | --- | ---: | ---: |
+| `components/batched_memo_diamond` | Write one signal twice in a batch, settle two derived branches and their sum, and read the observer's result | 100 | 100 |
+| `components/bound_style_update` | Toggle opacity through a signal bound to one mounted component | 100 | 100 |
+| `components/show_mount_and_dispose` | Show a branch with a private signal, apply its mount, then hide it and apply disposal | 100 | 50 |
+| `components/keyed_reorder_32` | Reverse 32 mounted rows with bound styles and retain their node identities | 100 | 10 |
+
+The report identifies `scope = "m3"` and writes
+`target/xtask/bench-m3-results.json`. Three `bench-m3-*.log` files retain
+the raw Divan output. Recording with `--m3 --record` requires human approval.
+It updates these four metrics and preserves the existing M1 and M2 values.
+[M3 acceptance record](../plans/m3-reactivity-and-components.md#acceptance-record)
+
 ## Recording and updating
 
 ### Publishing measurements in the READMEs
@@ -108,9 +130,9 @@ baseline updates still use the separate human-confirmed `bench --record` workflo
 ### Updating the regression baseline
 
 1. Close heavy workloads and confirm the current code and benchmark inputs are as intended.
-2. Run `cargo xtask bench --record` for the full suite or `cargo xtask bench --m2 --record` for M2 **only after human confirmation**. The command reports creation or replacement of `perf/baselines/<machine-id>.json`, which must be reviewed and committed. Default bench and verify never write baselines.
+2. After human confirmation, use `cargo xtask bench --record` for the full suite, `cargo xtask bench --m2 --record` for M2, or `cargo xtask bench --m3 --record` for M3. Review and commit the approved changes to `perf/baselines/<machine-id>.json`. Default bench and verify never write baselines.
 3. Immediately repeat the comparison for the same scope to confirm reproducibility. Investigate code and environment on regression. Do not repeatedly record to hide failures.
-4. Full recording preserves each metric's `regression_percent` (default 10, individually configurable from 0–100), except the fixed 15% pixel margin, while updating values, machine description, and recording time. Scoped recording updates the eight M2 values and preserves the existing machine description, recording time, thresholds, and other entries. A first scoped recording creates the machine baseline with M2 values and pending hard-target entries. Full comparison still requires baselines for all full-suite measurements. Missing measurements within the selected scope also fail in recording mode. Deleting or renaming metrics requires human review of baseline changes.
+4. Full recording preserves each metric's `regression_percent` (default 10, individually configurable from 0–100), except the fixed 15% pixel margin, while updating values, machine description, and recording time. Scoped recording updates the selected milestone's values and preserves the existing machine description, recording time, thresholds, and other entries. A first scoped recording creates the machine baseline with the selected values and pending hard-target entries. Full comparison requires baselines for all full-suite measurements. Missing measurements within the selected scope also fail in recording mode. Deleting or renaming metrics requires human review of baseline changes.
 
 The machine identifier uses a fixed FNV-1a 64-bit hash of architecture, model, CPU name, and memory bytes, prefixed with the operating system. macOS reads `hw.model`, `machdep.cpu.brand_string`, and `hw.memsize`; if sandboxing denies access, it uses corresponding fields from `system_profiler SPHardwareDataType -detailLevel mini -json` (mini excludes serial numbers and UUIDs). Windows uses CIM model/CPU/physical memory; Linux uses the DMI model, `/proc/cpuinfo`, and `/proc/meminfo`. It reads no serial numbers, usernames, or hostnames. OS and rustc versions are recorded in the description but excluded from the hash, so repeated runs yield the same ID.
 

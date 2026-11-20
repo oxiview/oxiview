@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 milestone: M3
 ---
 
@@ -9,7 +9,7 @@ The owner authorized implementation through a real M4 Snake demo on
 2026-11-17, including optional JSX-like expression syntax in M3. This plan
 implements [ADR-0005](../adr/0005-fine-grained-reactivity.md) and
 [ADR-0006](../adr/0006-builder-api-and-function-components.md). Internal APIs
-remain unstable. A working demo does not replace remaining milestone acceptance.
+remain unstable. M3 closed on 2026-11-20. [Acceptance record](#acceptance-record)
 
 ## Implemented foundation
 
@@ -73,8 +73,39 @@ and zero rejected commands in ordinary operation.
 
 ## Completion boundary
 
-Run ordinary local verification, retain meaningful error/cancellation tests,
-and inspect the actual demo artifacts. Native visual acceptance and performance
-baseline review remain separate gates. Dependency-graph Inspector UI, focus and
-Action/Keymap, editable text, and a widget library remain in their later
-milestones; this work does not pull them into M3.
+M3 acceptance includes ordinary local verification, error and cancellation
+tests, inspection of the replay images, native visual review and performance
+baseline review. The dependency-graph Inspector, focus and Action/Keymap,
+editable text and the widget library have their own milestones.
+
+## Acceptance record
+
+On 2026-11-20 the owner confirmed that the current native Snake application
+passed the manual review. The checklist covered starting and steering,
+pause and resume, the game-over history, and the score and buttons after a
+restart. The release bundle also passed all eight headless replay checks.
+The replay reached a score of 30, mounted the screen once, retained keyed
+history rows across restarts and reported zero rejected commands. The
+ready, playing, paused, game-over and compact images were inspected.
+[Snake replay and native review](../../examples/snake/README.md#headless-acceptance)
+
+Two regression tests cover keyed-list failures. If a row factory rejects
+new data, the list discards rows staged during that mount and releases their
+scopes. If an item binding fails after rows have mounted, the next valid
+update reuses those same nodes. The failing update still reports the error.
+[Public component contracts](../../crates/oxiview-core/tests/m3_views.rs)
+
+Local `cargo xtask verify` passed all seven checks. The workspace test run
+passed 369 tests, including component recovery, scope adoption, executor
+wake and cancellation, macro compilation, and Snake replay parity.
+
+The owner approved recording four M3 metrics on the Mac14,10. The immediate
+window-free comparison passed all four and the scoped recording preserved
+the 17 earlier machine-baseline entries. [Machine baseline](../../perf/baselines/macos-8a09e0b60732277a.json) · [Workloads and measurement method](../conventions/testing-performance.md#m3-reactivity-and-component-benchmarks)
+
+| M3 workload | Recorded | Immediate comparison |
+| --- | ---: | ---: |
+| Batched memo diamond | 821.3 ns | 823.2 ns |
+| Bound style update | 593.6 ns | 618.8 ns |
+| Show mount and disposal | 9.901 µs | 10.160 µs |
+| Reorder 32 keyed rows | 61.52 µs | 62.57 µs |

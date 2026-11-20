@@ -14,7 +14,8 @@ baselines. [M2 execution record](docs/plans/m2-node-tree-and-layout.md#execution
 The playable [Snake game](examples/snake/README.md) uses M3 Signals, function
 components and optional JSX-like `view!` expressions in Rust source files.
 M4 shapes its text, rasterizes glyphs at the display scale and composites them
-on the GPU. The M3 and M4 plans track their remaining acceptance work.
+on the GPU. M3 is complete. Snake passed native review and all four reactive
+and component performance comparisons passed. [M3 acceptance record](docs/plans/m3-reactivity-and-components.md#acceptance-record)
 M1 is complete: native visual acceptance, fresh-clone verification and local
 performance baseline comparison passed. See the [execution record](docs/plans/m1-first-window.md)
 for measured results and remaining latency work.
@@ -53,8 +54,8 @@ cargo run --release -p snake -- --headless --json
 
 Artifacts and the pass/fail manifest are written to `target/xtask/snake/`.
 `./examples/snake/package-macos.sh` builds a directly openable local application
-bundle there. See the [M3 plan](docs/plans/m3-reactivity-and-components.md) and
-[M4 text/Snake plan](docs/plans/m4-text-and-snake.md) for scope and pending gates.
+bundle there. The [M3 acceptance record](docs/plans/m3-reactivity-and-components.md#acceptance-record)
+covers reactive components. The [M4 plan](docs/plans/m4-text-and-snake.md) tracks the remaining text and rendering work.
 
 ## Performance
 

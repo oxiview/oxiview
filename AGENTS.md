@@ -1,13 +1,13 @@
 # oxiview engineering conventions
 
-oxiview is a self-drawn Rust UI framework exclusively for native macOS / Windows / Linux desktop platforms. M-1 through M2 and M3+1 are complete. Consult the [M2 execution record](docs/plans/m2-node-tree-and-layout.md#execution-record) for Layout Lab's native, snapshot and performance acceptance. The [roadmap](docs/roadmap.md) links the current M3 and M4 plans.
+oxiview is a self-drawn Rust UI framework exclusively for native macOS / Windows / Linux desktop platforms. M-1 through M3 and M3+1 are complete. Consult the [M2 execution record](docs/plans/m2-node-tree-and-layout.md#execution-record) for Layout Lab and the [M3 acceptance record](docs/plans/m3-reactivity-and-components.md#acceptance-record) for reactivity and components. The [roadmap](docs/roadmap.md) links the M4 plan.
 
 ## Hard rules
 
 - Target native platforms only; do not use WebView, HTML/CSS, WASM, or browser targets. Implement only the specified milestone step.
 - Use Rust stable 1.97 and edition 2024; framework builds must not use nightly or unstable features.
 - `cargo xtask verify` must pass before committing. Run verification locally only ([ADR-0019](docs/adr/0019-local-only-verification.md)).
-- Before opening native measurement windows on the owner's desktop, give the expected duration and wait for the owner to confirm readiness. This applies to full benchmark runs, including `bench --record` and `verify --full`. Ordinary `verify` and `bench --m2` run without a visible window.
+- Before opening native measurement windows on the owner's desktop, give the expected duration and wait for the owner to confirm readiness. This applies to full benchmark runs, including `bench --record` and `verify --full`. Ordinary `verify`, `bench --m2` and `bench --m3` run without a visible window.
 - Library code must not use unwrap/expect/panic. See the [error conventions](docs/conventions/unsafe-panic-errors.md) for limited exceptions in tests, xtask, examples, and compile-time assertions.
 - Restrict unsafe to platform and rendering adapters, except the single native surface handle constructor declaration in `oxiview-base` ([ADR-0025](docs/adr/0025-owned-native-surface-handle.md)). Every unsafe block needs `// SAFETY:` and every unsafe function needs `# Safety`; see [safety boundaries](docs/conventions/unsafe-panic-errors.md).
 - Follow [xtask/layers.toml](xtask/layers.toml) for dependency direction. Convert third-party types through an anti-corruption layer instead of exposing them in public APIs.
@@ -36,6 +36,7 @@ Prefix every command below with `cargo xtask`. Tools are never installed automat
 | `snapshot --accept <name\|crate/name\|all>` | Update snapshot baselines after human confirmation |
 | `bench` / `bench --record` | Compare this machine's performance baseline / record it after human confirmation |
 | `bench --m2` / `bench --m2 --record` | Compare or record the eight M2 tree and layout metrics without opening a window. Recording requires human confirmation. |
+| `bench --m3` / `bench --m3 --record` | Compare or record the four reactive and component metrics without opening a window. Recording requires human confirmation. |
 | `perf-report` / `perf-report --check` | Render or check the latest five measurement campaigns in both READMEs and the complete [performance history](docs/performance/history.md). Use `--start` and `--add` for [new measurements](docs/conventions/testing-performance.md). |
 | `new-crate <name> --context <context>` | Create a registered crate with inherited workspace settings; refuse overwrites |
 | `install-hooks` / `install-hooks --uninstall` | Optionally install a pre-push verify hook; `--force` backs up before overwriting; uninstall removes only matching hooks |

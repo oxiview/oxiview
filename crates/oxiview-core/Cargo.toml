@@ -28,3 +28,8 @@ proptest.workspace = true
 name = "ui_tree"
 path = "../../benches/ui_tree.rs"
 harness = false
+
+[[bench]]
+name = "components"
+path = "../../benches/components.rs"
+harness = false

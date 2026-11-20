@@ -308,12 +308,6 @@ struct Entry<T> {
     root: NodeId,
     item: Signal<T>,
 }
-impl<T> Copy for Entry<T> {}
-impl<T> Clone for Entry<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
 
 /// Creates a real container with keyed children. Retained keys keep their node
 /// identities and item signals; changed item data updates bindings without
@@ -354,51 +348,47 @@ where
                             }
                             desired.push((item_key, value));
                         }
-                        let old = entries
-                            .try_borrow()
-                            .map_err(|_| UiError::CommandBufferBusy)?
-                            .clone();
-                        let mut next = HashMap::new();
+                        let mut entries = entries
+                            .try_borrow_mut()
+                            .map_err(|_| UiError::CommandBufferBusy)?;
                         let mut created = Vec::new();
                         for (key, value) in &desired {
-                            if let Some(entry) = old
+                            if entries
                                 .get(key)
-                                .copied()
-                                .filter(|entry| tree.contains(entry.root))
+                                .is_some_and(|entry| tree.contains(entry.root))
                             {
-                                next.insert(key.clone(), entry);
-                            } else {
-                                let new_entry = owner
-                                    .run(|| {
-                                        let scope = Scope::new()?;
-                                        let item_owner = scope.owner();
-                                        let item = item_owner.run(|| signal(value.clone()))?;
-                                        let child = item_owner.run(|| {
-                                            let view = render(item).map_err(as_reactive)?;
-                                            tree.mount_view(container, view).map_err(as_reactive)
-                                        })?;
-                                        tree.node_mut(child)
-                                            .map_err(as_reactive)?
-                                            .scopes
-                                            .push(scope);
-                                        Ok(Entry { root: child, item })
-                                    })
-                                    .map_err(as_ui);
-                                match new_entry {
-                                    Ok(entry) => {
-                                        created.push(entry.root);
-                                        next.insert(key.clone(), entry);
+                                continue;
+                            }
+                            let new_entry = owner
+                                .run(|| {
+                                    let scope = Scope::new()?;
+                                    let item_owner = scope.owner();
+                                    let item = item_owner.run(|| signal(value.clone()))?;
+                                    let child = item_owner.run(|| {
+                                        let view = render(item).map_err(as_reactive)?;
+                                        tree.mount_view(container, view).map_err(as_reactive)
+                                    })?;
+                                    tree.node_mut(child)
+                                        .map_err(as_reactive)?
+                                        .scopes
+                                        .push(scope);
+                                    Ok(Entry { root: child, item })
+                                })
+                                .map_err(as_ui);
+                            match new_entry {
+                                Ok(entry) => created.push((key.clone(), entry)),
+                                Err(error) => {
+                                    for (_, entry) in created {
+                                        tree.remove_raw(entry.root)?;
                                     }
-                                    Err(error) => {
-                                        for child in created {
-                                            tree.remove_raw(child)?;
-                                        }
-                                        return Err(error);
-                                    }
+                                    return Err(error);
                                 }
                             }
                         }
-                        let removed: HashSet<_> = old
+                        // Once mounted, new rows must remain discoverable even if a
+                        // later lifecycle callback or item binding rejects this update.
+                        entries.extend(created);
+                        let removed: HashSet<_> = entries
                             .iter()
                             .filter(|(key, _)| !keys.contains(*key))
                             .map(|(_, entry)| entry.root)
@@ -408,27 +398,25 @@ where
                                 tree.apply(Command::Remove(child), handler, work)?;
                             }
                         }
+                        entries.retain(|key, _| keys.contains(key));
                         for (index, (key, _)) in desired.iter().enumerate() {
-                            let entry = next.get(key).ok_or(UiError::StaleNode)?;
-                            tree.apply(
-                                Command::Reparent(entry.root, container, index),
-                                handler,
-                                work,
-                            )?;
+                            let entry = entries.get(key).ok_or(UiError::StaleNode)?;
+                            if tree.children(container)?.get(index) != Some(&entry.root) {
+                                tree.apply(
+                                    Command::Reparent(entry.root, container, index),
+                                    handler,
+                                    work,
+                                )?;
+                            }
                         }
                         batch(|| {
-                            for (key, value) in &desired {
-                                if let Some(entry) = next.get(key) {
-                                    entry.item.set(value.clone())?;
-                                }
+                            for (key, value) in desired {
+                                let entry = entries.get(&key).ok_or(ReactiveError::Disposed)?;
+                                entry.item.set(value)?;
                             }
                             Ok(())
                         })
-                        .map_err(as_ui)?;
-                        *entries
-                            .try_borrow_mut()
-                            .map_err(|_| UiError::CommandBufferBusy)? = next;
-                        Ok(())
+                        .map_err(as_ui)
                     }),
                 )
                 .map_err(as_reactive)

@@ -23,6 +23,11 @@ const DIVAN_OTHER: &str = "render fastest │ slowest │ median │ mean │ sa
    ╰─ 1 1 ms │ 3 ms │ 2 ms │ 2 ms │ 20 │ 20";
 const OTHER: &str = "render/sparse_ui/1";
 const FIRST: &str = "layout/initial_layout/100";
+const DIVAN_M3: &str = "components fastest │ slowest │ median │ mean │ samples │ iters
+├─ batched_memo_diamond 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 10000
+├─ bound_style_update 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 10000
+├─ keyed_reorder_32 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 1000
+╰─ show_mount_and_dispose 1 µs │ 3 µs │ 2 µs │ 2 µs │ 100 │ 5000";
 
 fn fixture_machine() -> Machine {
     Machine {
@@ -134,6 +139,20 @@ impl Fixture {
                         "ui_tree::hit_testing",
                         "ui_tree::paint_only_update",
                     ],
+                    Scope::M3 => &[
+                        "bench",
+                        "--locked",
+                        "-p",
+                        "oxiview-core",
+                        "--bench",
+                        "components",
+                        "--",
+                        "--exact",
+                        "components::batched_memo_diamond",
+                        "components::bound_style_update",
+                        "components::show_mount_and_dispose",
+                        "components::keyed_reorder_32",
+                    ],
                 };
                 assert!(command.get_args().eq(expected.iter().copied()));
                 for (key, _) in std::env::vars_os() {
@@ -152,7 +171,10 @@ impl Fixture {
                 })
             },
             |_| {
-                assert!(scope == Scope::Full, "M2 must never call the native runner");
+                assert!(
+                    scope == Scope::Full,
+                    "scoped comparisons must never call the native runner"
+                );
                 Ok([
                     ("input_to_submit_ms", 4.0, 8.333333, Some(8.333333)),
                     ("input_to_pixel_ms", 25.0, 0.0, Some(8.333333)),
@@ -290,6 +312,56 @@ fn m2_record_merges_only_its_values_and_retains_full_missing_measurement_checks(
     assert_eq!(
         fs::read(fixture.artifact(Scope::M2.results_file())).expect("scoped report"),
         scoped_report
+    );
+}
+
+#[test]
+fn m3_record_and_comparison_preserve_existing_m2_and_native_baselines() {
+    let fixture = Fixture::new();
+    fixture.seed_baseline();
+    assert_eq!(
+        fixture.run(Scope::M2, true, [DIVAN_M2; 3]).0,
+        Ok(Status::Pass)
+    );
+    let previous: Value = serde_json::from_slice(&fs::read(fixture.path()).expect("M2 baseline"))
+        .expect("valid baseline JSON");
+    let m2_report = fixture.report(Scope::M2);
+    assert_eq!(
+        fixture.run(Scope::M3, false, [DIVAN_M3; 3]).0,
+        Ok(Status::Fail)
+    );
+    let first = fixture.report(Scope::M3);
+    assert_eq!(first["scope"], "m3");
+    assert_eq!(metrics(&first).len(), M3_METRICS.len());
+    assert!(
+        metrics(&first)
+            .iter()
+            .all(|m| m["status"] == "missing_baseline")
+    );
+    assert_eq!(
+        fixture.run(Scope::M3, true, [DIVAN_M3; 3]).0,
+        Ok(Status::Pass)
+    );
+    let mut after: Value = serde_json::from_slice(&fs::read(fixture.path()).expect("M3 baseline"))
+        .expect("valid baseline JSON");
+    for &name in M3_METRICS {
+        let metric = after["metrics"]
+            .as_object_mut()
+            .expect("metric object")
+            .remove(name)
+            .expect("recorded M3 metric");
+        assert_eq!(metric["value"], 2000.0);
+    }
+    assert_eq!(after, previous);
+    assert_eq!(
+        fixture.run(Scope::M3, false, [DIVAN_M3; 3]).0,
+        Ok(Status::Pass)
+    );
+    assert_eq!(fixture.report(Scope::M2), m2_report);
+    let slow = DIVAN_M3.replace("2 µs", "3 µs");
+    assert_eq!(
+        fixture.run(Scope::M3, false, [&slow; 3]).0,
+        Ok(Status::Fail)
     );
 }
 

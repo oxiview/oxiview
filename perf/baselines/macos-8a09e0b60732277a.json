@@ -130,6 +130,34 @@
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
+    },
+    "components/batched_memo_diamond": {
+      "value": 821.3,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "components/bound_style_update": {
+      "value": 593.6,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "components/keyed_reorder_32": {
+      "value": 61520.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "components/show_mount_and_dispose": {
+      "value": 9901.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
     }
   }
 }
