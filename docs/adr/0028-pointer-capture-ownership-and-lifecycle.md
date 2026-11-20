@@ -11,9 +11,8 @@ release from exceptional cancellation so components can end interactions
 predictably without depending on which ancestor handler runs last. The owner
 confirmed this scope and lifecycle during M2 planning on 2026-11-17, and then
 selected capture-based hover during the same planning discussion.
-The preview implements capture. A native drag across the right window edge
-continued to deliver movement and release. The full native acceptance matrix
-remains open. [M2 execution record](../plans/m2-node-tree-and-layout.md#execution-record)
+In the November 17 native preview, a drag across the right window edge
+continued to deliver movement and release. [M2 execution record](../plans/m2-node-tree-and-layout.md#execution-record)
 
 This complements the node ownership in
 [ADR-0007](0007-single-arena-node-tree.md) and owned platform adapters in
@@ -118,3 +117,11 @@ cancellation under this decision.
   holder, boundary crossing, and release reconciliation. Component behavior
   will depend on these rules, so changing them later requires revisiting this
   decision.
+
+## M2 execution evidence (2026-11-20)
+
+Deterministic input traces exercise all four edges, checking that outside
+motion and up reach the holder and that geometric hover resumes after release,
+including when the pointer returns before up. The owner confirmed that
+Layout Lab passed native manual acceptance.
+[Capture tests](../../crates/oxiview-core/tests/m2_capture_matrix.rs)

@@ -1,7 +1,7 @@
 //! Deterministic end-to-end window-loop tests.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // Test assertions and channel failures.
 use oxiview_app::{HeadlessOutput, run_headless};
-use oxiview_base::{Point, Size};
+use oxiview_base::{Color, Point, Size};
 use oxiview_core::*;
 use oxiview_platform::*;
 use oxiview_platform_headless::{Driver, HeadlessPlatform, ResizeOutcome, WaitKind};
@@ -80,6 +80,20 @@ fn run(
     invalidate: bool,
     test: impl FnOnce(Driver, WindowId, HeadlessOutput, &Receiver<Notice>, WindowWaker) + Send,
 ) {
+    run_application(
+        move |tx| App {
+            tx,
+            timed,
+            invalidate,
+        },
+        test,
+    );
+}
+
+fn run_application<A: Application>(
+    create: impl FnOnce(Sender<Notice>) -> A + Send + 'static,
+    test: impl FnOnce(Driver, WindowId, HeadlessOutput, &Receiver<Notice>, WindowWaker) + Send,
+) {
     let (platform, driver) = HeadlessPlatform::new(ms(10)).unwrap();
     let (tx, rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
@@ -119,19 +133,115 @@ fn run(
         run_headless(
             platform,
             attributes(),
-            move || {
-                Ok(App {
-                    tx,
-                    timed,
-                    invalidate,
-                })
-            },
+            move || Ok(create(tx)),
             |_, id, output| {
                 ready_tx.send((id, output)).unwrap();
                 Ok(())
             },
         )
         .unwrap();
+    });
+}
+
+struct InputPixelApp {
+    tree: UiTree,
+    notices: Sender<Notice>,
+}
+
+impl InputPixelApp {
+    fn new(notices: Sender<Notice>) -> Self {
+        let mut tree = UiTree::new().unwrap();
+        let child = tree.append(tree.root(), Default::default()).unwrap();
+        tree.set_intrinsic_size(child, Size::new(4.0, 4.0)).unwrap();
+        let mut style = tree.style(child).unwrap().clone();
+        style.background = Color::from_rgba8(255, 0, 0, 255);
+        tree.set_style(child, style).unwrap();
+        tree.set_pointer_handler(child, move |event, tree, commands| {
+            if event.kind == PointerEventKind::Down {
+                let mut style = tree.style(child).unwrap().clone();
+                style.background = Color::from_rgba8(0, 0, 255, 255);
+                commands.set_style(child, style);
+            }
+        })
+        .unwrap();
+        Self { tree, notices }
+    }
+}
+
+impl Application for InputPixelApp {
+    fn event(
+        &mut self,
+        event: &WindowEvent,
+        scheduler: &mut Scheduler,
+        waker: &WindowWaker,
+    ) -> Result<(), oxiview_core::Error> {
+        let result = self
+            .tree
+            .dispatch(event, attributes().logical_size, |_, _, _| {})
+            .unwrap();
+        if result.changed {
+            scheduler.invalidate();
+        }
+        self.notices
+            .send(Notice::Event(event.clone(), waker.clone()))
+            .unwrap();
+        Ok(())
+    }
+
+    fn paint(
+        &mut self,
+        _: FrameTiming,
+        _: PhysicalSize,
+        scale: f64,
+    ) -> Result<PaintedScene, oxiview_core::Error> {
+        Ok(self.tree.paint(attributes().logical_size, scale).unwrap())
+    }
+
+    fn presented(&mut self, record: Option<LatencyRecord>) {
+        self.notices.send(Notice::Presented(record)).unwrap();
+    }
+}
+
+#[test]
+fn retained_hit_changes_pixels_on_the_next_frame_and_then_stays_idle() {
+    run_application(InputPixelApp::new, |driver, id, output, rx, _| {
+        let pixel = |x: usize, y: usize| {
+            let image = output.snapshot().unwrap().image.unwrap();
+            let offset = 4 * (y * image.width() as usize + x);
+            <[u8; 4]>::try_from(&image.pixels()[offset..offset + 4]).unwrap()
+        };
+        assert_eq!(pixel(1, 1), [255, 0, 0, 255]);
+        let outside = pixel(7, 5);
+        let position = Point::new(1.0, 1.0);
+        driver.advance_to(ms(3)).unwrap();
+        driver
+            .pointer_button(id, PointerButton::Primary, true, position, None)
+            .unwrap();
+        assert!(matches!(
+            event(rx).0,
+            WindowEvent::PointerButton { pressed: true, .. }
+        ));
+        driver.wait_until_blocked(id, WaitKind::Event).unwrap();
+        assert_eq!(output.snapshot().unwrap().presents, 1);
+        driver.advance_to(ms(10)).unwrap();
+        assert!(matches!(event(rx).0, WindowEvent::Frame { .. }));
+        assert_eq!(presented(rx).unwrap().input_capture_timestamp, ms(3));
+        assert_eq!(pixel(1, 1), [0, 0, 255, 255]);
+        assert_eq!(pixel(7, 5), outside);
+
+        driver
+            .pointer_button(id, PointerButton::Primary, false, position, None)
+            .unwrap();
+        assert!(matches!(
+            event(rx).0,
+            WindowEvent::PointerButton { pressed: false, .. }
+        ));
+        driver.wait_until_blocked(id, WaitKind::Event).unwrap();
+        for _ in 0..1000 {
+            driver.advance_by(ms(10)).unwrap();
+        }
+        assert_eq!(driver.counters(id).unwrap().frames, 1);
+        assert_eq!(output.snapshot().unwrap().presents, 2);
     });
 }
 #[test]

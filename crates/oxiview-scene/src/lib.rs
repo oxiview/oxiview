@@ -9,7 +9,10 @@
 //! references are removed. Identity is local to a scene and is never recycled.
 
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 pub use oxiview_base::{PixelSize, RgbaImage};
 
@@ -120,14 +123,20 @@ struct Node {
     children: Vec<NodeId>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct Forest {
+    nodes: BTreeMap<NodeId, Node>,
+    roots: Vec<NodeId>,
+}
+
 /// An editable retained forest, including reusable subtree definitions.
 ///
 /// Equality compares ordered structure, content, and reference topology, ignoring
 /// allocated identity values and removed-node history. It does not compare pixels.
+/// Clones share the forest until an edit. Already published scenes keep their contents.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
-    nodes: BTreeMap<NodeId, Node>,
-    roots: Vec<NodeId>,
+    forest: Arc<Forest>,
     next_id: u64,
 }
 
@@ -139,7 +148,7 @@ impl Scene {
 
     /// Returns roots in their ownership order.
     pub fn roots(&self) -> &[NodeId] {
-        &self.roots
+        &self.forest.roots
     }
 
     /// Returns a node's content.
@@ -151,7 +160,7 @@ impl Scene {
     pub fn children(&self, parent: Option<NodeId>) -> Result<&[NodeId], Error> {
         match parent {
             Some(id) => Ok(&self.node(id)?.children),
-            None => Ok(&self.roots),
+            None => Ok(self.roots()),
         }
     }
 
@@ -179,7 +188,7 @@ impl Scene {
         }
         let id = NodeId(self.next_id);
         self.attach(parent, index, id)?;
-        self.nodes.insert(
+        Arc::make_mut(&mut self.forest).nodes.insert(
             id,
             Node {
                 kind,
@@ -237,7 +246,7 @@ impl Scene {
             removed.insert(current);
             stack.extend(&self.node(current)?.children);
         }
-        for (key, node) in &self.nodes {
+        for (key, node) in &self.forest.nodes {
             if !removed.contains(key)
                 && let NodeKind::Reference(target, _) = node.kind
                 && removed.contains(&target)
@@ -246,20 +255,25 @@ impl Scene {
             }
         }
         self.detach(id)?;
-        self.nodes.retain(|key, _| !removed.contains(key));
+        Arc::make_mut(&mut self.forest)
+            .nodes
+            .retain(|key, _| !removed.contains(key));
         Ok(())
     }
 
     fn node(&self, id: NodeId) -> Result<&Node, Error> {
-        self.nodes.get(&id).ok_or(Error::MissingNode(id))
+        self.forest.nodes.get(&id).ok_or(Error::MissingNode(id))
     }
     fn node_mut(&mut self, id: NodeId) -> Result<&mut Node, Error> {
-        self.nodes.get_mut(&id).ok_or(Error::MissingNode(id))
+        Arc::make_mut(&mut self.forest)
+            .nodes
+            .get_mut(&id)
+            .ok_or(Error::MissingNode(id))
     }
     fn children_mut(&mut self, parent: Option<NodeId>) -> Result<&mut Vec<NodeId>, Error> {
         match parent {
             Some(id) => Ok(&mut self.node_mut(id)?.children),
-            None => Ok(&mut self.roots),
+            None => Ok(&mut Arc::make_mut(&mut self.forest).roots),
         }
     }
     fn attach(&mut self, parent: Option<NodeId>, index: usize, id: NodeId) -> Result<(), Error> {
@@ -345,9 +359,9 @@ impl Scene {
     }
     fn canonical(&self) -> Vec<(NodeKind, usize)> {
         let mut order = Vec::new();
-        let mut stack: Vec<_> = self.roots.iter().rev().copied().collect();
+        let mut stack: Vec<_> = self.roots().iter().rev().copied().collect();
         while let Some(id) = stack.pop() {
-            if let Some(node) = self.nodes.get(&id) {
+            if let Some(node) = self.forest.nodes.get(&id) {
                 order.push(id);
                 stack.extend(node.children.iter().rev());
             }
@@ -359,7 +373,7 @@ impl Scene {
             .collect();
         order
             .iter()
-            .filter_map(|id| self.nodes.get(id))
+            .filter_map(|id| self.forest.nodes.get(id))
             .map(|node| {
                 let mut kind = node.kind.clone();
                 if let NodeKind::Reference(target, _) = &mut kind

@@ -134,3 +134,11 @@ including cancellation before completing the move.
   unfinished-batch reporting, and work-budget details to engineering judgment.
   Full contract verification and snapshot/performance baseline acceptance remain
   separate from that authorization.
+
+## M2 execution evidence (2026-11-20)
+
+Input fixtures check that suppressing a captured subtree delivers cancel
+with the old state, then publishes cleaned hover before leaves while nodes
+remain readable. Interruption fixtures check that cleanup occurs once even
+when a handler stops cancel propagation.
+[Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs) · [Lifecycle tests](../../crates/oxiview-core/tests/m2_capture_matrix.rs)

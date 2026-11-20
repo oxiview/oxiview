@@ -6,7 +6,7 @@
 //! rectangle fills, strokes and clips through the inverse affine for similarities:
 //! finite nonzero equal-length orthogonal columns (relative tolerance 1e-12).
 //! Translation, uniform scale, rotation and reflection qualify; other transforms
-//! retain polygon coverage using a fixed sixteen-sample inside-test pattern.
+//! use a fixed sixteen-sample inside-test pattern over polygons or trimmed arcs.
 //! SDF coverage evaluates distance once at the pixel center, converts it to physical
 //! pixels, and applies the one-pixel ramp `clamp(0.5 - distance_px, 0, 1)`.
 //! Commands are binned into 16x16 physical-pixel tiles using conservative bounds.

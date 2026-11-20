@@ -2,10 +2,10 @@
 
 use oxiview_base::{Point, Rect, Size};
 use oxiview_layout::{
-    AvailableSpace, Dimensions, LayoutBox, LayoutEngine, LayoutInput, LayoutStats, LayoutTree,
-    TaffyLayout,
+    AvailableSpace, Dimensions, IncrementalTaffyLayout, LayoutBox, LayoutChange, LayoutEngine,
+    LayoutInput, LayoutStats, LayoutTree,
 };
-use oxiview_scene::{NodeId as SceneNodeId, Primitive, Scene};
+use oxiview_scene::Primitive;
 use oxiview_style::{Display, Style};
 use std::{
     cell::RefCell,
@@ -31,7 +31,29 @@ pub use view::{View, component, for_each, keyed_for, node, show};
 const MAX_DEPTH: usize = oxiview_layout::MAX_LAYOUT_DEPTH;
 static NEXT_TREE: AtomicU64 = AtomicU64::new(1);
 
+fn allocate_tree_owner(counter: &AtomicU64) -> Result<u64, UiError> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| UiError::IdentityExhausted)
+}
+
 /// Opaque identity of a UI node, distinct from a painting Scene identity.
+///
+/// ```compile_fail
+/// use oxiview_core::NodeId;
+///
+/// let _ = NodeId { owner: 1, slot: 0, generation: 1 };
+/// ```
+///
+/// ```compile_fail
+/// use oxiview_core::{UiError, UiTree};
+///
+/// fn add_retained_child(tree: &mut UiTree, parent: oxiview_scene::NodeId) -> Result<(), UiError> {
+///     tree.append(parent, oxiview_style::Style::default()).map(|_| ())
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId {
     owner: u64,
@@ -287,6 +309,7 @@ struct Node {
     scopes: Vec<oxiview_reactive::Scope>,
     hidden: bool,
     text: Option<Rc<text::TextNode>>,
+    painting: Option<Box<paint::NodePainting>>,
 }
 
 /// One window's retained UI tree. All methods run on its window thread.
@@ -299,11 +322,12 @@ pub struct UiTree {
     root: NodeId,
     identities: Rc<RefCell<Identities>>,
     nodes: Vec<Option<Node>>,
-    engine: TaffyLayout<NodeId>,
+    engine: IncrementalTaffyLayout<NodeId>,
     viewport: Size,
     layout_dirty: bool,
+    layout_changes: HashMap<NodeId, LayoutChange<NodeId>>,
     paint_dirty: bool,
-    paint_cache: Option<(Scene, SceneNodeId, f64)>,
+    paint_cache: Option<paint::PaintCache>,
     diagnostics: UiDiagnostics,
     pointer: input::PointerState,
     queue: VecDeque<input::Batch>,
@@ -317,11 +341,7 @@ pub struct UiTree {
 impl UiTree {
     /// Creates a tree and its persistent root.
     pub fn new() -> Result<Self, UiError> {
-        let owner = NEXT_TREE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| UiError::IdentityExhausted)?;
+        let owner = allocate_tree_owner(&NEXT_TREE)?;
         let identities = Rc::new(RefCell::new(Identities {
             owner,
             slots: Vec::new(),
@@ -350,6 +370,7 @@ impl UiTree {
             scopes: vec![scope],
             hidden: false,
             text: None,
+            painting: None,
         };
         let mailbox = UiCommandSender::new(Rc::clone(&identities));
         Ok(Self {
@@ -357,9 +378,10 @@ impl UiTree {
             root,
             identities,
             nodes: vec![Some(node)],
-            engine: TaffyLayout::default(),
+            engine: IncrementalTaffyLayout::default(),
             viewport: Size::default(),
             layout_dirty: true,
+            layout_changes: HashMap::new(),
             paint_dirty: true,
             paint_cache: None,
             diagnostics: UiDiagnostics::default(),
@@ -495,9 +517,11 @@ impl UiTree {
             scopes: vec![scope],
             hidden: false,
             text: None,
+            painting: None,
         });
         self.node_mut(parent)?.children.insert(index, id);
-        self.dirty_layout();
+        self.dirty_layout(id, true, true)?;
+        self.dirty_layout(parent, false, true)?;
         Ok(())
     }
     /// Updates a style atomically; returns whether visual work was invalidated.
@@ -508,20 +532,28 @@ impl UiTree {
             return Ok(false);
         }
         let layout = old.layout != style.layout;
-        let paint = layout
-            || old.background != style.background
-            || old.border_color != style.border_color
-            || old.border_radii != style.border_radii
-            || old.opacity != style.opacity
-            || old.z_index != style.z_index
+        let box_geometry = old.border_radii != style.border_radii
+            || old.layout.border_width != style.layout.border_width
             || old.overflow != style.overflow;
-        self.node_mut(id)?.style = style;
-        if layout {
-            self.dirty_layout();
-        } else if paint {
-            self.paint_dirty = true;
+        let rebuild = box_geometry || old.opacity != style.opacity || old.z_index != style.z_index;
+        let background = old.background != style.background;
+        let border = old.border_color != style.border_color;
+        let node = self.node_mut(id)?;
+        node.style = style;
+        if box_geometry {
+            node.painting = None;
         }
-        Ok(paint)
+        if layout {
+            self.dirty_layout(id, true, false)?;
+        } else if rebuild {
+            self.dirty_paint();
+        } else if (background || border)
+            && let Some(draws) = self.dirty_draws(id)
+        {
+            draws.background |= background;
+            draws.border |= border;
+        }
+        Ok(layout || rebuild || background || border)
     }
     /// Sets intrinsic leaf content size, invalidating its layout.
     pub fn set_intrinsic_size(&mut self, id: NodeId, size: Size) -> Result<(), UiError> {
@@ -529,7 +561,6 @@ impl UiTree {
         if self.node(id)?.intrinsic != size {
             self.bump_measure_revision(id)?;
             self.node_mut(id)?.intrinsic = size;
-            self.dirty_layout();
         }
         Ok(())
     }
@@ -541,23 +572,30 @@ impl UiTree {
     ) -> Result<(), UiError> {
         self.bump_measure_revision(id)?;
         self.node_mut(id)?.measure = Some(Box::new(measure));
-        self.dirty_layout();
         Ok(())
     }
     /// Invalidates cached geometry after data used by custom measurement changes.
     pub fn invalidate_measure(&mut self, id: NodeId) -> Result<(), UiError> {
-        self.bump_measure_revision(id)?;
         if let Some(text) = &self.node(id)?.text {
             text.invalidate()?;
+            self.node_mut(id)?.painting = None;
         }
-        self.dirty_layout();
-        Ok(())
+        self.bump_measure_revision(id)
     }
     /// Replaces node-local custom Scene primitives, drawn after its box background.
     pub fn set_content(&mut self, id: NodeId, content: Vec<Primitive>) -> Result<(), UiError> {
-        if self.node(id)?.content != content {
-            self.node_mut(id)?.content = content;
-            self.paint_dirty = true;
+        let node = self.node_mut(id)?;
+        if node.content != content {
+            let same_count = node.content.len() == content.len();
+            node.content = content;
+            if same_count {
+                if let Some(draws) = self.dirty_draws(id) {
+                    draws.custom = true;
+                }
+            } else {
+                node.painting = None;
+                self.dirty_paint();
+            }
         }
         Ok(())
     }
@@ -601,7 +639,11 @@ impl UiTree {
         self.node_mut(old_parent)?.children.remove(old_index);
         self.node_mut(parent)?.children.insert(index, id);
         self.node_mut(id)?.parent = Some(parent);
-        self.dirty_layout();
+        self.dirty_layout(parent, false, true)?;
+        if old_parent != parent {
+            self.dirty_layout(old_parent, false, true)?;
+            self.dirty_layout(id, false, false)?;
+        }
         Ok(())
     }
     /// Prepares logical geometry without submitting a frame.
@@ -610,14 +652,9 @@ impl UiTree {
         if self.closed {
             return Err(UiError::Closed);
         }
-        if self.viewport != viewport {
-            self.viewport = viewport;
-            self.dirty_layout();
-        }
-        if !self.layout_dirty {
+        if !self.layout_dirty && self.viewport == viewport {
             return Ok(());
         }
-        let _span = tracing::info_span!("ui_layout", nodes = self.len()).entered();
         let mut engine = std::mem::take(&mut self.engine);
         let mut output = HashMap::new();
         let result = {
@@ -626,20 +663,24 @@ impl UiTree {
                 output: &mut output,
                 viewport,
             };
-            engine.compute(&mut adapter, self.root, viewport)
+            engine.compute(&mut adapter, self.root, viewport, &self.layout_changes)
         };
         self.engine = engine;
         let stats = result.map_err(|error| UiError::Layout(error.to_string()))?;
         for (id, layout) in output {
             self.node_mut(id)?.layout = layout;
         }
+        self.viewport = viewport;
         self.layout_dirty = false;
-        self.paint_dirty = true;
+        self.layout_changes = HashMap::new();
+        self.dirty_paint();
         self.diagnostics.record_layout(stats);
         Ok(())
     }
     /// Prepares geometry with a caller-selected owned layout implementation.
-    /// This explicitly recomputes layout, independently of the default-engine cache.
+    /// The caller-selected engine owns its reuse policy and supplies complete
+    /// geometry. A successful pass supersedes the default engine's cached
+    /// geometry. The next dirty default pass starts from the live tree.
     pub fn layout_with(
         &mut self,
         engine: &mut impl LayoutEngine<NodeId>,
@@ -658,12 +699,17 @@ impl UiTree {
         let stats = engine
             .compute(&mut adapter, self.root, viewport)
             .map_err(|error| UiError::Layout(error.to_string()))?;
+        for &id in output.keys() {
+            self.node(id)?;
+        }
         for (id, layout) in output {
             self.node_mut(id)?.layout = layout;
         }
         self.viewport = viewport;
         self.layout_dirty = false;
-        self.paint_dirty = true;
+        self.layout_changes = HashMap::new();
+        self.engine.clear_cache();
+        self.dirty_paint();
         self.diagnostics.record_layout(stats);
         Ok(stats)
     }
@@ -791,14 +837,18 @@ impl UiTree {
         if self.descendant(parent, id)? {
             return Err(UiError::Cycle);
         }
-        let parent_depth = self.path(parent)?.len() + 1;
-        let mut stack = vec![(id, parent_depth)];
-        while let Some((current, depth)) = stack.pop() {
-            if depth > MAX_DEPTH {
-                return Err(UiError::DepthLimit);
-            }
-            for child in &self.node(current)?.children {
-                stack.push((*child, depth + 1));
+        if old_parent != parent {
+            let parent_depth = self.path(parent)?.len();
+            if parent_depth > self.path(old_parent)?.len() {
+                let mut stack = vec![(id, parent_depth + 1)];
+                while let Some((current, depth)) = stack.pop() {
+                    if depth > MAX_DEPTH {
+                        return Err(UiError::DepthLimit);
+                    }
+                    for child in &self.node(current)?.children {
+                        stack.push((*child, depth + 1));
+                    }
+                }
             }
         }
         let old_index = self
@@ -833,6 +883,7 @@ impl UiTree {
         let order = self.postorder(id)?;
         let parent = self.node(id)?.parent.ok_or(UiError::RootOperation)?;
         self.node_mut(parent)?.children.retain(|child| *child != id);
+        self.dirty_layout(parent, false, true)?;
         for current in order {
             self.pointer.hover.retain(|hovered| *hovered != current);
             if self.pointer.capture == Some(current) {
@@ -843,14 +894,45 @@ impl UiTree {
                 .try_borrow_mut()
                 .map_err(|_| UiError::ReservationBusy)?
                 .release(current, false);
+            if self.engine.contains_cached_node(current) {
+                self.layout_changes.insert(current, LayoutChange::Remove);
+            } else {
+                // A creation removed before its first layout has no cached state to retire.
+                self.layout_changes.remove(&current);
+            }
             drop(node);
         }
-        self.dirty_layout();
         Ok(())
     }
-    fn dirty_layout(&mut self) {
+    fn dirty_layout(&mut self, id: NodeId, style: bool, children: bool) -> Result<(), UiError> {
+        let parent = self.node(id)?.parent;
+        let change = self
+            .layout_changes
+            .entry(id)
+            .or_insert(LayoutChange::Update {
+                parent,
+                style: false,
+                children: false,
+            });
+        if let LayoutChange::Update {
+            style: old_style,
+            children: old_children,
+            ..
+        } = *change
+        {
+            *change = LayoutChange::Update {
+                parent,
+                style: style || old_style,
+                children: children || old_children,
+            };
+        }
         self.layout_dirty = true;
+        self.dirty_paint();
+        Ok(())
+    }
+    fn dirty_paint(&mut self) {
         self.paint_dirty = true;
+        self.paint_cache = None;
     }
     fn bump_measure_revision(&mut self, id: NodeId) -> Result<(), UiError> {
         let revision = self
@@ -859,7 +941,7 @@ impl UiTree {
             .checked_add(1)
             .ok_or(UiError::RevisionExhausted)?;
         self.node_mut(id)?.content_revision = revision;
-        Ok(())
+        self.dirty_layout(id, false, false)
     }
     fn validate_style(&self, style: &Style) -> Result<(), UiError> {
         style
@@ -872,6 +954,7 @@ impl Drop for UiTree {
     fn drop(&mut self) {
         let _ = self.mailbox.close();
         let _ = self.mailbox.take_pending();
+        self.paint_cache = None;
         if !self.closed {
             match self.postorder(self.root) {
                 Ok(order) => {
@@ -967,4 +1050,8 @@ fn validate_viewport(size: Size) -> Result<(), UiError> {
 }
 
 #[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tree_contract_tests;

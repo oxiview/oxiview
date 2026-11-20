@@ -1,8 +1,10 @@
-use super::{NodeId, UiError, UiTree};
+use super::{Node, NodeId, UiError, UiTree};
 use crate::PaintedScene;
-use oxiview_base::{Affine, CornerRadii, Point, Rect, Size};
+use oxiview_base::{Affine, Color, CornerRadii, Point, Rect, Size};
+use oxiview_layout::LayoutBox;
 use oxiview_scene::{Brush, Clip, NodeId as SceneNodeId, NodeKind, Primitive, Scene};
 use oxiview_style::{Display, Overflow, Position};
+use std::collections::HashMap;
 
 struct PaintItem {
     id: NodeId,
@@ -12,38 +14,180 @@ struct PaintItem {
     ordinal: usize,
 }
 
+// The node owns its prepared drawing. Stacking and ancestor scopes are resolved
+// for each new Scene, since a descendant may paint outside its parent's context.
+pub(super) struct NodePainting {
+    rect: Rect,
+    text_key: Option<(LayoutBox, f64)>,
+    background_radii: Option<CornerRadii>,
+    border: Option<BorderPainting>,
+    content: Option<ContentPainting>,
+}
+
+struct BorderPainting {
+    clip: Clip,
+    rect: Rect,
+    radii: CornerRadii,
+    width: f64,
+}
+
+struct ContentPainting {
+    clip: Option<Clip>,
+    transform: Affine,
+    glyphs: Vec<Primitive>,
+}
+
+#[derive(Default)]
+struct PaintFrame {
+    scene: Scene,
+    prepared: Vec<(NodeId, Box<NodePainting>)>,
+    draws: HashMap<NodeId, DrawHandles>,
+}
+
+#[derive(Default)]
+struct DrawHandles {
+    background: Option<SceneNodeId>,
+    border: Option<SceneNodeId>,
+    custom: Vec<SceneNodeId>,
+}
+
+#[derive(Default)]
+pub(super) struct DrawChanges {
+    pub(super) background: bool,
+    pub(super) border: bool,
+    pub(super) custom: bool,
+}
+
+pub(super) struct PaintCache {
+    scene: Scene,
+    root: SceneNodeId,
+    scale: f64,
+    draws: HashMap<NodeId, DrawHandles>,
+    changes: HashMap<NodeId, DrawChanges>,
+}
+
+impl PaintCache {
+    fn snapshot(&self) -> PaintedScene {
+        PaintedScene {
+            scene: self.scene.clone(),
+            root: self.root,
+        }
+    }
+
+    fn update(&mut self, tree: &UiTree) -> Result<(), UiError> {
+        for (id, changes) in std::mem::take(&mut self.changes) {
+            // A suppressed node has no draws in the retained Scene.
+            if let Some(draws) = self.draws.get(&id) {
+                draws.replace(&mut self.scene, tree.node(id)?, changes)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl DrawHandles {
+    fn replace(&self, scene: &mut Scene, node: &Node, changes: DrawChanges) -> Result<(), UiError> {
+        if let Some(painting) = &node.painting {
+            if changes.background
+                && let Some((id, primitive)) = self
+                    .background
+                    .zip(painting.background(node.style.background))
+            {
+                scene.replace(id, NodeKind::Draw(primitive))?;
+            }
+            if changes.border
+                && let Some((id, border)) = self.border.zip(painting.border.as_ref())
+            {
+                scene.replace(
+                    id,
+                    NodeKind::Draw(border.primitive(node.style.border_color)),
+                )?;
+            }
+        }
+        if changes.custom {
+            // A length change invalidates the Scene and its handles before paint.
+            for (&id, primitive) in self.custom.iter().zip(&node.content) {
+                scene.replace(id, NodeKind::Draw(primitive.clone()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl UiTree {
     /// Prepares a complete scene with one logical-to-physical root transform.
-    /// Clean geometry and painting content are reused across system redraws.
+    /// Paint-only draw edits reuse the existing Scene structure.
     pub fn paint(&mut self, viewport: Size, scale: f64) -> Result<PaintedScene, UiError> {
         if !scale.is_finite() || scale <= 0.0 {
             return Err(UiError::InvalidViewport);
         }
         self.layout(viewport)?;
-        if !self.paint_dirty
-            && let Some((scene, root, old_scale)) = &self.paint_cache
-            && *old_scale == scale
+        if let Some(mut cache) = self.paint_cache.take()
+            && cache.scale == scale
         {
-            let painted = PaintedScene {
-                scene: scene.clone(),
-                root: *root,
-            };
-            self.diagnostics.scene_cache_hits = self.diagnostics.scene_cache_hits.saturating_add(1);
+            let changed_nodes = cache.changes.len();
+            if changed_nodes == 0 {
+                self.diagnostics.scene_cache_hits =
+                    self.diagnostics.scene_cache_hits.saturating_add(1);
+            } else {
+                let _span = tracing::info_span!("ui_paint_update", nodes = changed_nodes).entered();
+                // A failed replacement drops this cache. Earlier snapshots are
+                // independent, and the next paint rebuilds from the live tree.
+                cache.update(self)?;
+                self.diagnostics.record_scene_update(changed_nodes);
+            }
+            let painted = cache.snapshot();
+            self.paint_cache = Some(cache);
+            self.paint_dirty = false;
             return Ok(painted);
         }
-        let _span = tracing::info_span!("ui_paint", nodes = self.len()).entered();
-        let mut scene = Scene::new();
-        let root = scene.insert(
+        self.paint_dirty = true;
+        self.build_scene(scale)
+    }
+
+    pub(super) fn dirty_draws(&mut self, id: NodeId) -> Option<&mut DrawChanges> {
+        self.paint_dirty = true;
+        self.paint_cache
+            .as_mut()
+            .map(|cache| cache.changes.entry(id).or_default())
+    }
+
+    fn build_scene(&mut self, scale: f64) -> Result<PaintedScene, UiError> {
+        let span = tracing::info_span!(
+            "ui_paint",
+            nodes = self.len(),
+            painted_nodes = tracing::field::Empty
+        );
+        let _entered = span.enter();
+        let mut frame = PaintFrame::default();
+        let root = frame.scene.insert(
             None,
             0,
             NodeKind::Transform(Affine::new([scale, 0.0, 0.0, scale, 0.0, 0.0])),
         )?;
         if !self.suppressed(self.root)? {
-            self.paint_context(&mut scene, root, self.root, None, scale)?;
+            self.paint_context(&mut frame, root, self.root, None, scale)?;
         }
-        self.paint_cache = Some((scene.clone(), root, scale));
+        let PaintFrame {
+            scene,
+            prepared,
+            draws,
+        } = frame;
+        let painted_nodes = prepared.len();
+        for (id, painting) in prepared {
+            self.node_mut(id)?.painting = Some(painting);
+        }
+        span.record("painted_nodes", painted_nodes);
+        self.diagnostics
+            .record_scene_build(draws.len(), painted_nodes);
+        self.paint_cache = Some(PaintCache {
+            scene: scene.clone(),
+            root,
+            scale,
+            draws,
+            changes: HashMap::new(),
+        });
         self.paint_dirty = false;
-        self.diagnostics.scene_builds = self.diagnostics.scene_builds.saturating_add(1);
         Ok(PaintedScene { scene, root })
     }
 
@@ -168,27 +312,27 @@ impl UiTree {
     }
     fn paint_context(
         &self,
-        scene: &mut Scene,
+        frame: &mut PaintFrame,
         parent: SceneNodeId,
         id: NodeId,
         clip_from: Option<NodeId>,
         scale: f64,
     ) -> Result<(), UiError> {
-        let mut scope = self.ancestor_clips(scene, parent, id, clip_from)?;
+        let mut scope = self.ancestor_clips(&mut frame.scene, parent, id, clip_from)?;
         if self.node(id)?.style.opacity < 1.0 {
             scope = append(
-                scene,
+                &mut frame.scene,
                 scope,
                 NodeKind::Opacity(self.node(id)?.style.opacity),
             )?;
         }
-        self.paint_node(scene, scope, id, scale)?;
+        self.paint_node(frame, scope, id, scale)?;
         for item in self.items(id)? {
             if item.context {
-                self.paint_context(scene, scope, item.id, Some(id), scale)?;
+                self.paint_context(frame, scope, item.id, Some(id), scale)?;
             } else {
-                let clipped = self.ancestor_clips(scene, scope, item.id, Some(id))?;
-                self.paint_node(scene, clipped, item.id, scale)?;
+                let clipped = self.ancestor_clips(&mut frame.scene, scope, item.id, Some(id))?;
+                self.paint_node(frame, clipped, item.id, scale)?;
             }
         }
         Ok(())
@@ -223,87 +367,131 @@ impl UiTree {
     }
     fn paint_node(
         &self,
-        scene: &mut Scene,
+        frame: &mut PaintFrame,
         parent: SceneNodeId,
         id: NodeId,
         scale: f64,
     ) -> Result<(), UiError> {
         let node = self.node(id)?;
         let rect = self.bounds(id)?;
-        let radii = normalized_radii(rect, node.style.border_radii);
-        if rect.size().width() > 0.0 && rect.size().height() > 0.0 {
-            append(
-                scene,
-                parent,
-                NodeKind::Draw(Primitive::Fill(
-                    rect,
-                    radii,
-                    Brush::Solid(node.style.background),
-                )),
-            )?;
-            let width = node
-                .style
-                .layout
-                .border_width
-                .min(rect.size().width())
-                .min(rect.size().height());
-            if width > 0.0 {
-                let clip = append(
-                    scene,
-                    parent,
-                    NodeKind::Clip(Clip::RoundedRect(rect, radii)),
-                )?;
-                let stroke_rect = inset(rect, width / 2.0);
-                let center_radii = reduce_radii(radii, width / 2.0);
-                append(
-                    scene,
-                    clip,
-                    NodeKind::Draw(Primitive::Stroke(
-                        stroke_rect,
-                        center_radii,
-                        width,
-                        Brush::Solid(node.style.border_color),
-                    )),
-                )?;
-            }
-        }
-        if !node.content.is_empty() || node.text.is_some() {
-            let mut content_parent = parent;
-            if node.style.overflow == Overflow::Clip {
-                let (clip, radii) = self.padding_clip(id)?;
-                content_parent = append(
-                    scene,
-                    content_parent,
-                    NodeKind::Clip(Clip::RoundedRect(clip, radii)),
-                )?;
-            }
-            let origin = rect.origin();
-            let content_parent = append(
-                scene,
-                content_parent,
-                NodeKind::Transform(Affine::new([1.0, 0.0, 0.0, 1.0, origin.x(), origin.y()])),
-            )?;
-            if let Some(text) = &node.text {
-                for primitive in text.primitives(node.layout, origin, scale)? {
-                    append(scene, content_parent, NodeKind::Draw(primitive))?;
-                }
-            }
-            for primitive in &node.content {
-                append(scene, content_parent, NodeKind::Draw(primitive.clone()))?;
-            }
-        }
+        // Absolute logical origin is part of rect. A fractional ancestor
+        // translation can change device glyph phase even with a clean local box.
+        let text_key = node.text.as_ref().map(|_| (node.layout, scale));
+        let draws = if let Some(painting) = &node.painting
+            && painting.rect == rect
+            && painting.text_key == text_key
+        {
+            painting.emit(&mut frame.scene, parent, node)?
+        } else {
+            let painting = Box::new(NodePainting::prepare(node, rect, text_key)?);
+            let draws = painting.emit(&mut frame.scene, parent, node)?;
+            frame.prepared.push((id, painting));
+            draws
+        };
+        frame.draws.insert(id, draws);
         Ok(())
     }
     fn padding_clip(&self, id: NodeId) -> Result<(Rect, CornerRadii), UiError> {
         let node = self.node(id)?;
         let rect = self.bounds(id)?;
-        let radius = normalized_radii(rect, node.style.border_radii);
-        let inner = inset(rect, node.style.layout.border_width);
-        Ok((
-            inner,
-            normalized_radii(inner, reduce_radii(radius, node.style.layout.border_width)),
-        ))
+        let radii = normalized_radii(rect, node.style.border_radii);
+        Ok(padding_box(rect, radii, node.style.layout.border_width))
     }
+}
+
+impl NodePainting {
+    fn prepare(
+        node: &Node,
+        rect: Rect,
+        text_key: Option<(LayoutBox, f64)>,
+    ) -> Result<Self, UiError> {
+        let radii = normalized_radii(rect, node.style.border_radii);
+        let border_width = node.style.layout.border_width;
+        let size = rect.size();
+        let background_radii = (size.width() > 0.0 && size.height() > 0.0).then_some(radii);
+        let width = border_width.min(size.width()).min(size.height());
+        let border = (background_radii.is_some() && width > 0.0).then(|| BorderPainting {
+            clip: Clip::RoundedRect(rect, radii),
+            rect: inset(rect, width / 2.0),
+            radii: reduce_radii(radii, width / 2.0),
+            width,
+        });
+        let content = if node.content.is_empty() && node.text.is_none() {
+            None
+        } else {
+            let origin = rect.origin();
+            let clip = (node.style.overflow == Overflow::Clip).then(|| {
+                let (inner, radii) = padding_box(rect, radii, border_width);
+                Clip::RoundedRect(inner, radii)
+            });
+            let glyphs = match (&node.text, text_key) {
+                (Some(text), Some((layout, scale))) => text.primitives(layout, origin, scale)?,
+                _ => Vec::new(),
+            };
+            Some(ContentPainting {
+                clip,
+                transform: Affine::new([1.0, 0.0, 0.0, 1.0, origin.x(), origin.y()]),
+                glyphs,
+            })
+        };
+        Ok(Self {
+            rect,
+            text_key,
+            background_radii,
+            border,
+            content,
+        })
+    }
+
+    fn background(&self, color: Color) -> Option<Primitive> {
+        self.background_radii
+            .map(|radii| Primitive::Fill(self.rect, radii, Brush::Solid(color)))
+    }
+
+    fn emit(
+        &self,
+        scene: &mut Scene,
+        parent: SceneNodeId,
+        node: &Node,
+    ) -> Result<DrawHandles, UiError> {
+        let mut draws = DrawHandles::default();
+        if let Some(background) = self.background(node.style.background) {
+            draws.background = Some(append(scene, parent, NodeKind::Draw(background))?);
+        }
+        if let Some(border) = &self.border {
+            let clip = append(scene, parent, NodeKind::Clip(border.clip.clone()))?;
+            let stroke = border.primitive(node.style.border_color);
+            draws.border = Some(append(scene, clip, NodeKind::Draw(stroke))?);
+        }
+        if let Some(content) = &self.content {
+            let scope = if let Some(clip) = &content.clip {
+                append(scene, parent, NodeKind::Clip(clip.clone()))?
+            } else {
+                parent
+            };
+            let scope = append(scene, scope, NodeKind::Transform(content.transform))?;
+            for primitive in &content.glyphs {
+                append(scene, scope, NodeKind::Draw(primitive.clone()))?;
+            }
+            for primitive in &node.content {
+                draws
+                    .custom
+                    .push(append(scene, scope, NodeKind::Draw(primitive.clone()))?);
+            }
+        }
+        Ok(draws)
+    }
+}
+
+impl BorderPainting {
+    fn primitive(&self, color: Color) -> Primitive {
+        Primitive::Stroke(self.rect, self.radii, self.width, Brush::Solid(color))
+    }
+}
+
+fn padding_box(rect: Rect, radii: CornerRadii, width: f64) -> (Rect, CornerRadii) {
+    let inner = inset(rect, width);
+    (inner, normalized_radii(inner, reduce_radii(radii, width)))
 }
 
 fn append(scene: &mut Scene, parent: SceneNodeId, kind: NodeKind) -> Result<SceneNodeId, UiError> {

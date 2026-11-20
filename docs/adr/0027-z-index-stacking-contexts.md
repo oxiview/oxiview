@@ -86,3 +86,10 @@ properties beyond the confirmed M2 scope.
   zero, static Flex/Grid items, opacity triggers, non-triggers, and unchanged
   absolute-position containing blocks. Changing these observable rules later
   requires revisiting this decision.
+
+## M2 execution evidence (2026-11-20)
+
+CPU pixel and hit tests exercise auto versus explicit zero, signed painting
+phases, tree-order ties, static Flex/Grid items, and opacity contexts. Changing
+stack levels preserves geometry and skips layout work in the CPU fixture.
+[Pixel tests](../../crates/oxiview-app/tests/ui_paint.rs) · [Hit tests](../../crates/oxiview-core/src/ui/tests.rs)

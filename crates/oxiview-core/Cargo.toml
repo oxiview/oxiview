@@ -19,3 +19,12 @@ oxiview-style.workspace = true
 oxiview-text.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "ui_tree"
+path = "../../benches/ui_tree.rs"
+harness = false

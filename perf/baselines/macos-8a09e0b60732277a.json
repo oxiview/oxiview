@@ -74,6 +74,62 @@
       "direction": "lower",
       "regression_percent": 10.0,
       "target": null
+    },
+    "layout/initial_layout/100": {
+      "value": 193100.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "layout/initial_layout/1000": {
+      "value": 2045000.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "layout/initial_layout/10000": {
+      "value": 26950000.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "ui_tree/arena_edits": {
+      "value": 841.3,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "ui_tree/clean_preparation": {
+      "value": 12.71,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "ui_tree/contained_layout_change": {
+      "value": 43180.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "ui_tree/hit_testing": {
+      "value": 48550.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "ui_tree/paint_only_update": {
+      "value": 226.7,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
     }
   }
 }

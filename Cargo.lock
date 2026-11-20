@@ -1100,6 +1100,8 @@ dependencies = [
  "oxiview-render-cpu",
  "oxiview-render-wgpu",
  "oxiview-scene",
+ "oxiview-style",
+ "oxiview-testing",
  "thiserror",
 ]
 
@@ -1118,6 +1120,7 @@ dependencies = [
 name = "oxiview-core"
 version = "0.0.0"
 dependencies = [
+ "divan",
  "oxiview-base",
  "oxiview-layout",
  "oxiview-platform",
@@ -1125,6 +1128,7 @@ dependencies = [
  "oxiview-scene",
  "oxiview-style",
  "oxiview-text",
+ "proptest",
  "thiserror",
  "tracing",
 ]
@@ -1133,6 +1137,7 @@ dependencies = [
 name = "oxiview-layout"
 version = "0.0.0"
 dependencies = [
+ "divan",
  "oxiview-base",
  "taffy",
  "thiserror",

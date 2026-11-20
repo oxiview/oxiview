@@ -84,3 +84,11 @@ the existing cancel-before-destruction rule still applies.
   window thread. Concrete report types/signatures and callback-work bounds are
   delegated engineering choices under the owner's native-preview authorization;
   their implemented behavior and verification must be recorded separately.
+
+## M2 execution evidence (2026-11-20)
+
+Reconciliation publishes the new hover path, sends direct leaves inner to
+outer and enters outer to inner for changed membership, then enqueues the
+callbacks' commands together. Capture-release traces check that the leave
+and enter callbacks observe the new hover state.
+[Hover implementation](../../crates/oxiview-core/src/ui/input.rs) · [Capture-release tests](../../crates/oxiview-core/tests/m2_capture_matrix.rs)

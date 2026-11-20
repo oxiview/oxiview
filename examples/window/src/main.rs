@@ -161,6 +161,7 @@ fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
     let mut json = false;
     let mut debug_overlay = false;
     let mut fullscreen_check = false;
+    let mut trace_input = false;
     // The standalone preview bundle uses this executable name as its default mode.
     let mut layout_demo = std::env::current_exe().ok().is_some_and(|path| {
         path.file_name()
@@ -173,6 +174,7 @@ fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
             "--debug-overlay" => debug_overlay = true,
             "--fullscreen-check" => fullscreen_check = true,
             "--layout-demo" => layout_demo = true,
+            "--trace-input" => trace_input = true,
             "--measure-latency" => {
                 let count: usize = args.next().ok_or("missing sample count")?.parse()?;
                 if count == 0 || count > 100_000 {
@@ -191,7 +193,7 @@ fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument: {arg}; usage: window [--layout-demo [--headless] | --headless | --idle-check seconds [--json] | --measure-latency samples [--json] | --fullscreen-check [--debug-overlay] [--json]]"
+                    "unknown argument: {arg}; usage: window [--layout-demo [--headless] [--trace-input] | --headless | --idle-check seconds [--json] | --measure-latency samples [--json] | --fullscreen-check [--debug-overlay] [--json]]"
                 )
                 .into());
             }
@@ -199,9 +201,12 @@ fn run(presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
     }
     if layout_demo {
         if idle.is_some() || samples.is_some() || json || fullscreen_check || debug_overlay {
-            return Err("--layout-demo supports only --headless; M1 measurement and overlay modes keep their original workload".into());
+            return Err("--layout-demo supports --headless and --trace-input".into());
         }
-        return layout_demo::run(headless, presents);
+        return layout_demo::run(headless, trace_input, presents);
+    }
+    if trace_input {
+        return Err("--trace-input requires --layout-demo".into());
     }
     if debug_overlay && (idle.is_some() || samples.is_some() || headless) {
         return Err("--debug-overlay requires a native window and is supported only interactively or with --fullscreen-check".into());

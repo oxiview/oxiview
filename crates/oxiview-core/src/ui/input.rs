@@ -416,6 +416,7 @@ impl UiTree {
                 self.interrupt(&mut handler, &mut work)?;
                 self.cancel_queue(UiError::QueueClosed, &mut handler, &mut work)?;
                 let order = self.postorder(self.root)?;
+                self.paint_cache = None;
                 for id in order {
                     if let Some(slot) = self.nodes.get_mut(id.slot) {
                         drop(slot.take());
@@ -425,6 +426,8 @@ impl UiTree {
                     .try_borrow_mut()
                     .map_err(|_| UiError::ReservationBusy)?
                     .closed = true;
+                self.engine.clear_cache();
+                self.layout_changes = HashMap::new();
                 self.closed = true;
             }
             _ => {}
@@ -552,7 +555,7 @@ impl UiTree {
     }
     #[allow(clippy::too_many_arguments)]
     fn deliver(
-        &self,
+        &mut self,
         kind: PointerEventKind,
         target: NodeId,
         current_target: NodeId,
@@ -579,21 +582,29 @@ impl UiTree {
             let mut callback = callback
                 .try_borrow_mut()
                 .map_err(|_| UiError::HandlerBusy)?;
-            if let Some(owner) = self
+            let owner = self
                 .node(current_target)?
                 .scopes
                 .first()
-                .map(|scope| scope.owner())
-            {
+                .map(|scope| scope.owner());
+            let mut invoke = || {
+                let _span =
+                    tracing::trace_span!("ui_pointer_handler", ?kind, ?target, ?current_target)
+                        .entered();
+                self.diagnostics.dispatched_handlers =
+                    self.diagnostics.dispatched_handlers.saturating_add(1);
+                callback(&event, self, commands);
+            };
+            if let Some(owner) = owner {
                 match owner.run(|| {
-                    callback(&event, self, commands);
+                    invoke();
                     Ok(())
                 }) {
                     Ok(()) | Err(ReactiveError::Disposed) => {}
                     Err(error) => return Err(UiError::Reactive(error.to_string())),
                 }
             } else {
-                callback(&event, self, commands);
+                invoke();
             }
         }
         handler(&event, self, commands);
@@ -837,7 +848,7 @@ impl UiTree {
                         self.cleanup(id, false, handler, work)?;
                     }
                     self.node_mut(id)?.hidden = !visible;
-                    self.dirty_layout();
+                    self.dirty_layout(id, true, false)?;
                 }
                 Ok(())
             }

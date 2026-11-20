@@ -3,7 +3,7 @@
 mod adapter;
 mod types;
 mod validation;
-pub use adapter::TaffyLayout;
+pub use adapter::{IncrementalTaffyLayout, TaffyLayout};
 use oxiview_base::{Point, Size};
 use std::hash::Hash;
 pub use types::*;
@@ -41,14 +41,34 @@ pub struct LayoutBox {
 /// Work performed during one successful layout computation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutStats {
-    /// Number of nodes visited while validating the retained tree.
+    /// Number of nodes inspected while synchronizing layout inputs.
     pub visited_nodes: usize,
+    /// Number of style projections requested from the caller.
+    pub resolved_styles: usize,
+    /// Number of layout algorithm entry calls, including cache hits and hidden nodes.
+    pub layout_visits: usize,
     /// Number of uncached layout algorithm evaluations.
     pub computed_nodes: usize,
     /// Number of cached layout results reused.
     pub cache_hits: usize,
-    /// Number of calls to custom intrinsic measurement.
+    /// Number of calls to [`LayoutTree::measure`].
     pub measured_nodes: usize,
+}
+
+/// A coalesced mutation since the adapter's last successful layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutChange<I> {
+    /// Updates a live node. New nodes must report both style and children.
+    Update {
+        /// The node's current structural parent, or none for the root.
+        parent: Option<I>,
+        /// Its projected style may have changed.
+        style: bool,
+        /// Its ordered children may have changed.
+        children: bool,
+    },
+    /// A node was removed. Report every node removed from a subtree.
+    Remove,
 }
 /// Errors leave previously committed geometry intact.
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +103,7 @@ pub trait LayoutTree {
     /// Projects typed style into owned layout inputs.
     fn layout_input(&self, node: Self::NodeId) -> LayoutInput;
     /// Publishes geometry after the complete computation succeeds.
+    /// With an incremental engine, unchanged geometry can remain at the caller.
     fn set_layout(&mut self, node: Self::NodeId, layout: LayoutBox);
     /// Checks that an identity belongs to a live node.
     fn contains_node(&self, _node: Self::NodeId) -> bool {
@@ -118,6 +139,22 @@ pub trait LayoutEngine<I: Copy + Eq + Hash> {
         root: I,
         viewport: Size,
     ) -> Result<LayoutStats, LayoutError>;
+
+    /// Reports whether a node is a layout boundary in the last successful pass.
+    ///
+    /// `Some(true)` certifies that changes confined to the node's descendants
+    /// leave its size and all other contributions to ancestor layout unchanged
+    /// under the committed constraints, with the node's own inputs and position
+    /// in the tree held fixed. Layout inside the subtree can still change.
+    /// `Some(false)` means the engine did not certify independence for this node.
+    /// `None` means no report is available, such as for an unknown node or an
+    /// engine that uses this default implementation.
+    ///
+    /// A failed computation leaves the previous report intact. Pending edits,
+    /// including removals, and new constraints are reflected only after success.
+    fn layout_boundary(&self, _node: I) -> Option<bool> {
+        None
+    }
 }
 
 impl<I: Copy + Eq + Hash> LayoutEngine<I> for TaffyLayout<I> {
@@ -128,6 +165,10 @@ impl<I: Copy + Eq + Hash> LayoutEngine<I> for TaffyLayout<I> {
         viewport: Size,
     ) -> Result<LayoutStats, LayoutError> {
         TaffyLayout::compute(self, tree, root, viewport)
+    }
+
+    fn layout_boundary(&self, node: I) -> Option<bool> {
+        self.committed_layout_boundary(node)
     }
 }
 

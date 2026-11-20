@@ -36,3 +36,11 @@ invalidates that ID. Deferred command validation and reporting remain unchanged.
 Node-owned resources are released in child-list-ordered postorder with an
 explicit stack, preserving parent resources through descendant cleanup.
 These contracts refine the node tree without replacing this arena-tree decision.
+
+## M2 execution evidence (2026-11-20)
+
+The retained `UiTree` supplies layout inputs from its arena, and tests check
+that local edits skip clean descendants and paint-only edits skip layout.
+Clean nodes reuse painting content in complete Scenes, with independent
+repaint boundaries deferred to M10.
+[Layout tests](../../crates/oxiview-core/src/ui/layout_tests.rs) · [Paint tests](../../crates/oxiview-app/tests/ui_paint.rs)

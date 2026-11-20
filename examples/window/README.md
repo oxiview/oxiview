@@ -15,6 +15,28 @@ capture. The headless command runs the interaction checks and writes
 The M1 measurement and overlay flags apply to the pointer-following scene below.
 [M2 plan and acceptance status](../../docs/plans/m2-node-tree-and-layout.md)
 
+### Native capture review
+
+Run Layout Lab with input tracing on the Mac under review.
+
+```sh
+mkdir -p target/xtask
+cargo run --release -p window -- --layout-demo --trace-input 2>target/xtask/m2-native-input.log
+```
+
+Drag the orange tile past each window edge and release outside. Use RESET
+between drags. For a second pass, take the tile out and back inside before
+releasing. The trace records logical coordinates, the events delivered to
+the tile, and its capture and hover state after dispatch. Across the edge,
+`Move` should continue with both states true. The final `Up` releases
+capture. Releasing outside also clears hover.
+
+Interrupt an active drag by switching apps, then by minimizing the window.
+Check for a single `Cancel` before hover clears. Restore the window and
+start a new drag. Inspect nested layout during live resize, enter and leave
+fullscreen, and check that the controls and tile still respond after each
+transition. Keep the native trace with the visual observations.
+
 ## M1 pointer-following scene
 
 From the repository root:
@@ -62,6 +84,15 @@ The example opts into the platform's release-capable `diagnostics` feature.
 Production drawable tracking estimates compositor delay; measurement record collection is activated only for measurement runs. This replaces the
 debug-only `OXIVIEW_WINDOW_INPUT_CHECK` probe. Diagnostics are measurement
 machinery, not a framework product API.
+
+The latency sweep posts synthetic mouse events to the measurement application's
+own AppKit queue. It moves the drawn rectangle using those coordinates. The
+native launcher brings the window to the foreground, where physical input
+can interfere with frame attribution or invalidate the idle interval. Reserve
+one to two minutes of quiet desktop time for the native stages on a warm build.
+For motion driven by frame submissions, the [animation FPS demo](../animation-fps/README.md)
+measures actual display cadence without pointer events. For the eight M2 CPU
+timings, `cargo xtask bench --m2` runs without a visible window.
 
 `cargo xtask bench` runs three latency rounds (median of their p95 values),
 then the idle mode, sequentially after Divan;

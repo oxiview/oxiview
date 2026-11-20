@@ -110,5 +110,13 @@ After confirming this group, the owner approved the remaining groups 3-12 and
 authorized immediate native-preview implementation using engineering judgment
 and parallel agents. The preview's public tests cover stable routing across an
 enter callback's deletion request and final-button release before queued removal.
-The M2 execution record tracks remaining native, snapshot and performance
-acceptance. [Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs) · [M2 execution record](../plans/m2-node-tree-and-layout.md#execution-record)
+The M2 execution record documents native manual acceptance, approved snapshots
+and baseline comparisons. [Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs) · [M2 execution record](../plans/m2-node-tree-and-layout.md#execution-record)
+
+## M2 execution evidence (2026-11-20)
+
+Input traces check that down keeps its target and bubble route after enter
+queues removal, and that the final up releases capture before queued
+self-removal. The command drain delivers each batch report before checking
+stationary hover against the final state.
+[Input contract tests](../../crates/oxiview-core/tests/m2_input_contract.rs) · [Dispatch and command drain](../../crates/oxiview-core/src/ui/input.rs)

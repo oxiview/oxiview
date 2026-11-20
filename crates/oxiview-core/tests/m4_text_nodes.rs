@@ -56,14 +56,23 @@ fn reactive_text_reuses_node_identity_and_rasterizes_at_actual_scale() {
     assert!(first_size.height() > 0.0);
     assert!(image_pixels(&first) > 0);
     let cache = system.borrow().cache_stats();
+    let before = tree.diagnostics();
     let mut root_style = tree.style(tree.root()).unwrap().clone();
     root_style.background = Color::from_rgba8(245, 245, 245, 255);
     tree.set_style(tree.root(), root_style).unwrap();
     tree.paint(viewport(), 1.0).unwrap();
     assert_eq!(system.borrow().cache_stats(), cache);
+    let recolored = tree.diagnostics();
+    assert_eq!(recolored.scene_updates, before.scene_updates + 1);
+    assert_eq!(recolored.scene_builds, before.scene_builds);
+    assert_eq!(recolored.painted_nodes, before.painted_nodes);
     let doubled = tree.paint(viewport(), 2.0).unwrap();
+    let scaled = tree.diagnostics();
+    assert_eq!(scaled.scene_builds, recolored.scene_builds + 1);
+    assert_eq!(scaled.painted_nodes, recolored.painted_nodes + 1);
     assert_eq!(tree.text_size(id).unwrap(), first_size);
     assert!(image_pixels(&doubled) > image_pixels(&first));
+    let before = tree.diagnostics();
     source
         .set("Score 42. This is a much longer wrapped message with real glyphs.".into())
         .unwrap();
@@ -71,6 +80,9 @@ fn reactive_text_reuses_node_identity_and_rasterizes_at_actual_scale() {
     assert!(tree.contains(id));
     assert_eq!(tree.text_source(id).unwrap(), source.get().unwrap());
     assert!(tree.text_size(id).unwrap().height() > first_size.height());
+    let after = tree.diagnostics();
+    assert_eq!(after.layout_input_visits - before.layout_input_visits, 1);
+    assert_eq!(after.resolved_styles, before.resolved_styles);
     assert!(image_pixels(&tree.paint(viewport(), 1.5).unwrap()) > 0);
     tree.remove(id).unwrap();
     source.set("Detached".into()).unwrap();
@@ -80,6 +92,10 @@ fn reactive_text_reuses_node_identity_and_rasterizes_at_actual_scale() {
             .reports
             .is_empty()
     );
+    let system_ref = Rc::downgrade(&system);
+    drop(system);
+    assert!(system_ref.upgrade().is_none());
+    assert!(image_pixels(&first) > 0);
 }
 
 #[test]
@@ -193,7 +209,7 @@ fn assert_pixel_aligned(glyphs: &[(Rect, RgbaImage)]) {
 
 #[test]
 fn fractional_world_origins_select_glyph_phase_without_double_translation() {
-    for scale in [1.0, 2.0] {
+    for scale in [1.0, 1.5, 2.0] {
         for direction in [1.0, -1.0] {
             let mut fonts = TextSystem::without_system_fonts();
             fonts
@@ -254,10 +270,14 @@ fn fractional_world_origins_select_glyph_phase_without_double_translation() {
                 assert_eq!(image, &expected.image);
             }
             let cached = system.borrow().cache_stats();
-            parent_style.layout.inset.left = Length::Points(17.125 * direction + 1.0 / scale);
-            parent_style.layout.inset.top = Length::Points(11.375 * direction + 2.0 / scale);
+            // Whole logical translations are exact in Taffy's coordinates
+            // and produce whole device-pixel translations at every test scale.
+            parent_style.layout.inset.left = Length::Points(17.125 * direction + 2.0);
+            parent_style.layout.inset.top = Length::Points(11.375 * direction + 4.0);
             tree.set_style(parent, parent_style).unwrap();
+            let before = tree.diagnostics();
             let translated = device_glyphs(&tree.paint(viewport(), scale).unwrap());
+            assert_eq!(tree.diagnostics().painted_nodes - before.painted_nodes, 2);
             assert_pixel_aligned(&translated);
             assert_eq!(tree.bounds(label).unwrap().size(), logical_size);
             assert_eq!(
@@ -266,7 +286,7 @@ fn fractional_world_origins_select_glyph_phase_without_double_translation() {
                 "whole device-pixel translation should reuse the node raster cache"
             );
             for ((first, old_image), (moved, image)) in first.iter().zip(&translated) {
-                let expected = [1.0, 2.0, 1.0, 2.0];
+                let expected = [2.0 * scale, 4.0 * scale, 2.0 * scale, 4.0 * scale];
                 for ((old, new), delta) in
                     first.edges().into_iter().zip(moved.edges()).zip(expected)
                 {
@@ -274,8 +294,9 @@ fn fractional_world_origins_select_glyph_phase_without_double_translation() {
                 }
                 assert_eq!(old_image.pixels().as_ptr(), image.pixels().as_ptr());
             }
-            label_style.layout.inset.left = Length::Points(5.25 + 0.25 / scale);
-            tree.set_style(label, label_style).unwrap();
+            let mut parent_style = tree.style(parent).unwrap().clone();
+            parent_style.layout.inset.left = Length::Points(17.375 * direction + 2.0);
+            tree.set_style(parent, parent_style).unwrap();
             let fractional = device_glyphs(&tree.paint(viewport(), scale).unwrap());
             assert_pixel_aligned(&fractional);
             assert_eq!(tree.bounds(label).unwrap().size(), logical_size);

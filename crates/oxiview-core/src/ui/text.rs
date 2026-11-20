@@ -177,7 +177,6 @@ pub fn text(system: Rc<RefCell<TextSystem>>, source: impl Into<String>, style: T
     let mut view = node().measure(Rc::clone(&text));
     view.setup.push(Box::new(move |tree, id, _| {
         tree.node_mut(id)?.text = Some(text);
-        tree.dirty_layout();
         Ok(())
     }));
     view
@@ -210,14 +209,15 @@ impl UiTree {
             .cloned()
             .ok_or_else(|| UiError::Text("node has no text content".into()))?;
         let source = source.into();
-        if *text.source.try_borrow().map_err(|_| UiError::HandlerBusy)? != source {
-            self.bump_measure_revision(id)?;
-            *text
-                .source
-                .try_borrow_mut()
-                .map_err(|_| UiError::HandlerBusy)? = source;
+        let mut old = text
+            .source
+            .try_borrow_mut()
+            .map_err(|_| UiError::HandlerBusy)?;
+        if *old != source {
             text.invalidate()?;
-            self.dirty_layout();
+            self.bump_measure_revision(id)?;
+            *old = source;
+            self.node_mut(id)?.painting = None;
         }
         Ok(())
     }

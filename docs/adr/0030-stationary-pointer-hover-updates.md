@@ -121,3 +121,11 @@ This default cannot justify delivery to a destroyed node.
   batch, and toggling during capture. Verify the declared default, absence of
   property inheritance, final-state evaluation, and preservation of hover when
   disabling.
+
+## M2 execution evidence (2026-11-20)
+
+After a batch, reconciliation checks the old hover and fresh hit paths using
+final styles for surviving nodes and retained opt-in values for deleted nodes.
+A core fixture checks that removing the hovered node triggers enter on the
+replacement only when the removed node opted in.
+[Hover implementation](../../crates/oxiview-core/src/ui/input.rs) · [Stationary hover test](../../crates/oxiview-core/src/ui/tests.rs)

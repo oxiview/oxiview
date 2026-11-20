@@ -287,3 +287,15 @@ fn rgba_image_validates_length_and_clears_transparent_rgb() -> Result<(), oxivie
     );
     Ok(())
 }
+#[test]
+fn published_snapshots_share_storage_until_an_edit() -> Result<(), Error> {
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Opacity(1.0))?;
+    let mut snapshot = scene.clone();
+    assert!(std::sync::Arc::ptr_eq(&scene.forest, &snapshot.forest));
+    scene.replace(root, NodeKind::Opacity(0.5))?;
+    assert_eq!(snapshot.content(root)?, &NodeKind::Opacity(1.0));
+    snapshot.remove(root)?;
+    assert_eq!(scene.content(root)?, &NodeKind::Opacity(0.5));
+    Ok(())
+}

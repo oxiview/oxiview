@@ -24,3 +24,11 @@ CSS selectors and cascading serve documents with separate structure and styling.
 
 - Theme rules may expand, but arbitrary selectors and cascading remain prohibited unless a new ADR supersedes this decision.
 - Document style units and semantics, such as percentage border radii and shadow spread, against CSS specifications to avoid identical names with different meanings.
+
+## M2 execution evidence (2026-11-20)
+
+The typed `Style` covers box, Flex, Grid, Block, paint, and pointer properties,
+with table-driven tests for no-ops, paint-only and layout edits, and atomic
+rejection of invalid numeric values. State-variant styling and themes remain
+assigned to M5.
+[Style types](../../crates/oxiview-style/src/lib.rs) · [Invalidation tests](../../crates/oxiview-core/src/ui/layout_tests.rs) · [M2 scope](../plans/m2-node-tree-and-layout.md#scope)

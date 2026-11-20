@@ -60,7 +60,10 @@ enum Task {
     },
     /// Run benchmarks and compare this machine's performance baseline.
     Bench {
-        /// Create or update the repository baseline; run only after human confirmation.
+        /// Run only the eight M2 layout and UI tree workloads without opening a native window.
+        #[arg(long)]
+        m2: bool,
+        /// Record the selected scope in the repository baseline. Run only after human confirmation.
         #[arg(long)]
         record: bool,
     },
@@ -166,10 +169,15 @@ fn run(task: Task, root: &Path, report: &mut Report) {
             .push(execute(&scaffold::NewCrate { name, context }, root));
         return;
     }
-    if let Task::Bench { record } = task {
+    if let Task::Bench { m2, record } = task {
+        let scope = if m2 {
+            bench::Scope::M2
+        } else {
+            bench::Scope::Full
+        };
         report
             .checks
-            .push(execute(&bench::BenchCheck { record }, root));
+            .push(execute(&bench::BenchCheck { scope, record }, root));
         return;
     }
     let full = matches!(task, Task::Verify { full: true });
@@ -230,9 +238,13 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         report.checks.push(execute(&docs::DocsCheck, root));
     }
     if full {
-        report
-            .checks
-            .push(execute(&bench::BenchCheck { record: false }, root));
+        report.checks.push(execute(
+            &bench::BenchCheck {
+                scope: bench::Scope::Full,
+                record: false,
+            },
+            root,
+        ));
     }
 }
 
@@ -263,8 +275,12 @@ fn main() -> ExitCode {
             }
         }
     }
-    if report.checks.iter().any(|item| item.name == "bench") {
-        report.performance = std::fs::read(root.join("target/xtask/bench-results.json"))
+    if let Some(scope) = report
+        .checks
+        .iter()
+        .find_map(|item| bench::Scope::from_check_name(&item.name))
+    {
+        report.performance = std::fs::read(root.join("target/xtask").join(scope.results_file()))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     }
@@ -287,7 +303,7 @@ fn main() -> ExitCode {
             println!("{}: {:?} ({} ms)", item.name, item.status, item.duration_ms);
             if matches!(
                 item.name.as_str(),
-                "snapshot" | "bench" | "new-crate" | "install-hooks"
+                "snapshot" | "bench" | "bench-m2" | "new-crate" | "install-hooks"
             ) && item.status == report::Status::Pass
                 && let Ok(log) =
                     std::fs::read_to_string(root.join(format!("target/xtask/{}.log", item.name)))
@@ -305,4 +321,42 @@ fn main() -> ExitCode {
         );
     }
     ExitCode::from(report.exit_code())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn bench_accepts_each_flag_once_in_either_order() {
+        for (flags, m2, record) in [
+            (&[][..], false, false),
+            (&["--record"][..], false, true),
+            (&["--m2"][..], true, false),
+            (&["--m2", "--record"][..], true, true),
+            (&["--record", "--m2"][..], true, true),
+        ] {
+            let args = ["xtask", "bench"].into_iter().chain(flags.iter().copied());
+            let cli = Cli::try_parse_from(args).expect("valid bench flags");
+            assert!(matches!(
+                cli.command,
+                Task::Bench { m2: actual_m2, record: actual_record }
+                    if actual_m2 == m2 && actual_record == record
+            ));
+        }
+        for (flags, kind) in [
+            (&["--m2", "--m2"][..], ErrorKind::ArgumentConflict),
+            (&["--record", "--record"][..], ErrorKind::ArgumentConflict),
+            (&["--m3"][..], ErrorKind::UnknownArgument),
+            (&["--m2=true"][..], ErrorKind::TooManyValues),
+            (&["layout"][..], ErrorKind::UnknownArgument),
+        ] {
+            let args = ["xtask", "bench"].into_iter().chain(flags.iter().copied());
+            let error = Cli::try_parse_from(args)
+                .err()
+                .expect("invalid bench flags");
+            assert_eq!(error.kind(), kind);
+        }
+    }
 }

@@ -12,11 +12,59 @@ Define versions only in root `[workspace.dependencies]`; crates inherit `divan.w
 
 ## Measurement and parsing
 
-xtask runs `cargo bench --workspace --benches --locked` sequentially three times using the optimized bench profile. The example uses 100 samples per run and 10 iterations per sample. Read Divan's median from each run, then take the median of those three values as the final result in ns. This is not a confidence interval or statistical significance test. Keep power, cooling, build configuration, and background load stable; do not run other performance tests concurrently.
+Full bench runs `cargo bench --workspace --benches --locked` sequentially three times using the optimized bench profile. The image comparison uses 100 samples per run and 10 iterations per sample. Both benchmark scopes read Divan's median from each run and take the median of those three values as the final result in ns. The median summarizes the observed samples. Keep power, cooling, build configuration, and background load stable and run performance tests one at a time.
 
 Divan currently emits terminal statistics tables. The parser validates headers and column counts, reconstructs tree names as `target/function/argument`, and supports ps/ns/µs/μs/us/ms/s. It requires finite positive values and nonzero sample counts, rejecting duplicate metrics, empty output, and inconsistent metric sets across runs. Clear inherited `DIVAN_*` overrides so filtering or test mode cannot alter measurement. New benchmarks use whitespace-free names without counter rows or custom output. Format changes require parser and test updates; parsing failure must never count as success. Standard libtest output with zero benchmarks is ignored.
 
-Reports go to `target/xtask/report.json`. `performance.metrics` includes each current value, baseline, status, and threshold; the three M1 metrics include `hard_check_pass` and measurement details (including latency percentiles and frames); the M7 list metric shows `pending`. `bench-results.json` is a standalone artifact with the same details. `bench.log` records the decision summary; `bench-1.log` through `bench-3.log` preserve raw stdout/stderr. Native stdout and stderr are preserved in `bench-latency-1.json` through `bench-latency-3.json` / matching `.log` files and `bench-idle.json` / `bench-idle.log`. Every bench run first removes these old artifacts to avoid referencing stale measurements after failure. `--json` prints only the report to stdout.
+Reports go to `target/xtask/report.json`. `performance.metrics` includes each current value, baseline, status, and threshold. In a full report, the three M1 metrics include `hard_check_pass` and measurement details (including latency percentiles and frames), and the M7 list metric shows `pending`. `bench-results.json` is a standalone artifact with the same details. `bench.log` records the decision summary, and `bench-1.log` through `bench-3.log` preserve raw stdout/stderr. Native stdout and stderr are preserved in `bench-latency-1.json` through `bench-latency-3.json` and their matching `.log` files, as well as `bench-idle.json` and `bench-idle.log`. Each run clears the old artifacts for its scope before measurement. `--json` prints only the report to stdout.
+
+## M2 retained tree and layout benchmarks
+
+The layout target computes from a fresh Taffy adapter and caller-owned Flex
+column tree with up to ten children per parent and a fixed intrinsic size
+fallback. Node counts include the root, and the logical viewport is 800×600.
+The UI tree target starts with a prepared 985-node tree (root, 24 fixed-size
+absolute rows, and 40 tiles per row) at 720×480 logical points and scale 1.
+Fixture construction, warm-up, and preparation of replacement styles happen
+outside the timed work. [Layout benchmark](../../benches/layout.rs) · [UI tree benchmark](../../benches/ui_tree.rs)
+
+Run the M2 comparison once the CPU is idle and the owner is ready to measure.
+
+```sh
+cargo xtask bench --m2
+```
+
+This command selects the eight workloads below by exact Divan name and runs
+three rounds of the `layout` and `ui_tree` targets without opening a native
+window or running GPU, pointer latency, or idle diagnostics. The report
+includes `performance.scope = "m2"` and only those metrics. Standalone results
+go to `target/xtask/bench-m2-results.json`, with the decision in `bench-m2.log`
+and Divan output in `bench-m2-1.log` through `bench-m2-3.log` in the same
+directory.
+
+| Report metric | Timed workload | Samples per run | Iterations per sample |
+| --- | --- | ---: | ---: |
+| `layout/initial_layout/100` | Compute initial layout for 100 nodes | 40 | 1 |
+| `layout/initial_layout/1000` | Compute initial layout for 1,000 nodes | 40 | 1 |
+| `layout/initial_layout/10000` | Compute initial layout for 10,000 nodes | 40 | 1 |
+| `ui_tree/arena_edits` | Append a tile using a warmed arena slot, move it from the first row to index 0 in the last row, and remove it | 100 | 10 |
+| `ui_tree/clean_preparation` | Call `paint` on the unchanged tree at the same viewport and reuse its cached Scene | 100 | 1,000 |
+| `ui_tree/contained_layout_change` | Change the first tile's height from 16 to 18 logical points and run layout within the fixed-size row fixture | 40 | 1 |
+| `ui_tree/paint_only_update` | Alternate the first tile's background between two colors, prepare its frame and release the frame before the next edit | 100 | 100 |
+| `ui_tree/hit_testing` | Hit test logical point (8, 8) against prepared geometry, reaching the first tile deep in reverse paint order | 100 | 10 |
+
+Each metric reports the median of the three Divan medians in ns per
+iteration. Lower is better, with the default 10% relative regression
+threshold and no absolute M2 time budget. The timings cover CPU-side work
+on fixed fixtures. Tests use counters to check that paint-only edits skip
+layout and contained layout changes skip clean branches.
+[Layout tests](../../crates/oxiview-core/src/ui/layout_tests.rs) · [Diagnostics tests](../../crates/oxiview-core/tests/ui_diagnostics.rs)
+
+A new metric without a machine baseline reports `missing_baseline`. A metric
+missing from all three parsed rounds reports `missing_measurement`. Both
+fail the comparison. Differing metric sets between rounds or an unexpected
+metric are output errors. Snapshot acceptance and native visual and input
+review are separate acceptance steps. [Benchmark comparison](../../xtask/src/bench.rs) · [M2 acceptance gates](../plans/m2-node-tree-and-layout.md#verification-and-approval-gates)
 
 ## Recording and updating
 
@@ -60,9 +108,9 @@ baseline updates still use the separate human-confirmed `bench --record` workflo
 ### Updating the regression baseline
 
 1. Close heavy workloads and confirm the current code and benchmark inputs are as intended.
-2. Run `cargo xtask bench --record` **only after human confirmation**. The command explicitly reports creation or replacement of `perf/baselines/<machine-id>.json`, which must be reviewed and committed. Default bench and verify never write baselines.
-3. Immediately run `cargo xtask bench` to confirm reproducibility. Investigate code and environment on regression; do not repeatedly record to hide failures.
-4. Updating a baseline preserves each metric's `regression_percent` (default 10, individually configurable from 0–100), except the fixed 15% pixel margin, while updating values, machine description, and recording time. Missing recorded metrics fail even with record. Deleting or renaming metrics requires human review of baseline changes.
+2. Run `cargo xtask bench --record` for the full suite or `cargo xtask bench --m2 --record` for M2 **only after human confirmation**. The command reports creation or replacement of `perf/baselines/<machine-id>.json`, which must be reviewed and committed. Default bench and verify never write baselines.
+3. Immediately repeat the comparison for the same scope to confirm reproducibility. Investigate code and environment on regression. Do not repeatedly record to hide failures.
+4. Full recording preserves each metric's `regression_percent` (default 10, individually configurable from 0–100), except the fixed 15% pixel margin, while updating values, machine description, and recording time. Scoped recording updates the eight M2 values and preserves the existing machine description, recording time, thresholds, and other entries. A first scoped recording creates the machine baseline with M2 values and pending hard-target entries. Full comparison still requires baselines for all full-suite measurements. Missing measurements within the selected scope also fail in recording mode. Deleting or renaming metrics requires human review of baseline changes.
 
 The machine identifier uses a fixed FNV-1a 64-bit hash of architecture, model, CPU name, and memory bytes, prefixed with the operating system. macOS reads `hw.model`, `machdep.cpu.brand_string`, and `hw.memsize`; if sandboxing denies access, it uses corresponding fields from `system_profiler SPHardwareDataType -detailLevel mini -json` (mini excludes serial numbers and UUIDs). Windows uses CIM model/CPU/physical memory; Linux uses the DMI model, `/proc/cpuinfo`, and `/proc/meminfo`. It reads no serial numbers, usernames, or hostnames. OS and rustc versions are recorded in the description but excluded from the hash, so repeated runs yield the same ID.
 

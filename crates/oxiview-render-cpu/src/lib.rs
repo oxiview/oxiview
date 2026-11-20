@@ -8,7 +8,11 @@
 use kurbo::Shape;
 use oxiview_base::{Color, CornerRadii, Rect};
 use oxiview_scene::{Brush, Clip, EncodedNode, EncodedScene, NodeId, Primitive, Scene};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    f64::consts::{FRAC_PI_2, PI},
+    sync::Arc,
+};
 use vello_cpu::{Pixmap, RenderContext, Resources, color, kurbo, peniko};
 
 pub use oxiview_scene::{PixelSize, RgbaImage};
@@ -77,9 +81,51 @@ fn straight(channel: u8, alpha: u8) -> u8 {
 
 fn path(rect: Rect, radii: CornerRadii) -> kurbo::BezPath {
     let [x0, y0, x1, y1] = rect.edges();
-    let [tl, tr, br, bl] = radii.values();
-    kurbo::RoundedRect::new(x0, y0, x1, y1, kurbo::RoundedRectRadii::new(tl, tr, br, bl))
-        .to_path(0.1)
+    let [tl, tr, br, bl] = radii.values().map(f64::abs);
+    let width = (x1 - x0).abs();
+    let height = (y1 - y0).abs();
+    let fits = tl + tr <= width * (1.0 + f64::EPSILON)
+        && bl + br <= width * (1.0 + f64::EPSILON)
+        && tl + bl <= height * (1.0 + f64::EPSILON)
+        && tr + br <= height * (1.0 + f64::EPSILON);
+    if !fits || tl.max(tr).max(br).max(bl) <= width.min(height) / 2.0 {
+        return kurbo::RoundedRect::new(
+            x0,
+            y0,
+            x1,
+            y1,
+            kurbo::RoundedRectRadii::new(tl, tr, br, bl),
+        )
+        .to_path(0.1);
+    }
+
+    // Kurbo's RoundedRect clips each radius to half the shortest side.
+    // Fitted asymmetric radii can extend farther along an edge.
+    let (left, top, right, bottom) = (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+    let mut path = kurbo::BezPath::new();
+    path.move_to((left + tl, top));
+    for (edge, center, radius, angle) in [
+        ((right - tr, top), (right - tr, top + tr), tr, -FRAC_PI_2),
+        ((right, bottom - br), (right - br, bottom - br), br, 0.0),
+        ((left + bl, bottom), (left + bl, bottom - bl), bl, FRAC_PI_2),
+        ((left, top + tl), (left + tl, top + tl), tl, PI),
+    ] {
+        path.line_to(edge);
+        if radius > 0.0 {
+            path.extend(
+                kurbo::Arc {
+                    center: center.into(),
+                    radii: kurbo::Vec2::new(radius, radius),
+                    start_angle: angle,
+                    sweep_angle: FRAC_PI_2,
+                    x_rotation: 0.0,
+                }
+                .append_iter(0.1),
+            );
+        }
+    }
+    path.close_path();
+    path
 }
 
 fn solid(value: Color) -> color::AlphaColor<color::Srgb> {

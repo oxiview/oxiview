@@ -208,4 +208,13 @@ implementation choices under the subsequent native-preview authorization.
   target, final-up release precedes queued commands, and completion reports
   precede final-state stationary-hover checks. The owner subsequently authorized
   native-preview implementation and delegated remaining engineering choices,
-  including callback-work budgets. Full milestone acceptance remains pending.
+  including callback-work budgets. The owner later confirmed native acceptance
+  at [M2 close-out](../plans/m2-node-tree-and-layout.md#execution-record).
+
+## M2 execution evidence (2026-11-20)
+
+The command drain validates edits at their FIFO turn and publishes ordered
+reports. Core fixtures check that commands depending on a failed creation
+fail individually while independent edits continue, and that cyclic hover
+edits stop at the work budget with outcomes reported.
+[Command drain](../../crates/oxiview-core/src/ui/input.rs) · [Command tests](../../crates/oxiview-core/src/ui/tests.rs)

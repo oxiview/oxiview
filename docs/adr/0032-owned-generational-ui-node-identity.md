@@ -278,3 +278,11 @@ detachment when validating an index does not permit a partially applied edit.
   and command-owned resources exactly once. Cover failure followed by queue
   teardown and storage reuse that cannot revive old IDs. Input integration
   emits no enter/leave/cancel for nodes that never existed.
+
+## M2 execution evidence (2026-11-20)
+
+Generated edits compare live parent links and child order with a reference
+tree. Focused fixtures check owner and generation exhaustion, atomic rejection
+at the depth limit, reservation cleanup, and child-list-ordered postorder
+release with the root preserved on clear.
+[Tree contract tests](../../crates/oxiview-core/src/ui/tree_contract_tests.rs)

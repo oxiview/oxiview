@@ -10,3 +10,11 @@ The framework defines its own **layout protocol**: a trait covering size constra
 
 - Widgets depend only on the layout protocol and cannot reference Taffy types directly.
 - Layout caching integrates with ADR-0007's layout dirty flags and boundaries; the protocol must expose whether a node's size is independent of its content.
+
+## M2 execution evidence (2026-11-20)
+
+Taffy handles Flex, Grid, Block, and absolute positioning over the retained
+tree, and shares fixtures with an independent column implementation for
+intrinsic measurement, cache reuse, and preserving geometry on failure.
+Virtualized layout remains assigned to M7.
+[Protocol fixtures](../../crates/oxiview-core/tests/m2_layout_contract.rs) · [Adapter tests](../../crates/oxiview-layout/src/tests.rs) · [M2 scope](../plans/m2-node-tree-and-layout.md#scope)

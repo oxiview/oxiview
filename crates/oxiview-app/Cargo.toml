@@ -20,6 +20,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 oxiview-render-wgpu.workspace = true
+oxiview-style.workspace = true
+oxiview-testing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 oxiview-platform-macos.workspace = true

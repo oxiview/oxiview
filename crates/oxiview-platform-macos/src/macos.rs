@@ -7,8 +7,8 @@ use objc2_app_kit::{
     NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
-    ns_string,
+    MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
+    NSString, ns_string,
 };
 use objc2_quartz_core::{CADisplayLink, CAMetalLayer, CATransaction};
 use oxiview_base::{NativeSurfaceHandle, Point};
@@ -742,12 +742,20 @@ impl ContentView {
     }
     fn key(&self, event: &NSEvent, pressed: bool) {
         if let Some(w) = self.ivars().id.get().and_then(find) {
+            let code = key(event.keyCode());
+            let repeat = pressed && event.isARepeat();
             w.shared.emit(WindowEvent::Key {
-                code: key(event.keyCode()),
+                code,
                 pressed,
-                repeat: pressed && event.isARepeat(),
+                repeat,
                 timestamp: seconds(event.timestamp()),
             });
+            // The raw key callback replaces NSResponder's keyDown:. During a drag
+            // let AppKit deliver its cancellation command to cancelOperation:.
+            if code == KeyCode::Escape && pressed && !repeat && NSEvent::pressedMouseButtons() != 0
+            {
+                self.interpretKeyEvents(&NSArray::from_slice(&[event]));
+            }
         }
     }
 }

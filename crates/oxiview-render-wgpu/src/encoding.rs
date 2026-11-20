@@ -11,7 +11,8 @@ use tiles::Bounds;
 // Draw: outer shape, inner shape, clip count, brush, then clip offsets.
 // Bordered fill (opcode 3): outer, inner, clip count, background brush, border
 // brush, then clip offsets. Shared coverage keeps the fill/stroke edge correlated.
-// SDF shape: MAX tag, inverse affine, bounds, TL/TR/BR/BL radii, scale.
+// Analytic shape: MAX (SDF) or MAX-1 (sampled) tag, inverse affine, bounds,
+// TL/TR/BR/BL radii, SDF scale (unused for sampled shapes).
 // Polygon: vertex count then xy pairs. A solid brush starts with MAX (which
 // cannot encode a finite affine coefficient), then four premultiplied sRGB
 // channels. Other brushes start with inverse affine, gradient endpoints,
@@ -286,8 +287,6 @@ impl Commands {
         Ok(())
     }
 
-    // A tagged shape record lets draws and clips independently choose the SDF
-    // fast path. Polygon records retain their vertex count as the first word.
     fn shape(
         &mut self,
         rect: Rect,
@@ -295,39 +294,59 @@ impl Commands {
         outset: f64,
         transform: Affine,
     ) -> Result<u32, Error> {
-        let Some(scale) = sdf_scale(transform) else {
-            return self.polygon(rect, radii, outset, transform);
-        };
         let [a, b, c, d] = rect.edges();
-        if !rect
-            .edges()
-            .iter()
-            .chain(radii.values().iter())
-            .all(|x| x.is_finite())
+        let radii = radii.values().map(f64::abs);
+        if ![a, b, c, d]
+            .into_iter()
+            .chain(radii)
+            .chain(transform.coefficients())
+            .all(f64::is_finite)
         {
             return Err(invalid("non-finite geometry"));
         }
         let (l, t, r, b) = (a.min(c), b.min(d), a.max(c), b.max(d));
-        let limit = (r - l).min(b - t) * 0.5;
-        let radii = radii.values().map(|r| {
-            let r = r.abs().min(limit);
-            if r == 0.0 { 0.0 } else { (r + outset).max(0.0) }
+        let (width, height) = (r - l, b - t);
+        // The UI passes proportionally fitted radii. For overlapping radii
+        // supplied directly to Scene, mirror the CPU's legacy Kurbo clamp.
+        let radii = if radii_fit(width, height, radii) {
+            radii
+        } else {
+            radii.map(|radius| radius.min(width.min(height) * 0.5))
+        };
+        let radii = radii.map(|radius| {
+            // Sharp corners retain the CPU stroke's default miter join.
+            if radius == 0.0 {
+                0.0
+            } else {
+                (radius + outset).max(0.0)
+            }
         });
         let (l, t, r, b) = (l - outset, t - outset, r + outset, b + outset);
         if l >= r || t >= b {
             return self.empty_polygon();
         }
+        let scale = sdf_scale(transform);
+        // A stroke inset can trim a large arc against another edge. Sample
+        // the intersection directly when the adjusted arcs cannot be joined
+        // into a polygon in corner order.
+        if scale.is_none() && radii_fit(r - l, b - t, radii) {
+            return self.polygon([l, t, r, b], radii, transform);
+        }
         let inverse = transform
             .inverse()
-            .map_err(|_| invalid("singular SDF transform"))?;
+            .map_err(|_| invalid("singular analytic shape transform"))?;
         let offset = count(self.words.len())?;
-        self.words.push(u32::MAX);
+        self.words.push(if scale.is_some() {
+            u32::MAX
+        } else {
+            u32::MAX - 1
+        });
         for value in inverse
             .coefficients()
             .into_iter()
             .chain([l, t, r, b])
             .chain(radii)
-            .chain([scale])
+            .chain([scale.unwrap_or_default()])
         {
             self.float(value)?;
         }
@@ -335,33 +354,10 @@ impl Commands {
     }
     fn polygon(
         &mut self,
-        rect: Rect,
-        radii: CornerRadii,
-        outset: f64,
+        [left, top, right, bottom]: [f64; 4],
+        [tl, tr, br, bl]: [f64; 4],
         transform: Affine,
     ) -> Result<u32, Error> {
-        let edges = rect.edges();
-        if !edges
-            .iter()
-            .chain(radii.values().iter())
-            .chain(transform.coefficients().iter())
-            .all(|v| v.is_finite())
-        {
-            return Err(invalid("non-finite geometry"));
-        }
-        let [a, b, c, d] = edges;
-        let (left, top, right, bottom) = (a.min(c), b.min(d), a.max(c), b.max(d));
-        let limit = (right - left).min(bottom - top) / 2.0;
-        let [tl, tr, br, bl] = radii.values().map(|r| {
-            let r = r.abs().min(limit);
-            // Sharp corners retain the CPU stroke's default miter join.
-            if r == 0.0 { 0.0 } else { (r + outset).max(0.0) }
-        });
-        let (left, top, right, bottom) =
-            (left - outset, top - outset, right + outset, bottom + outset);
-        if left >= right || top >= bottom {
-            return self.empty_polygon();
-        }
         let offset = self.empty_polygon()?;
         let [a, b, c, d, _, _] = transform.coefficients();
         let scale = a.hypot(b) + c.hypot(d);
@@ -454,16 +450,15 @@ fn bordered_fill(first: &EncodedNode, next: Option<&EncodedNode>) -> Option<Bord
     {
         return None;
     }
-    let limit = rect.size().width().min(rect.size().height()) * 0.5;
-    if !radii
-        .values()
-        .into_iter()
-        .zip(outer_radii.values())
-        .all(|(inner, outer)| {
-            inner >= 0.0
-                && inner <= limit
-                && close(if inner == 0.0 { 0.0 } else { inner + half }, outer)
-        })
+    let size = rect.size();
+    if !radii_fit(size.width(), size.height(), radii.values())
+        || !radii
+            .values()
+            .into_iter()
+            .zip(outer_radii.values())
+            .all(|(inner, outer)| {
+                inner >= 0.0 && close(if inner == 0.0 { 0.0 } else { inner + half }, outer)
+            })
     {
         return None;
     }
@@ -473,6 +468,13 @@ fn bordered_fill(first: &EncodedNode, next: Option<&EncodedNode>) -> Option<Bord
         width: *width,
         color: *color,
     })
+}
+
+fn radii_fit(width: f64, height: f64, [tl, tr, br, bl]: [f64; 4]) -> bool {
+    // Match the CPU adapter's tolerance for proportional-fit rounding.
+    let width = width * (1.0 + f64::EPSILON);
+    let height = height * (1.0 + f64::EPSILON);
+    tl + tr <= width && bl + br <= width && tl + bl <= height && tr + br <= height
 }
 fn count(value: usize) -> Result<u32, Error> {
     u32::try_from(value).map_err(|_| invalid("encoded scene exceeds GPU address space"))

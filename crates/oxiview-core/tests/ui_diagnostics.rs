@@ -9,8 +9,19 @@ use oxiview_layout::{
     TaffyLayout,
 };
 use oxiview_scene::{Brush, Primitive};
-use oxiview_style::{Position, Style};
-use std::{cell::Cell, rc::Rc};
+use oxiview_style::{Length, Position, Style};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+use tracing::{
+    Event, Metadata, Subscriber,
+    span::{Attributes, Id, Record},
+};
 
 fn viewport() -> Size {
     Size::new(200.0, 100.0)
@@ -47,7 +58,10 @@ fn snapshots_are_read_only_and_clean_or_paint_only_work_skips_layout() {
     assert!(first.measured_nodes > 0);
     assert_eq!(first.measured_nodes, calls.get());
     assert_eq!(first.scene_builds, 1);
+    assert_eq!(first.scene_updates, 0);
     assert_eq!(first.scene_cache_hits, 0);
+    assert_eq!(first.paint_node_visits, 2);
+    assert_eq!(first.painted_nodes, 2);
 
     tree.layout(viewport()).unwrap();
     assert_eq!(tree.diagnostics(), first);
@@ -57,18 +71,27 @@ fn snapshots_are_read_only_and_clean_or_paint_only_work_skips_layout() {
     assert_eq!(cached.measured_nodes, first.measured_nodes);
     assert_eq!(cached.scene_builds, 1);
     assert_eq!(cached.scene_cache_hits, 1);
+    assert_eq!(cached.paint_node_visits, first.paint_node_visits);
+    assert_eq!(cached.painted_nodes, first.painted_nodes);
 
     let mut style = tree.style(leaf).unwrap().clone();
     style.background = Color::from_rgba8(40, 90, 200, 255);
     tree.set_style(leaf, style).unwrap();
     tree.paint(viewport(), 1.0).unwrap();
+    let updated = tree.diagnostics();
+    assert_eq!(updated.scene_builds, cached.scene_builds);
+    assert_eq!(updated.scene_updates, cached.scene_updates + 1);
+    assert_eq!(updated.paint_node_visits, cached.paint_node_visits + 1);
     tree.paint(viewport(), 2.0).unwrap();
     let repaint = tree.diagnostics();
     assert_eq!(repaint.layout_passes, first.layout_passes);
     assert_eq!(repaint.measured_nodes, first.measured_nodes);
     assert_eq!(calls.get(), first.measured_nodes);
-    assert_eq!(repaint.scene_builds, 3);
+    assert_eq!(repaint.scene_builds, 2);
+    assert_eq!(repaint.scene_updates, 1);
     assert_eq!(repaint.scene_cache_hits, 1);
+    assert_eq!(repaint.paint_node_visits, updated.paint_node_visits + 2);
+    assert_eq!(repaint.painted_nodes, first.painted_nodes);
 
     tree.invalidate_measure(leaf).unwrap();
     tree.layout(viewport()).unwrap();
@@ -80,6 +103,47 @@ fn snapshots_are_read_only_and_clean_or_paint_only_work_skips_layout() {
         assert_eq!(tree.diagnostics(), snapshot);
     }
     assert_eq!(calls.get(), snapshot.measured_nodes);
+}
+
+#[test]
+fn repeated_color_edits_to_one_leaf_visit_only_that_leaf() {
+    let mut tree = UiTree::new().unwrap();
+    let mut style = Style::default();
+    style.layout.position = Position::Absolute;
+    style.layout.width = Length::Points(8.0);
+    style.layout.height = Length::Points(8.0);
+    let leaf = tree.append(tree.root(), style.clone()).unwrap();
+    for _ in 0..1023 {
+        tree.append(tree.root(), style.clone()).unwrap();
+    }
+    tree.paint(viewport(), 1.0).unwrap();
+    let before = tree.diagnostics();
+    assert_eq!(before.paint_node_visits, 1025);
+
+    style.background = Color::from_rgba8(40, 90, 200, 255);
+    assert!(tree.set_style(leaf, style.clone()).unwrap());
+    style.background = Color::from_rgba8(200, 90, 40, 255);
+    assert!(tree.set_style(leaf, style).unwrap());
+    assert!(
+        tree.flush_updates(viewport(), |_, _, _| {})
+            .unwrap()
+            .changed
+    );
+    tree.paint(viewport(), 1.0).unwrap();
+    assert_eq!(
+        tree.diagnostics(),
+        UiDiagnostics {
+            scene_updates: before.scene_updates + 1,
+            paint_node_visits: before.paint_node_visits + 1,
+            ..before
+        }
+    );
+    assert!(
+        !tree
+            .flush_updates(viewport(), |_, _, _| {})
+            .unwrap()
+            .changed
+    );
 }
 
 struct ReportedLayout {
@@ -118,6 +182,8 @@ fn custom_engine_statistics_accumulate_only_after_successful_commit() {
     let mut tree = UiTree::new().unwrap();
     let stats = LayoutStats {
         visited_nodes: 11,
+        resolved_styles: 6,
+        layout_visits: 13,
         computed_nodes: 7,
         measured_nodes: 3,
         cache_hits: 4,
@@ -128,11 +194,13 @@ fn custom_engine_statistics_accumulate_only_after_successful_commit() {
         tree.diagnostics(),
         UiDiagnostics {
             layout_passes: 1,
+            layout_input_visits: 11,
+            resolved_styles: 6,
+            layout_node_visits: 13,
             computed_layout_nodes: 7,
             measured_nodes: 3,
             layout_cache_hits: 4,
-            scene_builds: 0,
-            scene_cache_hits: 0
+            ..UiDiagnostics::default()
         }
     );
     let committed = tree.bounds(tree.root()).unwrap();
@@ -225,10 +293,10 @@ fn large_reported_counts_saturate_instead_of_wrapping() {
     let mut tree = UiTree::new().unwrap();
     let mut engine = ReportedLayout {
         stats: LayoutStats {
-            visited_nodes: 0,
             computed_nodes: usize::MAX,
             measured_nodes: usize::MAX,
             cache_hits: usize::MAX,
+            ..LayoutStats::default()
         },
         fail: false,
     };
@@ -248,4 +316,119 @@ fn large_reported_counts_saturate_instead_of_wrapping() {
     assert_eq!(diagnostics.computed_layout_nodes, expected);
     assert_eq!(diagnostics.measured_nodes, expected);
     assert_eq!(diagnostics.layout_cache_hits, expected);
+}
+
+struct HandlerSpans(Arc<AtomicU64>);
+
+impl Subscriber for HandlerSpans {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.name() == "ui_pointer_handler"
+    }
+
+    fn new_span(&self, _: &Attributes<'_>) -> Id {
+        Id::from_u64(self.0.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+
+    fn record(&self, _: &Id, _: &Record<'_>) {}
+    fn record_follows_from(&self, _: &Id, _: &Id) {}
+    fn event(&self, _: &Event<'_>) {}
+    fn enter(&self, _: &Id) {}
+    fn exit(&self, _: &Id) {}
+}
+
+#[test]
+fn dispatch_counts_only_invoked_pointer_handlers_including_cancel() {
+    use oxiview_core::PointerEventKind::{Cancel, Down, Enter, Leave};
+    use oxiview_platform::{PointerButton, WindowEvent};
+    use std::{cell::RefCell, time::Duration};
+
+    let spans = Arc::new(AtomicU64::new(0));
+    let _subscriber = tracing::subscriber::set_default(HandlerSpans(Arc::clone(&spans)));
+    let mut tree = UiTree::new().unwrap();
+    let root = tree.root();
+    let parent = tree.append(root, Style::default()).unwrap();
+    let leaf_style = {
+        let mut style = Style::default();
+        style.layout.width = oxiview_style::Length::Points(40.0);
+        style.layout.height = oxiview_style::Length::Points(40.0);
+        style
+    };
+    let leaf = tree.append(parent, leaf_style).unwrap();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let trace = Rc::clone(&calls);
+    tree.set_pointer_handler(root, move |event, _, _| {
+        trace.borrow_mut().push((event.current_target, event.kind));
+    })
+    .unwrap();
+    let trace = Rc::clone(&calls);
+    tree.set_pointer_handler(leaf, move |event, _, commands| {
+        trace.borrow_mut().push((event.current_target, event.kind));
+        if event.kind == Down {
+            commands.stop_propagation();
+            commands.capture(leaf);
+        }
+    })
+    .unwrap();
+
+    let reports = Rc::new(Cell::new(0));
+    let seen = Rc::clone(&reports);
+    tree.set_batch_report_handler(move |_, _, _| seen.set(seen.get() + 1))
+        .unwrap();
+
+    let mut observed = Vec::new();
+    let mut observe =
+        |event: &oxiview_core::UiPointerEvent, _: &UiTree, _: &mut oxiview_core::UiCommands| {
+            observed.push((event.current_target, event.kind));
+        };
+    let down = WindowEvent::PointerButton {
+        button: PointerButton::Primary,
+        pressed: true,
+        position: Point::new(5.0, 5.0),
+        timestamp: Duration::ZERO,
+    };
+    let result = tree.dispatch(&down, viewport(), &mut observe).unwrap();
+    assert_eq!(result.events, 4);
+    assert_eq!(reports.get(), 1);
+    assert_eq!(tree.capture_holder(), Some(leaf));
+    assert_eq!(
+        *calls.borrow(),
+        [(root, Enter), (leaf, Enter), (leaf, Down)]
+    );
+    assert_eq!(tree.diagnostics().dispatched_handlers, 3);
+    assert_eq!(spans.load(Ordering::Relaxed), 3);
+
+    let interrupt = WindowEvent::PointerInterrupted {
+        timestamp: Duration::from_millis(1),
+    };
+    let result = tree.dispatch(&interrupt, viewport(), &mut observe).unwrap();
+    assert_eq!(result.events, 6);
+    assert_eq!(tree.capture_holder(), None);
+    assert_eq!(
+        &calls.borrow()[3..],
+        [(leaf, Cancel), (root, Cancel), (leaf, Leave), (root, Leave)]
+    );
+    assert_eq!(tree.diagnostics().dispatched_handlers, 7);
+    assert_eq!(spans.load(Ordering::Relaxed), 7);
+    assert_eq!(
+        tree.dispatch(&interrupt, viewport(), &mut observe)
+            .unwrap()
+            .events,
+        0
+    );
+    assert_eq!(tree.diagnostics().dispatched_handlers, 7);
+    assert_eq!(
+        observed,
+        [
+            (root, Enter),
+            (parent, Enter),
+            (leaf, Enter),
+            (leaf, Down),
+            (leaf, Cancel),
+            (parent, Cancel),
+            (root, Cancel),
+            (leaf, Leave),
+            (parent, Leave),
+            (root, Leave),
+        ]
+    );
 }

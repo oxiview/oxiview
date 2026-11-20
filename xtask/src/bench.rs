@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::Path, process::Command, time::SystemTime};
 
 mod native;
+mod record;
+#[cfg(test)]
+mod scope_tests;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -388,51 +391,141 @@ fn metric_state(
     }
 }
 
+const M2_METRICS: &[&str] = &[
+    "layout/initial_layout/100",
+    "layout/initial_layout/1000",
+    "layout/initial_layout/10000",
+    "ui_tree/arena_edits",
+    "ui_tree/clean_preparation",
+    "ui_tree/contained_layout_change",
+    "ui_tree/hit_testing",
+    "ui_tree/paint_only_update",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Full,
+    M2,
+}
+
+impl Scope {
+    fn check_name(self) -> &'static str {
+        match self {
+            Self::Full => "bench",
+            Self::M2 => "bench-m2",
+        }
+    }
+
+    pub(crate) fn from_check_name(name: &str) -> Option<Self> {
+        match name {
+            "bench" => Some(Self::Full),
+            "bench-m2" => Some(Self::M2),
+            _ => None,
+        }
+    }
+
+    fn artifacts(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => &[
+                "bench-results.json",
+                "bench-1.log",
+                "bench-2.log",
+                "bench-3.log",
+                "bench-latency-1.json",
+                "bench-latency-1.log",
+                "bench-latency-2.json",
+                "bench-latency-2.log",
+                "bench-latency-3.json",
+                "bench-latency-3.log",
+                "bench-idle.json",
+                "bench-idle.log",
+            ],
+            Self::M2 => &[
+                "bench-m2-results.json",
+                "bench-m2-1.log",
+                "bench-m2-2.log",
+                "bench-m2-3.log",
+            ],
+        }
+    }
+
+    pub(crate) fn results_file(self) -> &'static str {
+        self.artifacts()[0]
+    }
+
+    fn divan_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => &["bench", "--workspace", "--benches", "--locked"],
+            Self::M2 => &[
+                "bench",
+                "--locked",
+                "-p",
+                "oxiview-layout",
+                "-p",
+                "oxiview-core",
+                "--bench",
+                "layout",
+                "--bench",
+                "ui_tree",
+            ],
+        }
+    }
+
+    fn record_command(self) -> &'static str {
+        match self {
+            Self::Full => "cargo xtask bench --record",
+            Self::M2 => "cargo xtask bench --m2 --record",
+        }
+    }
+}
+
 pub(crate) struct BenchCheck {
+    pub scope: Scope,
     pub record: bool,
 }
 
 impl BenchCheck {
-    fn process(&self, root: &Path, log: &mut String) -> Result<Status> {
-        for artifact in [
-            "bench-results.json",
-            "bench-1.log",
-            "bench-2.log",
-            "bench-3.log",
-            "bench-latency.json",
-            "bench-latency.log",
-            "bench-latency-1.json",
-            "bench-latency-1.log",
-            "bench-latency-2.json",
-            "bench-latency-2.log",
-            "bench-latency-3.json",
-            "bench-latency-3.log",
-            "bench-idle.json",
-            "bench-idle.log",
-        ] {
-            match fs::remove_file(root.join("target/xtask").join(artifact)) {
+    fn process(
+        &self,
+        root: &Path,
+        log: &mut String,
+        probe_machine: impl FnOnce() -> Result<Machine>,
+        mut run_divan: impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
+        measure_native: impl FnOnce(&Path) -> Result<BTreeMap<String, native::Measurement>>,
+    ) -> Result<Status> {
+        let artifacts = root.join("target/xtask");
+        let legacy = if self.scope == Scope::Full {
+            &["bench-latency.json", "bench-latency.log"][..]
+        } else {
+            &[]
+        };
+        for artifact in self.scope.artifacts().iter().chain(legacy) {
+            match fs::remove_file(artifacts.join(artifact)) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.to_string()),
             }
         }
-        let machine = machine()?;
+        if self.scope == Scope::M2 {
+            log.push_str("Scope: M2 layout and UI tree (8 metrics)\n");
+        }
+        let machine = probe_machine()?;
         let id = machine_id(&machine);
         log.push_str(&format!("Current machine: {id}, {machine:?}\n"));
         let directory = root.join("perf/baselines");
         let path = directory.join(format!("{id}.json"));
-        let previous: Option<Baseline> = match fs::read(&path) {
-            Ok(bytes) => {
-                let baseline = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let original = record::read(&path)?;
+        let previous: Option<Baseline> = original
+            .as_deref()
+            .map(|text| -> Result<Baseline> {
+                let baseline: Baseline = serde_json::from_str(text).map_err(|e| e.to_string())?;
                 validate(&baseline)?;
                 if baseline.machine_id != id {
                     return Err("Baseline filename does not match the current machine".into());
                 }
-                Some(baseline)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.to_string()),
-        };
+                Ok(baseline)
+            })
+            .transpose()?;
         if directory.exists() {
             let mut paths = fs::read_dir(&directory)
                 .map_err(|e| e.to_string())?
@@ -455,22 +548,27 @@ impl BenchCheck {
             let mut command =
                 Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
             command
-                .args(["bench", "--workspace", "--benches", "--locked"])
+                .args(self.scope.divan_args())
                 .current_dir(root)
                 .env("CARGO_TERM_COLOR", "never");
+            if self.scope == Scope::M2 {
+                command
+                    .args(["--", "--exact"])
+                    .args(M2_METRICS.iter().map(|name| name.replace('/', "::")));
+            }
             for (key, _) in std::env::vars_os() {
                 if key.to_string_lossy().starts_with("DIVAN_") {
                     command.env_remove(key);
                 }
             }
-            let output = command.output().map_err(|e| e.to_string())?;
+            let output = run_divan(&mut command).map_err(|e| e.to_string())?;
             let stdout = String::from_utf8_lossy(&output.stdout);
             let raw = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
-            fs::write(root.join(format!("target/xtask/bench-{round}.log")), raw)
-                .map_err(|e| e.to_string())?;
+            let raw_file = format!("{}-{round}.log", self.scope.check_name());
+            fs::write(artifacts.join(&raw_file), raw).map_err(|e| e.to_string())?;
             if !output.status.success() {
                 log.push_str(&format!(
-                    "Benchmark process failed: {}; see bench-{round}.log\n",
+                    "Benchmark process failed: {}; see {raw_file}\n",
                     output.status
                 ));
                 return Ok(if output.status.code().is_some() {
@@ -488,7 +586,17 @@ impl BenchCheck {
         {
             return Err("Metric sets differ across the three runs".into());
         }
-        let mut metrics = pending();
+        if self.scope == Scope::M2
+            && let Some(name) = rounds[0]
+                .keys()
+                .find(|name| !M2_METRICS.contains(&name.as_str()))
+        {
+            return Err(format!("Unexpected M2 metric: {name}"));
+        }
+        let mut metrics = match self.scope {
+            Scope::Full => pending(),
+            Scope::M2 => BTreeMap::new(),
+        };
         for name in rounds[0].keys() {
             let mut samples: Vec<_> = rounds.iter().map(|round| round[name]).collect();
             samples.sort_by(f64::total_cmp);
@@ -508,7 +616,11 @@ impl BenchCheck {
                 },
             );
         }
-        let mut native = match native::measure(root) {
+        let measured = match self.scope {
+            Scope::Full => measure_native(root),
+            Scope::M2 => Ok(BTreeMap::new()),
+        };
+        let mut native = match measured {
             Ok(measurements) => measurements,
             Err(error) => {
                 let results: Vec<_> = metrics.iter().map(|(name, metric)| {
@@ -522,7 +634,7 @@ impl BenchCheck {
                     })
                 }).collect();
                 fs::write(
-                    root.join("target/xtask/bench-results.json"),
+                    artifacts.join(self.scope.results_file()),
                     serde_json::to_vec_pretty(
                         &serde_json::json!({"machine_id": id, "metrics": results}),
                     )
@@ -588,7 +700,7 @@ impl BenchCheck {
                 metric_state(metric, old, self.record, hard.and_then(|m| m.hard_pass))
             };
             if metric.value.is_some() && old.is_none() && !self.record {
-                log.push_str(&format!("Unmeasured recorded metric or missing baseline: {name}; confirm with the owner, then run cargo xtask bench --record after human confirmation.\n"));
+                log.push_str(&format!("Unmeasured recorded metric or missing baseline: {name}; confirm with the owner, then run {} after human confirmation.\n", self.scope.record_command()));
             }
             if ["fail", "missing_baseline", "hard_fail"].contains(&state) {
                 status = Status::Fail;
@@ -606,46 +718,70 @@ impl BenchCheck {
             results.push(serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old,
                 "hard_check_pass": hard.and_then(|m| m.hard_pass), "details": hard.map(|m| &m.details)}));
         }
-        if let Some(old) = &previous {
-            for (name, metric) in &old.metrics {
-                if !metrics.contains_key(name) {
-                    status = Status::Fail;
-                    log.push_str(&format!(
+        let expected: Vec<&str> = match self.scope {
+            Scope::Full => previous
+                .iter()
+                .flat_map(|baseline| baseline.metrics.keys().map(String::as_str))
+                .collect(),
+            Scope::M2 => M2_METRICS.to_vec(),
+        };
+        for name in expected {
+            if !metrics.contains_key(name) {
+                status = Status::Fail;
+                match self.scope {
+                    Scope::Full => log.push_str(&format!(
                         "Missing recorded metric: {name}; silent removal is prohibited\n"
-                    ));
-                    results.push(serde_json::json!({"name":name,"status":"missing_measurement","baseline_value":metric.value}));
+                    )),
+                    Scope::M2 => log.push_str(&format!("Missing M2 measurement: {name}\n")),
                 }
+                let old = previous
+                    .as_ref()
+                    .and_then(|baseline| baseline.metrics.get(name))
+                    .and_then(|metric| metric.value);
+                results.push(serde_json::json!({
+                    "name": name, "status": "missing_measurement", "baseline_value": old
+                }));
             }
         }
         if previous.is_none() && !self.record {
-            log.push_str("No baseline for this machine; run cargo xtask bench --record after human confirmation.\n");
+            log.push_str(&format!(
+                "No baseline for this machine; run {} after human confirmation.\n",
+                self.scope.record_command()
+            ));
+        }
+        let mut report = serde_json::json!({"machine_id":id,"metrics":results});
+        if self.scope == Scope::M2 {
+            report["scope"] = "m2".into();
         }
         fs::write(
-            root.join("target/xtask/bench-results.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({"machine_id":id,"metrics":results}))
-                .map_err(|e| e.to_string())?,
+            artifacts.join(self.scope.results_file()),
+            serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
         if let Some(error) = environment_error {
             return Err(error);
         }
         if self.record && status == Status::Pass {
-            let baseline = Baseline {
-                schema_version: 1,
-                machine_id: id,
-                machine,
-                recorded_at_unix_seconds: SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map_err(|e| e.to_string())?
-                    .as_secs(),
-                metrics,
+            let content = match (self.scope, original.as_deref()) {
+                (Scope::M2, Some(text)) => record::merge_m2(text, &metrics)?,
+                (scope, _) => {
+                    if scope == Scope::M2 {
+                        metrics.extend(pending());
+                    }
+                    let baseline = Baseline {
+                        schema_version: 1,
+                        machine_id: id,
+                        machine,
+                        recorded_at_unix_seconds: SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .map_err(|e| e.to_string())?
+                            .as_secs(),
+                        metrics,
+                    };
+                    serde_json::to_string_pretty(&baseline).map_err(|e| e.to_string())?
+                }
             };
-            fs::create_dir_all(directory).map_err(|e| e.to_string())?;
-            fs::write(
-                &path,
-                serde_json::to_vec_pretty(&baseline).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
+            record::write(&artifacts, &path, original.as_deref(), &content)?;
             log.push_str(&format!(
                 "Created or overwritten repository baseline: {}; review and commit it.\n",
                 path.display()
@@ -656,11 +792,14 @@ impl BenchCheck {
 }
 impl Check for BenchCheck {
     fn name(&self) -> &str {
-        "bench"
+        self.scope.check_name()
+    }
+    fn artifacts(&self) -> &[&str] {
+        self.scope.artifacts()
     }
     fn run(&self, root: &Path) -> (Status, String) {
         let mut log = String::new();
-        match self.process(root, &mut log) {
+        match self.process(root, &mut log, machine, Command::output, native::measure) {
             Ok(status) => (status, log),
             Err(error) => (Status::Error, format!("{log}{error}")),
         }
@@ -739,6 +878,35 @@ mod tests {
         assert_eq!(values["bench/first/1"], 2.0);
         assert_eq!(values["bench/second"], 3.0);
         assert!(parse_divan(&format!("{text}\n{text}")).is_err());
+    }
+
+    #[test]
+    fn m2_divan_metrics_require_baselines() {
+        let values = parse_divan(scope_tests::DIVAN_M2).expect("both M2 targets");
+        assert_eq!(
+            values.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "layout/initial_layout/100",
+                "layout/initial_layout/1000",
+                "layout/initial_layout/10000",
+                "ui_tree/arena_edits",
+                "ui_tree/clean_preparation",
+                "ui_tree/contained_layout_change",
+                "ui_tree/hit_testing",
+                "ui_tree/paint_only_update",
+            ]
+        );
+        for value in values.into_values() {
+            let metric = Metric {
+                value: Some(value),
+                unit: "ns".into(),
+                direction: Direction::Lower,
+                regression_percent: default_threshold(),
+                target: None,
+                refresh_interval_ms: None,
+            };
+            assert_eq!(metric_state(&metric, None, false, None), "missing_baseline");
+        }
     }
 
     #[test]

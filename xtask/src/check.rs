@@ -8,6 +8,9 @@ use crate::report::{CheckResult, Status};
 pub(crate) trait Check {
     fn name(&self) -> &str;
     fn run(&self, root: &Path) -> (Status, String);
+    fn artifacts(&self) -> &[&str] {
+        &[]
+    }
 }
 
 pub(crate) struct CommandCheck {
@@ -85,25 +88,10 @@ pub(crate) fn execute(check: &dyn Check, root: &Path) -> CheckResult {
             log.push_str(&format!("\nCannot write log: {error}"));
         }
     }
-    if check.name() == "bench" {
-        for artifact in [
-            "bench-results.json",
-            "bench-1.log",
-            "bench-2.log",
-            "bench-3.log",
-            "bench-latency-1.json",
-            "bench-latency-1.log",
-            "bench-latency-2.json",
-            "bench-latency-2.log",
-            "bench-latency-3.json",
-            "bench-latency-3.log",
-            "bench-idle.json",
-            "bench-idle.log",
-        ] {
-            let path = format!("target/xtask/{artifact}");
-            if root.join(&path).is_file() {
-                artifacts.push(path);
-            }
+    for artifact in check.artifacts() {
+        let path = format!("target/xtask/{artifact}");
+        if root.join(&path).is_file() {
+            artifacts.push(path);
         }
     }
     CheckResult {

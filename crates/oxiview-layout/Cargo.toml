@@ -14,3 +14,11 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name = "layout"
+path = "../../benches/layout.rs"
+harness = false

@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 milestone: M2
 ---
 
@@ -14,12 +14,9 @@ nodes. The same application runs with macOS/GPU and headless/CPU composition.
 Planning started on 2026-11-17 after [M1 close-out](m1-first-window.md).
 The owner confirmed the detailed contracts below, then approved the remaining
 decision groups 3-12 and requested a quickly runnable native preview using
-parallel agents. Implementation is authorized and underway. Remaining concrete
-engineering choices are delegated within this plan and the accepted ADRs;
-changes to their behavioral contracts or milestone scope still require review.
-Approval and a runnable preview do not establish full M2 completion. Snapshot
-acceptance, performance baseline recording, and native milestone acceptance
-remain their existing explicit gates.
+parallel agents. The owner delegated implementation choices within this plan
+and the accepted ADRs. M2 closed on 2026-11-20 when the owner confirmed that
+the native Layout Lab passed manual acceptance. [Execution record](#execution-record)
 
 ## Decision-group progress
 
@@ -477,9 +474,9 @@ The owner selected capture that continues outside the originating window:
   with deterministic headless coverage of the same event sequence. Normal
   boundary crossing must not be mistaken for a platform interruption.
 
-The native preview verified dragging and releasing beyond the right window
-edge. The remaining native resize, transition and interruption cases are
-listed in the [execution record](#execution-record).
+The November 17 native preview verified dragging and releasing beyond the
+right window edge. The owner confirmed the complete native review on
+November 20. [Execution record](#execution-record)
 
 ### Pointer capture lifecycle
 
@@ -1711,14 +1708,14 @@ report environment errors and pending work distinctly from passes.
 | Step | Status | Delivery and validation |
 | --- | --- | --- |
 | Planning | Approved for implementation | Started on 2026-11-17. Groups 1-2 are recorded in ADR-0033/0034; the owner approved groups 3-12 together and delegated concrete engineering choices for a native preview. This approval does not complete milestone acceptance. |
-| S1 | In progress | Preview tree includes owned generational identities, reserved creation, structural validation, 64-level guards, and ordered resource teardown; full contract coverage remains pending. |
-| S2 | In progress | Typed style crate, numeric validation, and layout/paint change classification are integrated in the preview. |
-| S3 | In progress | Owned layout protocol, injectable engine, and intrinsic measurement are implemented; full independent-implementation acceptance remains pending. |
-| S4 | In progress | Taffy 0.15.1 computes Flex/Grid/Block over the core tree. Persistent caches reuse unchanged branches; style/topology/content revisions and stable private IDs protect validity. Fresh-vs-cached edit and measurement-count tests pass; full performance acceptance remains pending. |
-| S5 | In progress | Native and CPU preview rendering cover stacking, rounded clipping, opacity, and scaling. Three preview images were inspected; accepted snapshot baselines and finer paint reuse remain pending. |
-| S6 | In progress | Deferred input, hover/capture cleanup, node-owned handlers, per-batch result callbacks, and native/headless lifecycle events are integrated. Public input-contract tests and a native outside-right-edge drag/release passed. The full native acceptance matrix remains pending. |
-| S7 | In progress | Layout Lab runs natively and headlessly with add/remove, wrap, resize, stacking, and capture dragging. Full observability/performance acceptance remains pending. |
-| S8 | Pending | Documentation and milestone close-out. |
+| S1 | Implemented and tested | Generated edits are compared with an independent tree after every operation. Fixtures cover identity exhaustion, reservation cleanup, rejected edits and ordered destruction through level 64. [Tree contracts](../../crates/oxiview-core/src/ui/tree_contract_tests.rs) |
+| S2 | Implemented and tested | Typed properties distinguish layout, paint and input changes. A mutation journal coalesces layout edits. Tests check equal and rejected writes, clean siblings, and style projection counts. [Invalidation tests](../../crates/oxiview-core/src/ui/layout_tests.rs) |
+| S3 | Implemented and tested | Taffy and a deterministic column engine pass public layout contracts for finite and intrinsic constraints, cache reuse, ancestor sizing and failure recovery. Engines can report which nodes are layout boundaries under their last committed constraints. [Shared contracts](../../crates/oxiview-core/tests/m2_layout_contract.rs) |
+| S4 | Implemented and measured | The default adapter retains converted inputs and commits changed geometry after successful layout. Incremental edits, moves, hidden branches and viewport changes are compared against fresh layout. The M2 layout timings passed baseline comparison. [Adapter fixtures](../../crates/oxiview-layout/src/tests.rs) |
+| S5 | Implemented, snapshots accepted | Clean nodes retain prepared painting content. CPU pixel tests exercise stacking, group opacity and rounded clips at 1×, 1.5× and 2×. Offscreen Metal tests check asymmetric corners against CPU pixels and geometric hits. [CPU fixtures](../../crates/oxiview-app/tests/ui_paint.rs) · [GPU fixtures](../../crates/oxiview-app/tests/m2_gpu_geometry.rs) |
+| S6 | Native review passed | The owner confirmed native Layout Lab acceptance. Deterministic traces cover release outside and re-entry before release at all four edges, hover and cancellation. A headless window presents the hit node's new color at the next frame and stays idle for 1,000 intervals. [Capture traces](../../crates/oxiview-core/tests/m2_capture_matrix.rs) · [Window-loop pixels](../../crates/oxiview-app/tests/headless.rs) |
+| S7 | Demo and benchmarks accepted | Layout Lab exposes native input tracing. All eight Divan measurements passed immediate comparison after recording. They cover arena edits, first layout at three sizes, clean preparation, a local layout change, a paint-only update and hit testing. [Tree workloads](../../benches/ui_tree.rs) · [Initial layout](../../benches/layout.rs) |
+| S8 | Complete | Fresh-checkout verification passed all seven checks. Local full verification passed all eight, including the M2 performance comparisons and the M1 native checks. The owner's manual acceptance closed M2 on November 20. |
 
 ### Native preview execution note (2026-11-17)
 
@@ -1774,3 +1771,67 @@ Snake and the continuous animation demo exercise this tree in two native
 applications. The full workspace check passed after the drawable scheduling
 change. It compared the recorded M1 metrics. M2-specific layout benchmarks
 and snapshot acceptance remain open. [Integration demo](../../examples/snake/README.md) · [Frame pacing evidence](../adr/0036-fifo-drawable-readiness.md)
+
+### M2 acceptance run (2026-11-20)
+
+After three edits to the same leaf in a 204-node fixture, the layout pass read
+one changed input, projected one style and skipped the unchanged sibling's
+200 descendants. Tree diagnostics also count intrinsic measurements, layout
+cache hits, node painting preparations and node-owned pointer callbacks.
+Failed layout passes retain the previous geometry and pending edits for retry.
+[Incremental fixtures](../../crates/oxiview-core/src/ui/layout_tests.rs) ·
+[Diagnostic contracts](../../crates/oxiview-core/tests/ui_diagnostics.rs)
+
+A color change in a 1,025-node tree visited one node and updated the retained
+Scene without a full assembly or a layout pass. Background and border colors
+and equal-length custom draw lists use this path. Earlier frame snapshots
+keep their pixels when a later edit succeeds or fails. [Paint locality tests](../../crates/oxiview-core/tests/ui_diagnostics.rs) · [Pixel and retry tests](../../crates/oxiview-app/tests/ui_paint.rs)
+
+The layout engine can relayout a fixed-size absolute branch positioned by
+the viewport when a descendant changes under the same constraints. Intrinsic
+sizes and overflow from a positioned ancestor still propagate. The geometry
+fixtures also cover negative and collapsed block margins, padding and border
+boundaries, and static and relative insets. [Geometry and containment](../../crates/oxiview-core/tests/m2_layout_boundaries.rs)
+
+The owner reviewed and accepted all three CPU snapshots on November 20.
+[1× baseline](../../crates/oxiview-app/tests/snapshots/m2-ui-tree-1x.png) ·
+[1.5× baseline](../../crates/oxiview-app/tests/snapshots/m2-ui-tree-1_5x.png) ·
+[2× baseline](../../crates/oxiview-app/tests/snapshots/m2-ui-tree-2x.png)
+
+Ordinary local verification passed all seven checks after snapshot acceptance.
+A fresh local clone with the same source changes and no copied build output
+also passed. The M2-only benchmark runs three rounds of all eight CPU
+measurements without opening a window. The owner approved recording the eight
+new metrics on the Mac14,10. The scoped recording preserved all nine existing
+baseline entries. Immediate comparison passed all eight M2 metrics.
+[Machine baseline](../../perf/baselines/macos-8a09e0b60732277a.json) · [Workloads and comparison](../conventions/testing-performance.md#m2-retained-tree-and-layout-benchmarks)
+
+| M2 workload | Recorded | Immediate comparison |
+| --- | ---: | ---: |
+| Initial layout, 100 nodes | 0.1931 ms | 0.1899 ms |
+| Initial layout, 1,000 nodes | 2.045 ms | 2.044 ms |
+| Initial layout, 10,000 nodes | 26.95 ms | 27.17 ms |
+| Arena edits | 841.3 ns | 874.7 ns |
+| Clean preparation | 12.71 ns | 12.71 ns |
+| Contained layout change | 43.18 µs | 45.79 µs |
+| Paint-only update | 226.7 ns | 226.3 ns |
+| Hit testing | 48.55 µs | 48.09 µs |
+
+The first full verification and its benchmark retry completed the Divan
+rounds. Both stopped during the second M1 latency window while waiting for
+the submitted frame matching a synthetic AppKit input. The first native
+round in each attempt reported an 8.33 ms refresh interval. The full native
+comparison requires a quiet desktop and actual Metal presentation feedback.
+
+Once the owner reserved the desktop, `cargo xtask verify --full` passed all
+eight checks in one run. The three native latency rounds measured 3.882 ms
+input-to-submit p95 and 25.736 ms input-to-pixel p95 (median of the round
+p95s) on the 120 Hz display. CPU usage was 0.0121% over 30.00 seconds idle,
+with zero submissions, actual presentations and display-link events. The
+same run passed all eight M2 performance comparisons. The 100,000-row
+scrolling metric belongs to M7.
+
+On 2026-11-20 the owner confirmed that the native Layout Lab passed manual
+acceptance. The checklist covers captured drags across window edges, release
+outside, return before release, interruption, live resize, fullscreen, and
+restoration after minimizing. [Native review procedure](../../examples/window/README.md#native-capture-review)

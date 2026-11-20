@@ -6,14 +6,15 @@ A self-drawn Rust UI framework exclusively for native macOS, Windows, and Linux 
 
 M1 delivers the first native macOS window, a deterministic headless platform,
 on-demand scheduling on a dedicated window thread, and GPU surface presentation
-with an SDF rounded-rectangle path. M2 now has an interactive native preview
-with a retained UI tree, Flex/Grid/Block layout, stacking, clipping, pointer
-routing, and capture. The [detailed plan](docs/plans/m2-node-tree-and-layout.md)
-records the approved design and remaining full-milestone work.
+with an SDF rounded-rectangle path. M2's Layout Lab exercises a retained UI
+tree, incremental Flex/Grid/Block layout, stacking, rounded clipping and
+pointer capture. M2 is complete. Layout Lab passed native manual review,
+and all eight tree and layout benchmarks passed against their recorded
+baselines. [M2 execution record](docs/plans/m2-node-tree-and-layout.md#execution-record)
 The playable [Snake game](examples/snake/README.md) uses M3 Signals, function
 components and optional JSX-like `view!` expressions in Rust source files.
 M4 shapes its text, rasterizes glyphs at the display scale and composites them
-on the GPU. The milestone plans track the remaining acceptance work.
+on the GPU. The M3 and M4 plans track their remaining acceptance work.
 M1 is complete: native visual acceptance, fresh-clone verification and local
 performance baseline comparison passed. See the [execution record](docs/plans/m1-first-window.md)
 for measured results and remaining latency work.
@@ -134,10 +135,11 @@ cargo run --release -p window -- --layout-demo --headless
 ```
 
 This checks creation/removal, stale IDs, reflow, Grid placement, capture dragging,
-stacking, and unchanged-input redraw suppression. Images are written to
-`target/xtask/m2-preview/{initial,interacted,resized}.png`. They are preview
-artifacts, not accepted snapshot baselines. M2 milestone acceptance and its
-new performance baselines remain pending.
+stacking, and unchanged-input redraw suppression. The three preview images are
+written to `target/xtask/m2-preview/{initial,interacted,resized}.png`. The
+application integration suite renders dedicated CPU snapshot fixtures at 1×,
+1.5× and 2×. Layout Lab can also record pointer delivery during the
+[native capture review](examples/window/README.md#native-capture-review).
 
 ## M1 window diagnostics
 

@@ -432,9 +432,10 @@ struct LayoutDemo {
     state: DemoState,
     viewport: Size,
     presents: Arc<AtomicU64>,
+    trace_input: bool,
 }
 impl LayoutDemo {
-    fn new(presents: Arc<AtomicU64>) -> Result<Self, UiError> {
+    fn new(presents: Arc<AtomicU64>, trace_input: bool) -> Result<Self, UiError> {
         let mut tree = UiTree::new()?;
         let root = tree.root();
         tree.set_style(
@@ -731,6 +732,7 @@ impl LayoutDemo {
             tree,
             viewport,
             presents,
+            trace_input,
             state: DemoState {
                 flow,
                 stage,
@@ -766,12 +768,39 @@ impl LayoutDemo {
             );
         }
         let state = &mut self.state;
+        let mut drag_events = Vec::new();
         let result = self
             .tree
             .dispatch(event, self.viewport, |event, tree, commands| {
+                if self.trace_input
+                    && event.target == state.draggable
+                    && event.current_target == state.draggable
+                {
+                    drag_events.push(event.kind);
+                }
                 state.handle(event, tree, commands)
             })
             .map_err(application_error)?;
+        if self.trace_input
+            && matches!(
+                event,
+                WindowEvent::PointerMoved { .. }
+                    | WindowEvent::PointerButton { .. }
+                    | WindowEvent::PointerLeft { .. }
+                    | WindowEvent::PointerInterrupted { .. }
+                    | WindowEvent::ActivationChanged { .. }
+                    | WindowEvent::VisibilityChanged { .. }
+                    | WindowEvent::Resized { .. }
+                    | WindowEvent::Destroyed
+            )
+        {
+            eprintln!(
+                "layout-input {event:?} viewport={:?} drag_events={drag_events:?} captured={} hovered={}",
+                self.viewport,
+                self.tree.capture_holder() == Some(state.draggable),
+                self.tree.hover_target() == Some(state.draggable),
+            );
+        }
         for report in result.reports {
             for outcome in report.outcomes {
                 if let Err(error) = outcome.result {
@@ -1099,9 +1128,13 @@ fn exercise(demo: &mut LayoutDemo) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-pub(super) fn run(headless: bool, presents: Arc<AtomicU64>) -> Result<bool, Box<dyn Error>> {
+pub(super) fn run(
+    headless: bool,
+    trace_input: bool,
+    presents: Arc<AtomicU64>,
+) -> Result<bool, Box<dyn Error>> {
     if headless {
-        let mut demo = LayoutDemo::new(presents.clone())?;
+        let mut demo = LayoutDemo::new(presents.clone(), trace_input)?;
         let directory =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask/m2-preview");
         std::fs::create_dir_all(&directory)?;
@@ -1140,7 +1173,7 @@ pub(super) fn run(headless: bool, presents: Arc<AtomicU64>) -> Result<bool, Box<
                 logical_size: Size::new(f64::from(WIDTH), f64::from(HEIGHT)),
                 resize_timeout: Duration::from_millis(250),
             },
-            move || LayoutDemo::new(presents).map_err(application_error),
+            move || LayoutDemo::new(presents, trace_input).map_err(application_error),
         )?;
         Ok(true)
     }
@@ -1156,7 +1189,7 @@ mod tests {
     use super::*;
     #[test]
     fn preview_actions_use_live_nodes_and_capture() -> Result<(), Box<dyn Error>> {
-        let mut demo = LayoutDemo::new(Arc::new(AtomicU64::new(0)))?;
+        let mut demo = LayoutDemo::new(Arc::new(AtomicU64::new(0)), false)?;
         exercise(&mut demo)
     }
 }

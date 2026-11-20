@@ -1,6 +1,6 @@
 // Coverage-weighted ordered compositing runs once at each pixel center.
-// Each invocation owns one pixel and its opacity stack. Only polygon coverage
-// uses sixteen subpixel inside tests; paint and compositing are not supersampled.
+// Each invocation owns one pixel and its opacity stack. Affine fallback uses
+// sixteen subpixel inside tests; paint and compositing are not supersampled.
 // A matched filled box and inside border share one outer/inner coverage result
 // so their common antialiased boundary is not composited twice.
 @group(0) @binding(0) var<storage, read> words: array<u32>;
@@ -23,32 +23,55 @@ fn inside(offset: u32, p: vec2<f32>) -> bool {
     }
     return hit;
 }
-// SDF draws and rounded-rectangle clips evaluate distance once at the pixel
-// center, convert local distance to physical pixels with the similarity scale,
-// and apply a one-pixel linear ramp: clamp(0.5 - distance_px, 0, 1).
-fn coverage(offset: u32, p: vec2<f32>) -> f32 {
-    if words[offset] != 0xffffffffu {
-        var hits = 0.0;
-        // Fixed 4x4 pattern relative to the pixel center, confined to this shape.
-        for (var sample = 0u; sample < 16u; sample++) {
-            let delta = vec2(-0.375 + 0.25*f32(sample%4u), -0.375 + 0.25*f32(sample/4u));
-            hits += select(0.0, 1.0, inside(offset, p + delta));
-        }
-        return hits * 0.0625;
-    }
-    let i = offset + 1u;
+fn rounded_quadrant(q: vec2<f32>, radius: f32) -> f32 {
+    let from_arc_center = q + vec2(radius);
+    return length(max(from_arc_center, vec2(0.0)))
+        + min(max(from_arc_center.x, from_arc_center.y), 0.0) - radius;
+}
+fn rounded_distance(i: u32, p: vec2<f32>) -> f32 {
     let local = vec2(scalar(i)*p.x + scalar(i+2u)*p.y + scalar(i+4u),
                      scalar(i+1u)*p.x + scalar(i+3u)*p.y + scalar(i+5u));
     let lo = point(i+6u);
     let hi = point(i+8u);
+    let radii = color(i+10u);
+    let half_size = (hi-lo)*0.5;
+    if max(max(radii.x, radii.y), max(radii.z, radii.w)) > min(half_size.x, half_size.y) {
+        // Large arcs can cross the box midlines. Intersect the four rounded
+        // quadrants anchored at the actual corners, including their straight sides.
+        let a = lo - local;
+        let b = local - hi;
+        return max(
+            max(rounded_quadrant(a, radii.x), rounded_quadrant(vec2(b.x, a.y), radii.y)),
+            max(rounded_quadrant(b, radii.z), rounded_quadrant(vec2(a.x, b.y), radii.w))
+        );
+    }
     let center = (lo+hi)*0.5;
-    var radius = scalar(i+10u);
+    var radius = radii.x;
     if local.x > center.x {
-        radius = select(scalar(i+11u), scalar(i+12u), local.y > center.y);
-    } else if local.y > center.y { radius = scalar(i+13u); }
-    let q = abs(local-center) - (hi-lo)*0.5 + vec2(radius);
-    let distance_px = (length(max(q, vec2(0.0))) + min(max(q.x,q.y),0.0) - radius)*scalar(i+14u);
-    return clamp(0.5 - distance_px, 0.0, 1.0);
+        radius = select(radii.y, radii.z, local.y > center.y);
+    } else if local.y > center.y { radius = radii.w; }
+    return rounded_quadrant(abs(local-center) - half_size, radius);
+}
+fn coverage(offset: u32, p: vec2<f32>) -> f32 {
+    let tag = words[offset];
+    let i = offset + 1u;
+    if tag == 0xffffffffu {
+        // Convert local distance through the similarity scale for a one-pixel ramp.
+        return clamp(0.5 - rounded_distance(i, p)*scalar(i+14u), 0.0, 1.0);
+    }
+    var hits = 0.0;
+    // Fixed 4x4 pattern relative to the pixel center, confined to this shape.
+    for (var sample = 0u; sample < 16u; sample++) {
+        let delta = vec2(-0.375 + 0.25*f32(sample%4u), -0.375 + 0.25*f32(sample/4u));
+        var hit: bool;
+        if tag == 0xfffffffeu {
+            hit = rounded_distance(i, p + delta) <= 0.0;
+        } else {
+            hit = inside(offset, p + delta);
+        }
+        hits += select(0.0, 1.0, hit);
+    }
+    return hits * 0.0625;
 }
 fn srgb(v: vec3<f32>) -> vec3<f32> {
     let c = max(v, vec3(0.0));
