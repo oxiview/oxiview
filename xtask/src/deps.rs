@@ -28,6 +28,8 @@ pub(crate) struct Layer {
 #[serde(deny_unknown_fields)]
 struct ExternalRule {
     packages: Vec<String>,
+    #[serde(default)]
+    except: Vec<String>,
     allow: Vec<String>,
 }
 
@@ -154,6 +156,7 @@ fn violations(metadata: &Metadata, rules: &Rules) -> Vec<String> {
                     .packages
                     .iter()
                     .any(|pattern| matches_package(pattern, &dependency.name))
+                    && !rule.except.contains(&dependency.name)
                     && !rule.allow.contains(&package.name)
                 {
                     errors.push(format!(

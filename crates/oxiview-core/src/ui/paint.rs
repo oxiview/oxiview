@@ -3,7 +3,7 @@ use crate::PaintedScene;
 use oxiview_base::{Affine, Color, CornerRadii, Point, Rect, Size};
 use oxiview_layout::LayoutBox;
 use oxiview_scene::{Brush, Clip, NodeId as SceneNodeId, NodeKind, Primitive, Scene};
-use oxiview_style::{Display, FocusRing, Overflow, Position};
+use oxiview_style::{Display, FocusRing, Position};
 use std::collections::HashMap;
 
 struct PaintItem {
@@ -48,6 +48,7 @@ struct PaintFrame {
 #[derive(Default)]
 struct DrawHandles {
     background: Option<SceneNodeId>,
+    content_root: Option<SceneNodeId>,
     border: Option<SceneNodeId>,
     focus_ring: Option<SceneNodeId>,
     custom: Vec<SceneNodeId>,
@@ -136,6 +137,22 @@ impl DrawHandles {
 }
 
 impl UiTree {
+    /// Scene transform containing the glyphs and custom draws from the most
+    /// recent paint of this node. Inspect it before changing the tree.
+    pub fn painted_content_node(&self, id: NodeId) -> Option<SceneNodeId> {
+        self.paint_cache.as_ref()?.draws.get(&id)?.content_root
+    }
+
+    /// Returns the logical rectangle actually emitted for a node's background.
+    /// Inspect the snapshot from the most recent paint before changing the tree.
+    pub fn painted_background_bounds(&self, snapshot: &PaintedScene, id: NodeId) -> Option<Rect> {
+        let draw = self.paint_cache.as_ref()?.draws.get(&id)?.background?;
+        match snapshot.scene.content(draw).ok()? {
+            NodeKind::Draw(Primitive::Fill(rect, _, _)) => Some(*rect),
+            _ => None,
+        }
+    }
+
     /// Prepares a complete scene with one logical-to-physical root transform.
     /// Paint-only draw edits reuse the existing Scene structure.
     pub fn paint(&mut self, viewport: Size, scale: f64) -> Result<PaintedScene, UiError> {
@@ -252,7 +269,7 @@ impl UiTree {
                 .into_iter()
                 .filter(|ancestor| *ancestor != id)
             {
-                if self.node(ancestor)?.style.overflow == Overflow::Clip {
+                if self.node(ancestor)?.clips_descendants() {
                     let (clip, radii) = self.padding_clip(ancestor)?;
                     if !rounded_contains(clip, radii, position) {
                         clipped = true;
@@ -382,7 +399,7 @@ impl UiTree {
             if !active {
                 continue;
             }
-            if self.node(ancestor)?.style.overflow == Overflow::Clip {
+            if self.node(ancestor)?.clips_descendants() {
                 let (rect, radii) = self.padding_clip(ancestor)?;
                 parent = append(
                     scene,
@@ -479,7 +496,7 @@ impl NodePainting {
             None
         } else {
             let origin = rect.origin();
-            let clip = (node.style.overflow == Overflow::Clip).then(|| {
+            let clip = node.clips_descendants().then(|| {
                 let (inner, radii) = padding_box(rect, radii, border_width);
                 Clip::RoundedRect(inner, radii)
             });
@@ -533,6 +550,7 @@ impl NodePainting {
                 parent
             };
             let scope = append(scene, scope, NodeKind::Transform(content.transform))?;
+            draws.content_root = Some(scope);
             for primitive in &content.glyphs {
                 append(scene, scope, NodeKind::Draw(primitive.clone()))?;
             }

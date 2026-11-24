@@ -44,6 +44,11 @@ const DIVAN_M6: &str = "text_editing fastest │ slowest │ median │ mean │
 ├─ cached_wrapped_geometry_32_lines 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80
 ╰─ preedit_16_updates_then_commit 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80";
 
+const DIVAN_M7: &str = "m7 fastest │ slowest │ median │ mean │ samples │ iters
+├─ m7_variable_extent_update_lookup_ns 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80
+├─ m7_virtual_list_100k_advance_ns 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80
+╰─ m7_virtual_table_diagonal_ns 1 µs │ 3 µs │ 2 µs │ 2 µs │ 80 │ 80";
+
 fn fixture_machine() -> Machine {
     Machine {
         model: "Fixture model".into(),
@@ -122,6 +127,16 @@ impl Fixture {
     }
 
     fn run(&self, scope: Scope, record: bool, rounds: [&str; 3]) -> (Result<Status>, String) {
+        self.run_with_scroll(scope, record, rounds, None)
+    }
+
+    fn run_with_scroll(
+        &self,
+        scope: Scope,
+        record: bool,
+        rounds: [&str; 3],
+        raw: Option<(&Value, i32)>,
+    ) -> (Result<Status>, String) {
         let check = BenchCheck { scope, record };
         let mut log = String::new();
         let mut rounds = rounds.into_iter();
@@ -130,6 +145,10 @@ impl Fixture {
             &mut log,
             || Ok(fixture_machine()),
             |command| {
+                assert!(
+                    scope != Scope::M7Native,
+                    "native-only scope must never run Divan"
+                );
                 let expected: &[&str] = match scope {
                     Scope::Full => &["bench", "--workspace", "--benches", "--locked"],
                     Scope::M2 => &[
@@ -208,6 +227,20 @@ impl Fixture {
                         "text_editing::cached_wrapped_geometry_32_lines",
                         "text_editing::preedit_16_updates_then_commit",
                     ],
+                    Scope::M7 => &[
+                        "bench",
+                        "--locked",
+                        "-p",
+                        "oxiview-widgets",
+                        "--bench",
+                        "m7",
+                        "--",
+                        "--exact",
+                        "m7::m7_variable_extent_update_lookup_ns",
+                        "m7::m7_virtual_list_100k_advance_ns",
+                        "m7::m7_virtual_table_diagonal_ns",
+                    ],
+                    Scope::M7Native => &[],
                 };
                 assert!(command.get_args().eq(expected.iter().copied()));
                 for (key, _) in std::env::vars_os() {
@@ -249,6 +282,25 @@ impl Fixture {
                     )
                 })
                 .collect())
+            },
+            |_, stem| {
+                assert!(scope == Scope::Full || scope == Scope::M7Native);
+                assert_eq!(
+                    stem,
+                    if scope == Scope::Full {
+                        "bench-scroll"
+                    } else {
+                        "bench-m7-native-scroll"
+                    }
+                );
+                let (text, exit) = raw.map_or_else(
+                    || (scroll::tests::fixture_120(None).to_string(), 0),
+                    |(report, exit)| (report.to_string(), exit),
+                );
+                fs::write(self.artifact(&format!("{stem}.json")), &text).expect("raw fixture JSON");
+                fs::write(self.artifact(&format!("{stem}.log")), "fixture stderr")
+                    .expect("raw fixture stderr");
+                scroll::parse(&text, Some(exit))
             },
         );
         (outcome, log)
@@ -384,6 +436,7 @@ fn each_milestone_records_only_its_metrics_and_preserves_earlier_baselines() {
         (Scope::M4, "m4", M4_METRICS, DIVAN_M4),
         (Scope::M5, "m5", M5_METRICS, DIVAN_M5),
         (Scope::M6, "m6", M6_METRICS, DIVAN_M6),
+        (Scope::M7, "m7", M7_METRICS, DIVAN_M7),
     ] {
         let baseline = || -> Value {
             serde_json::from_slice(&fs::read(fixture.path()).expect("machine baseline"))
@@ -488,12 +541,175 @@ fn m2_first_record_creates_partial_machine_baseline_for_full_comparison() {
         "input_to_submit_ms",
         "input_to_pixel_ms",
         "idle_cpu_percent",
+        scroll::METRIC,
     ] {
         assert_eq!(result_for(&report, name)["status"], "missing_baseline");
     }
+    assert_eq!(result_for(&report, scroll::METRIC)["current"]["value"], 0.0);
+    assert_eq!(result_for(&report, scroll::METRIC)["hard_check_pass"], true);
+}
+
+#[test]
+fn native_scope_treats_historical_null_as_missing_and_records_only_the_native_gate() {
+    let fixture = Fixture::new();
+    let original = fixture.seed_baseline();
+    let run = |record| fixture.run(Scope::M7Native, record, ["unused"; 3]);
+    assert_eq!(run(false).0, Ok(Status::Fail));
+    let report = fixture.report(Scope::M7Native);
+    assert_eq!(report["scope"], "m7-native");
+    assert_eq!(metrics(&report).len(), 2);
+    let metric = result_for(&report, scroll::METRIC);
+    assert_eq!(metric["status"], "missing_baseline");
+    assert_eq!(metric["hard_check_pass"], true);
+    assert!(metric["baseline_value"].is_null());
+    assert_eq!(metric["current"]["value"], 0.0);
+    assert_eq!(metric["details"]["expected_slots"], 1200);
+    let fps = result_for(&report, scroll::FPS_METRIC);
+    assert_eq!(fps["status"], "pass");
+    assert_eq!(fps["hard_check_pass"], true);
+    assert!(fps["baseline_value"].is_null());
     assert_eq!(
-        result_for(&report, "list_100k_scroll_dropped_frames")["status"],
-        "pending"
+        fs::read_to_string(fixture.path()).expect("baseline"),
+        original
+    );
+
+    assert_eq!(run(true).0, Ok(Status::Pass));
+    let merged = fs::read_to_string(fixture.path()).expect("merged baseline");
+    assert!(merged.contains("0.02457525210674720001,"));
+    let mut after: Value = serde_json::from_str(&merged).expect("merged baseline JSON");
+    let before: Value = serde_json::from_str(&original).expect("prior baseline JSON");
+    let measured = std::mem::replace(
+        &mut after["metrics"][scroll::METRIC],
+        before["metrics"][scroll::METRIC].clone(),
+    );
+    assert_eq!(after, before);
+    assert_eq!(measured["value"], 0.0);
+    assert_eq!(measured["target"], 0.0);
+    assert_eq!(measured["refresh_interval_ms"], 8.333333);
+    assert_eq!(run(false).0, Ok(Status::Pass));
+
+    let mut different_display = merged.clone();
+    let interval = different_display.rfind("8.333333").expect("native refresh");
+    different_display.replace_range(interval..interval + "8.333333".len(), "16.666667");
+    fs::write(fixture.path(), &different_display).expect("different recorded display");
+    assert!(
+        run(false)
+            .0
+            .expect_err("incompatible display")
+            .contains("refresh interval differs")
+    );
+    assert_eq!(
+        result_for(&fixture.report(Scope::M7Native), scroll::METRIC)["status"],
+        "environment_error"
+    );
+    assert_eq!(run(true).0, Ok(Status::Pass));
+    assert_eq!(
+        fs::read_to_string(fixture.path()).expect("replacement refresh"),
+        merged
+    );
+}
+
+#[test]
+fn native_scope_can_create_a_baseline_without_overwriting_its_measurement() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        fixture.run(Scope::M7Native, true, ["unused"; 3]).0,
+        Ok(Status::Pass)
+    );
+    let baseline: Baseline =
+        serde_json::from_slice(&fs::read(fixture.path()).expect("new baseline"))
+            .expect("baseline JSON");
+    validate(&baseline).expect("compatible full baseline");
+    assert_eq!(baseline.metrics.len(), pending().len());
+    assert_eq!(baseline.metrics[scroll::METRIC].value, Some(0.0));
+    for &name in LEGACY_NATIVE_METRICS {
+        assert!(baseline.metrics[name].value.is_none());
+    }
+}
+
+#[test]
+fn both_native_scopes_keep_raw_evidence_and_never_record_a_hard_miss() {
+    let fixture = Fixture::new();
+    let original = fixture.seed_baseline();
+    let divan = format!("{DIVAN_M2}\n{DIVAN_OTHER}");
+    assert_eq!(
+        fixture.run(Scope::Full, false, [&divan; 3]).0,
+        Ok(Status::Fail)
+    );
+    let report = fixture.report(Scope::Full);
+    assert_eq!(
+        result_for(&report, scroll::METRIC)["status"],
+        "missing_baseline"
+    );
+    assert_eq!(result_for(&report, scroll::METRIC)["current"]["value"], 0.0);
+    for &name in LEGACY_NATIVE_METRICS {
+        assert_eq!(result_for(&report, name)["status"], "pass");
+    }
+
+    let missed = scroll::tests::fixture_120(Some(0));
+    let mut incomplete = missed.clone();
+    incomplete["frames"][1]["presented_ns"] = Value::Null;
+    for scope in [Scope::Full, Scope::M7Native] {
+        let stem = scope.scroll_artifact_stem().expect("scroll artifacts");
+        for record in [false, true] {
+            assert_eq!(
+                fixture
+                    .run_with_scroll(scope, record, [&divan; 3], Some((&missed, 1)))
+                    .0,
+                Ok(Status::Fail)
+            );
+            let report = fixture.report(scope);
+            let metric = result_for(&report, scroll::METRIC);
+            assert_eq!(metric["status"], "hard_fail");
+            assert_eq!(metric["current"]["value"], 1.0);
+            assert_eq!(metric["hard_check_pass"], false);
+            assert_eq!(metric["details"]["missing_slots"], serde_json::json!([0]));
+            assert_eq!(
+                fs::read_to_string(fixture.artifact(&format!("{stem}.json"))).expect("raw report"),
+                missed.to_string()
+            );
+
+            let result = fixture
+                .run_with_scroll(scope, record, [&divan; 3], Some((&incomplete, 2)))
+                .0;
+            assert!(
+                result
+                    .expect_err("incomplete capture")
+                    .contains("missing callbacks")
+            );
+            let report = fixture.report(scope);
+            let metric = result_for(&report, scroll::METRIC);
+            assert_eq!(metric["status"], "environment_error");
+            assert!(metric["hard_check_pass"].is_null());
+            assert!(
+                metric["error"]
+                    .as_str()
+                    .expect("failure detail")
+                    .contains("missing callbacks")
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.artifact(&format!("{stem}.json"))).expect("raw report"),
+                incomplete.to_string()
+            );
+            assert!(fixture.artifact(&format!("{stem}.log")).exists());
+            assert_eq!(
+                fs::read_to_string(fixture.path()).expect("untouched baseline"),
+                original
+            );
+        }
+    }
+    assert_eq!(
+        fixture.run(Scope::Full, true, [&divan; 3]).0,
+        Ok(Status::Pass)
+    );
+    let baseline: Baseline =
+        serde_json::from_slice(&fs::read(fixture.path()).expect("full baseline"))
+            .expect("full baseline JSON");
+    validate(&baseline).expect("compatible measured baseline");
+    assert_eq!(baseline.metrics[scroll::METRIC].value, Some(0.0));
+    assert_eq!(
+        fixture.run(Scope::Full, false, [&divan; 3]).0,
+        Ok(Status::Pass)
     );
 }
 

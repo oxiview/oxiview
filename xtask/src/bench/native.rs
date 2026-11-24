@@ -1,5 +1,6 @@
 //! Strict native-window measurement protocol; no window is opened by unit tests.
 use super::*;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 // A five-second interval overweights small, deferred native startup work.
@@ -109,10 +110,10 @@ fn exit_status(code: Option<i32>) -> Result<()> {
     }
 }
 fn run(root: &Path, mode: &str, amount: &str, name: &str) -> Result<(String, Option<i32>)> {
-    let out_path = root.join(format!("target/xtask/bench-{name}.json"));
-    let err_path = root.join(format!("target/xtask/bench-{name}.log"));
-    let mut child = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .args([
+    let stem = format!("bench-{name}");
+    let (text, code) = capture(
+        root,
+        &[
             "run",
             "--release",
             "-p",
@@ -121,10 +122,31 @@ fn run(root: &Path, mode: &str, amount: &str, name: &str) -> Result<(String, Opt
             mode,
             amount,
             "--json",
-        ])
+        ],
+        &stem,
+    )?;
+    exit_status(code).map_err(|e| format!("{e}; see target/xtask/{stem}.log"))?;
+    Ok((text, code))
+}
+
+pub(super) fn capture(root: &Path, args: &[&str], stem: &str) -> Result<(String, Option<i32>)> {
+    let out_path = root.join(format!("target/xtask/{stem}.json"));
+    let err_path = root.join(format!("target/xtask/{stem}.log"));
+    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    command.args(args);
+    capture_command(root, &mut command, &out_path, &err_path)
+}
+
+pub(super) fn capture_command(
+    root: &Path,
+    command: &mut Command,
+    out_path: &Path,
+    err_path: &Path,
+) -> Result<(String, Option<i32>)> {
+    let mut child = command
         .current_dir(root)
-        .stdout(fs::File::create(&out_path).map_err(|e| e.to_string())?)
-        .stderr(fs::File::create(&err_path).map_err(|e| e.to_string())?)
+        .stdout(fs::File::create(out_path).map_err(|e| e.to_string())?)
+        .stderr(fs::File::create(err_path).map_err(|e| e.to_string())?)
         .spawn()
         .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(180);
@@ -136,17 +158,131 @@ fn run(root: &Path, mode: &str, amount: &str, name: &str) -> Result<(String, Opt
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!(
-                "native {name} measurement timed out after 180s; display session/GPU required; see {}",
+                "Native measurement timed out after 180s; display session and GPU required; see {}",
                 err_path.display()
             ));
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    exit_status(status.code()).map_err(|e| format!("{e}; see {}", err_path.display()))?;
     Ok((
         fs::read_to_string(out_path).map_err(|e| e.to_string())?,
         status.code(),
     ))
+}
+
+pub(super) fn scroll_directory(root: &Path, stem: &str) -> Result<(PathBuf, PathBuf)> {
+    let stamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let relative = PathBuf::from(format!(
+        "target/xtask/{stem}-{stamp}-{}",
+        std::process::id()
+    ));
+    let directory = root.join(&relative);
+    fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    Ok((relative, directory))
+}
+
+/// Resolve the Cargo output, then stage the production app bundle for this capture.
+pub(super) fn release_viewer(root: &Path, directory: &Path) -> Result<PathBuf> {
+    // A locked console can still build the viewer and start a trace, but
+    // WindowServer cannot present its window. Avoid consuming a full trace
+    // for that known failure. Unknown registry output leaves the native
+    // capture's normal visibility and feedback checks in charge.
+    if cfg!(target_os = "macos")
+        && let Ok(state) = Command::new("/usr/sbin/ioreg")
+            .args(["-n", "Root", "-d1", "-l"])
+            .output()
+        && state.status.success()
+        && String::from_utf8_lossy(&state.stdout)
+            .lines()
+            .any(|line| line.trim() == "\"IOConsoleLocked\" = Yes")
+    {
+        return Err("The macOS console is locked. Native scroll measurement requires a visible, unlocked desktop.".into());
+    }
+    let build = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args([
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "log-viewer-oxi",
+            "--message-format=json",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("Cannot build the native viewer: {error}"))?;
+    fs::write(directory.join("build.log"), &build.stderr).map_err(|error| error.to_string())?;
+    fs::write(directory.join("cargo-messages.jsonl"), &build.stdout)
+        .map_err(|error| error.to_string())?;
+    if !build.status.success() {
+        return Err("Release viewer build failed".into());
+    }
+    let source = viewer_executable(&build.stdout)?;
+    package_viewer(root, &source, directory)
+}
+
+pub(super) const VIEWER_EXECUTABLE: &str = "Oxiview Logs.app/Contents/MacOS/log-viewer-oxi";
+
+fn package_viewer(root: &Path, source: &Path, directory: &Path) -> Result<PathBuf> {
+    let package = Command::new("/bin/sh")
+        .arg(root.join("examples/log-viewer-oxi/package-macos.sh"))
+        .arg("--from-build")
+        .arg(source)
+        .arg(directory)
+        .output()
+        .map_err(|error| format!("Cannot package the native viewer: {error}"))?;
+    if !package.status.success() {
+        return Err(format!(
+            "Cannot package the native viewer: {}",
+            String::from_utf8_lossy(&package.stderr).trim()
+        ));
+    }
+    let viewer = directory.join(VIEWER_EXECUTABLE);
+    if executable_sha256(&viewer)? != executable_sha256(source)? {
+        return Err("Packaged viewer differs from the Cargo release executable".into());
+    }
+    Ok(viewer)
+}
+
+pub(super) fn viewer_executable(messages: &[u8]) -> Result<PathBuf> {
+    let mut executables = messages
+        .split(|&byte| byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .filter(|message| {
+            message["reason"] == "compiler-artifact"
+                && message["target"]["name"] == "log-viewer-oxi"
+                && message["target"]["kind"] == serde_json::json!(["bin"])
+        })
+        .filter_map(|message| message["executable"].as_str().map(PathBuf::from));
+    match (executables.next(), executables.next()) {
+        (Some(path), None) if path.is_absolute() => Ok(path),
+        _ => Err("Cargo did not identify a unique release viewer executable".into()),
+    }
+}
+
+pub(super) fn executable_sha256(path: &Path) -> Result<String> {
+    let output = Command::new("/usr/bin/shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()
+        .map_err(|error| format!("Cannot fingerprint the release viewer: {error}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .next()
+        .filter(|hash| {
+            output.status.success()
+                && hash.len() == 64
+                && hash.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            format!(
+                "Cannot fingerprint the release viewer: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        })
 }
 pub(super) fn measure(root: &Path) -> Result<BTreeMap<String, Measurement>> {
     environment(std::env::consts::OS)?;

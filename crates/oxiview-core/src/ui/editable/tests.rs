@@ -463,3 +463,86 @@ fn walk(painted: &crate::PaintedScene) -> Vec<oxiview_scene::NodeId> {
     }
     nodes
 }
+
+#[test]
+fn focused_editor_queries_and_pointer_selection_follow_nested_scroll_translations() {
+    let (fonts, style) = fixture();
+    let mut tree = UiTree::new().unwrap();
+    let outer = tree
+        .append(tree.root(), field(10.0, 10.0, 180.0, 85.0))
+        .unwrap();
+    let inner = tree.append(outer, field(20.0, 15.0, 124.0, 63.0)).unwrap();
+    let control = Editable::new("candidate location", EditMode::SingleLine);
+    let editor = tree
+        .mount(
+            inner,
+            editable_text(fonts, control.clone(), style).style(field(10.0, 16.0, 155.0, 40.0)),
+        )
+        .unwrap();
+    tree.set_scroll_content_extent(outer, Size::new(240.0, 180.0))
+        .unwrap();
+    tree.set_scroll_content_extent(inner, Size::new(220.0, 160.0))
+        .unwrap();
+    tree.layout(viewport()).unwrap();
+
+    // Pointer focus preserves the original position of an editor wider than its clip.
+    click(&mut tree, Point::new(82.0, 54.0));
+    let before = snapshot(&mut tree);
+    assert_eq!(before.node, editor);
+    assert!(before.selection.active.offset > 0);
+    let mark = native(
+        &before,
+        1,
+        TextInputEdit::SetMarked {
+            range: before.selection.active.offset..before.selection.active.offset,
+            text: "漢字".into(),
+            selection: 0..0,
+        },
+    );
+    assert!(tree.apply_text_input_event(mark, viewport()).unwrap());
+    let marked = snapshot(&mut tree);
+    let range = marked.selection.active.offset..marked.selection.active.offset;
+
+    tree.set_scroll_offset(outer, Point::new(3.5, 11.25))
+        .unwrap();
+    tree.set_scroll_offset(inner, Point::new(2.25, 9.5))
+        .unwrap();
+    let after = snapshot(&mut tree);
+    assert_eq!(after.session, marked.session);
+    assert_eq!(after.input_revision, marked.input_revision);
+    assert_eq!(after.marked, marked.marked);
+    assert_eq!(after.selection, marked.selection);
+    let x = marked.caret.origin().x() - 5.75;
+    let y = marked.caret.origin().y() - 20.75;
+    assert_eq!(after.caret.origin(), Point::new(x, y));
+    assert_eq!(after.first_rect(range.clone()), Some((range, after.caret)));
+    assert_eq!(
+        after.viewport.edges()[2],
+        tree.scroll_viewport_bounds(inner).unwrap().edges()[2],
+    );
+    let platform = tree
+        .focused_text_input_snapshot(viewport())
+        .unwrap()
+        .unwrap();
+    assert!(platform.is_valid());
+    assert_eq!(platform.caret, after.caret);
+
+    let commit = native(
+        &after,
+        2,
+        TextInputEdit::Commit {
+            range: after.marked.clone().unwrap(),
+            text: "漢字".into(),
+            kind: TextCommitKind::Composition,
+        },
+    );
+    assert!(tree.apply_text_input_event(commit, viewport()).unwrap());
+    let committed = snapshot(&mut tree);
+    let point = Point::new(
+        committed.caret.origin().x() - 12.0,
+        committed.caret.origin().y() + committed.caret.size().height() / 2.0,
+    );
+    let index = committed.character_index_at_point(point);
+    click(&mut tree, point);
+    assert_eq!(control.editor().borrow().selection().active.offset, index);
+}

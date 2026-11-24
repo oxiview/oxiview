@@ -1,9 +1,11 @@
 //! Owned layout protocol and a private Taffy adapter over the caller's retained tree.
 
 mod adapter;
+mod extent;
 mod types;
 mod validation;
 pub use adapter::{IncrementalTaffyLayout, TaffyLayout};
+pub use extent::{ExtentError, FixedExtent, VariableExtent, VirtualExtent};
 use oxiview_base::{Point, Size};
 use std::hash::Hash;
 pub use types::*;

@@ -26,7 +26,7 @@ flowchart TD
     ports --> base[Shared foundation]
 ```
 
-Adapters use only their own ports and permitted lower layers, never one another. The composition root selects implementations and wires ports together. UI core depends on ports. The public facade and widget library are planned. The examples currently use the internal crates directly.
+Adapters use their own ports and permitted lower layers. The composition root selects implementations and wires ports together. UI core depends on ports. The widget library composes retained Views above core. The public facade is planned. The examples currently use the internal crates directly.
 
 ## Implemented UI and presentation path
 
@@ -61,11 +61,15 @@ Each window tree owns its focus, state variants, Action registrations and layere
 
 The text port owns the Unicode editing model, range validation, preedit, history and paragraph geometry. Core mounts the model on a focusable node and uses the same layout for drawing, pointer selection and candidate rectangles. The window endpoint exchanges session-tagged input and owned snapshots with AppKit or the headless driver. The Markdown example owns file revisions, search, preview compilation and the conversion from document graphics to Scene primitives. [M6 design](plans/m6-text-editing-and-markdown.md) · [Committed text and preedit](adr/0042-publish-committed-editor-text.md)
 
+Platform adapters supply scroll phases and logical distances. Core owns clipped viewports, gesture routing and offsets shared by rendering and hit testing. Layout indexes fixed and measured extents. The widget crate mounts visible rows and cells, holds keyed selection, and supplies the controls used in Oxiview Logs. The example owns log parsing, file generations, filtering, ordering and Follow. File watchers in the composition root deliver owned notifications to the log reader and theme loader. [Virtual collections](../crates/oxiview-widgets/src/collection.rs) · [Log viewer](../examples/log-viewer-oxi/README.md)
+
 On macOS, the window thread owns input dispatch, painting and submission.
-For an ordinary native frame, a worker waits for a surface texture and wakes
-the window thread when it is available. The window can process input during
-that wait. Live resize configures, paints and acknowledges synchronously.
-[Native frame pacing](adr/0036-fifo-drawable-readiness.md)
+The default presenter acquires a surface texture on a worker and wakes the
+window thread when it is available. The synchronized log viewer instead
+accepts a drawable from its Metal display link and presents it from the final
+render command. Both paths keep AppKit on the main thread. Live resize
+configures, paints and acknowledges synchronously.
+[Surface readiness](adr/0036-fifo-drawable-readiness.md) · [Display-link drawables](adr/0047-present-display-link-drawables.md)
 
 ## Anti-corruption layers
 

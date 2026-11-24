@@ -73,6 +73,18 @@ pub(super) fn merge_measured(
                 start + value.start..start + value.end,
                 serde_json::to_string(&metric.value).map_err(|e| e.to_string())?,
             ));
+            if let Some(refresh) = metric.refresh_interval_ms {
+                let refresh = serde_json::to_string(&refresh).map_err(|e| e.to_string())?;
+                if let Some(field) = fields.get("refresh_interval_ms") {
+                    edits.push((start + field.start..start + field.end, refresh));
+                } else {
+                    let end = start + fields.values().map(|range| range.end).max().unwrap_or(1);
+                    edits.push((
+                        end..end,
+                        format!(",\n      \"refresh_interval_ms\": {refresh}"),
+                    ));
+                }
+            }
         } else {
             let name = serde_json::to_string(name).map_err(|e| e.to_string())?;
             let metric = serde_json::to_string_pretty(metric).map_err(|e| e.to_string())?;

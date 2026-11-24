@@ -176,34 +176,73 @@ impl UiTree {
     /// Consumes a Builder or function component under the parent, applying its
     /// initial bindings before returning. Dynamic handlers use deferred commands.
     pub fn mount(&mut self, parent: NodeId, view: View) -> Result<NodeId, UiError> {
-        self.node(parent)?;
-        let owner = self.lifetime_owner(parent)?;
-        let result = in_owner(owner, || self.mount_view(parent, view))?;
-        let applied = self.flush_updates(self.viewport, |_, _, _| {});
-        let failure = match applied {
-            Err(error) => Some(error),
-            Ok(applied) => applied
-                .reports
-                .iter()
-                .flat_map(|report| &report.outcomes)
-                .find_map(|outcome| {
-                    let belongs = outcome.node.is_some_and(|id| {
-                        id == result || self.descendant(id, result).unwrap_or(false)
-                    });
-                    if belongs {
-                        outcome.result.as_ref().err().cloned()
-                    } else {
-                        None
-                    }
-                }),
-        };
-        if let Some(error) = failure {
-            if self.contains(result) {
-                self.remove_raw(result)?;
+        let root = self.mount_owned(parent, view)?;
+        self.complete_mounts(&[root])?;
+        Ok(root)
+    }
+
+    /// Mounts views under their respective parents and returns their root
+    /// identities in input order. Applies initial bindings and layout after
+    /// constructing the roots. A failed mount removes roots added by this call.
+    pub fn mount_many(
+        &mut self,
+        views: impl IntoIterator<Item = (NodeId, View)>,
+    ) -> Result<Vec<NodeId>, UiError> {
+        let mut roots = Vec::new();
+        for (parent, view) in views {
+            match self.mount_owned(parent, view) {
+                Ok(root) => roots.push(root),
+                Err(error) => {
+                    self.rollback_mounts(&roots)?;
+                    return Err(error);
+                }
             }
-            return Err(error);
         }
-        Ok(result)
+        if !roots.is_empty() {
+            self.complete_mounts(&roots)?;
+        }
+        Ok(roots)
+    }
+
+    fn mount_owned(&mut self, parent: NodeId, view: View) -> Result<NodeId, UiError> {
+        let owner = self.lifetime_owner(parent)?;
+        in_owner(owner, || self.mount_view(parent, view))
+    }
+
+    fn complete_mounts(&mut self, roots: &[NodeId]) -> Result<(), UiError> {
+        let result = self
+            .flush_updates(self.viewport, |_, _, _| {})
+            .and_then(|applied| {
+                for outcome in applied
+                    .reports
+                    .into_iter()
+                    .flat_map(|report| report.outcomes)
+                {
+                    if let (Some(id), Err(error)) = (outcome.node, outcome.result)
+                        && (roots.contains(&id)
+                            || self
+                                .ancestors(id)
+                                .flatten()
+                                .any(|node| roots.contains(&node.id)))
+                    {
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            });
+        if result.is_err() {
+            self.rollback_mounts(roots)?;
+        }
+        result
+    }
+
+    fn rollback_mounts(&mut self, roots: &[NodeId]) -> Result<(), UiError> {
+        for &root in roots.iter().rev() {
+            if self.contains(root) {
+                self.remove_raw(root)?;
+            }
+        }
+        Ok(())
     }
     fn mount_view(&mut self, parent: NodeId, view: View) -> Result<NodeId, UiError> {
         self.mount_inner(parent, view, 0)

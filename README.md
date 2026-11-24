@@ -25,6 +25,15 @@ performance baseline comparison passed. See the [execution record](docs/plans/m1
 for measured results and remaining latency work.
 The toolchain is pinned to Rust stable 1.97.0 with edition 2024.
 
+## Log viewer
+
+M7 delivered Oxiview Logs. Open a local log or explore 100,000 sample records. The list expands messages inline. The table supports column sorting and resizing, cell navigation and copying rectangular selections. Follow keeps the latest matching record visible until the reader scrolls back. [Log viewer and keyboard controls](examples/log-viewer-oxi/README.md) · [Delivery and scrolling follow-up](docs/plans/m7-widgets-and-scrolling.md#acceptance-record)
+
+```sh
+cargo run --release -p log-viewer-oxi
+cargo run --release -p log-viewer-oxi -- --headless --json
+```
+
 ## Markdown editor
 
 Run the native two-pane editor on macOS, or exercise the same application through its release headless replay.
@@ -79,6 +88,16 @@ covers reactive components. The [M4 acceptance record](docs/plans/m4-text-and-sn
 <!-- oxiview-perf:start -->
 
 **Test system** · Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)
+
+**M7 log viewer · 2026-11-23 `32f6c6d`\***
+
+| 100,000-row native scroll | Displayed / expected slots | Measurement |
+| --- | ---: | ---: |
+| Untraced 1 | 1192 / 1200 | 119.2 FPS |
+| Untraced 2 | 1160 / 1200 | 116.0 FPS |
+| Untraced 3 | 1186 / 1200 | 118.6 FPS |
+| Apple trace 1 | 751 / 1200 | 0.83 ms/s (lower bound) |
+| Apple trace 2 | 1162 / 1200 | 0.83 ms/s (lower bound) |
 
 ### Window latency, idle CPU and offscreen rendering
 
@@ -214,6 +233,6 @@ may be recorded only after human confirmation. See
 [the performance protocol](docs/conventions/testing-performance.md).
 
 Windows and Linux remain planned native ports. The Markdown editor exercises
-M6 text input. The widget library belongs to M7. The original M1 demo and measurement modes
+M6 text input. The log viewer exercises M7 widgets and large collections. The original M1 demo and measurement modes
 retain their rendering/scheduling workload; use the separate M2 preview mode
 for node-tree and layout interaction.

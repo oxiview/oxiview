@@ -18,6 +18,17 @@ pub enum FrameOutcome {
     Skipped,
 }
 
+/// Result of preparing the encoded native presentation.
+#[cfg(target_os = "macos")]
+pub enum MetalFrameOutcome<'a> {
+    /// The encoded final command for this exact resource.
+    Ready(crate::MetalPresentation<'a>),
+    /// A stale opportunity, suspended surface, or incompatible resource.
+    Skipped,
+    /// The caller must release the old drawable and reconfigure before retrying.
+    Reconfigure,
+}
+
 /// A per-window surface sharing the process-wide instance, adapter, and device.
 ///
 /// Create, configure, paint and present on the window thread. Ordinary
@@ -33,12 +44,37 @@ pub struct WindowSurface {
     surface: Arc<wgpu::Surface<'static>>,
     size: PixelSize,
     display_sync: bool,
+    #[cfg(target_os = "macos")]
+    metal_drawables: bool,
     configuration: Option<Configuration>,
 }
 
 struct Configuration {
     generation: Arc<AtomicBool>,
     device: wgpu::Device,
+    #[cfg(target_os = "macos")]
+    format: wgpu::TextureFormat,
+}
+
+// wgpu configures CAMetalLayer properties on the window thread. That thread
+// has no Core Animation run loop to commit an implicit colorspace or size change.
+#[cfg(target_os = "macos")]
+struct LayerConfigurationTransaction;
+
+#[cfg(target_os = "macos")]
+impl LayerConfigurationTransaction {
+    fn begin() -> Self {
+        objc2_quartz_core::CATransaction::begin();
+        objc2_quartz_core::CATransaction::setDisableActions(true);
+        Self
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for LayerConfigurationTransaction {
+    fn drop(&mut self) {
+        objc2_quartz_core::CATransaction::commit();
+    }
 }
 
 pub(crate) fn validate_kind(kind: NativeSurfaceKind, metal: bool) -> Result<(), Error> {
@@ -106,6 +142,8 @@ impl WindowSurface {
                 height: 0,
             },
             display_sync: false,
+            #[cfg(target_os = "macos")]
+            metal_drawables: false,
             configuration: None,
         })
     }
@@ -135,12 +173,107 @@ impl WindowSurface {
         process.ensure_device()?;
         let gpu = process
             .gpu
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| Error::DeviceLost("device unavailable".into()))?;
-        self.configuration = Some(configure(&self.surface, gpu, size, display_sync)?);
+        let config = configure(&self.surface, gpu, size, display_sync)?;
+        #[cfg(target_os = "macos")]
+        if self.metal_drawables {
+            gpu.metal_blitter.warm_up(&gpu.device, config.format)?;
+        }
+        self.configuration = Some(config);
         self.display_sync = display_sync;
         self.size = size;
         Ok(())
+    }
+
+    /// Prepares the native output pipelines at the next surface configuration.
+    #[cfg(target_os = "macos")]
+    pub fn enable_metal_drawables(&mut self) {
+        self.metal_drawables = true;
+    }
+
+    /// Reconfigures the existing surface after the old drawable has been released.
+    #[cfg(target_os = "macos")]
+    pub fn reconfigure_metal(&mut self) -> Result<(), Error> {
+        self.configure(self.size, self.display_sync)
+    }
+
+    /// Encodes the final output command for the exact platform drawable.
+    /// The caller presents it only through the platform's submission guard.
+    #[cfg(target_os = "macos")]
+    pub fn render_metal(
+        &self,
+        scene: &Scene,
+        root: NodeId,
+        resource: &dyn std::any::Any,
+        can_submit: impl Fn() -> bool,
+        observer: Option<&crate::MetalRenderObserver>,
+    ) -> Result<MetalFrameOutcome<'_>, Error> {
+        objc2::rc::autoreleasepool(|_| {
+            let checks = crate::metal_output::FrameChecks {
+                can_submit: &can_submit,
+                observer,
+            };
+            self.render_metal_frame(scene, root, resource, &checks)
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn render_metal_frame(
+        &self,
+        scene: &Scene,
+        root: NodeId,
+        resource: &dyn std::any::Any,
+        checks: &crate::metal_output::FrameChecks<'_>,
+    ) -> Result<MetalFrameOutcome<'_>, Error> {
+        use crate::metal_output::{MetalPresentation, MetalRenderEvent, Target, drawable_resource};
+
+        if self.size.width == 0 || self.size.height == 0 || !(checks.can_submit)() {
+            return Ok(MetalFrameOutcome::Skipped);
+        }
+        let Some(drawable) = drawable_resource(resource) else {
+            return Ok(MetalFrameOutcome::Skipped);
+        };
+        let mut process = self
+            .context
+            .process
+            .lock()
+            .map_err(|e| Error::DeviceLost(e.to_string()))?;
+        let (Some(gpu), Some(config)) = (process.gpu.as_mut(), self.configuration.as_ref()) else {
+            return Ok(MetalFrameOutcome::Reconfigure);
+        };
+        if gpu.lost.load(Ordering::Acquire) || !Arc::ptr_eq(&config.generation, &gpu.lost) {
+            return Ok(MetalFrameOutcome::Reconfigure);
+        }
+        if !(checks.can_submit)() {
+            return Ok(MetalFrameOutcome::Skipped);
+        }
+        let Some(mut target) = Target::new(drawable, &gpu.device, self.size, config.format)? else {
+            return Ok(MetalFrameOutcome::Skipped);
+        };
+        let encoded = scene
+            .encode(root)
+            .map_err(|e| Error::SceneEncoding(e.to_string()))?;
+        if let Some(observe) = checks.observer {
+            observe(MetalRenderEvent::SceneEncoded);
+        }
+        if let Err(error) = gpu.render_metal(&encoded, self.size, &mut target, checks) {
+            if matches!(error, Error::DeviceLost(_)) {
+                tracing::warn!(%error, "reconfiguring native drawable surface after device loss");
+                process.lose_device();
+                return Ok(MetalFrameOutcome::Reconfigure);
+            }
+            return Err(error);
+        }
+        let Some(command) = target.command else {
+            return Ok(MetalFrameOutcome::Skipped);
+        };
+        Ok(MetalFrameOutcome::Ready(MetalPresentation::new(
+            process,
+            command,
+            drawable,
+            checks.observer,
+        )))
     }
 
     /// Requests one actual surface texture for an ordinary frame. The
@@ -322,10 +455,16 @@ fn configure(
     // block for an interval. Actual drawable availability paces painting.
     config.desired_maximum_frame_latency = 2;
     config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
-    scoped(gpu, || surface.configure(&gpu.device, &config))?;
+    scoped(gpu, || {
+        #[cfg(target_os = "macos")]
+        let _layer_changes = LayerConfigurationTransaction::begin();
+        surface.configure(&gpu.device, &config);
+    })?;
     Ok(Configuration {
         generation: Arc::clone(&gpu.lost),
         device: gpu.device.clone(),
+        #[cfg(target_os = "macos")]
+        format: config.format,
     })
 }
 
@@ -335,3 +474,6 @@ fn configure(
 fn scoped<T>(gpu: &device::Gpu, operation: impl FnOnce() -> T) -> Result<T, Error> {
     device::scoped(&gpu.device, &gpu.lost, operation)
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod transaction_tests;

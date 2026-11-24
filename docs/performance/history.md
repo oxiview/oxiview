@@ -2,6 +2,22 @@
 
 All archived measurement campaigns appear below, newest first. Each heading identifies the Git HEAD at measurement time. An asterisk indicates local changes. Each run links to its original benchmark or animation samples. [Measurement protocol](../conventions/testing-performance.md)
 
+## M7 log viewer · 2026-11-23 `32f6c6d`\*
+
+Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)
+
+Test HEAD `32f6c6d84f47f28c3e8e3f1674e661fd17f20039`.
+
+| 100,000-row native scroll | Displayed / expected slots | Measurement |
+| --- | ---: | ---: |
+| Untraced 1 | 1192 / 1200 | 119.2 FPS |
+| Untraced 2 | 1160 / 1200 | 116.0 FPS |
+| Untraced 3 | 1186 / 1200 | 118.6 FPS |
+| Apple trace 1 | 751 / 1200 | 0.83 ms/s (lower bound) |
+| Apple trace 2 | 1162 / 1200 | 0.83 ms/s (lower bound) |
+
+[m7-scroll.json](runs/1795426783-32f6c6d/m7-scroll.json) · [run.json](runs/1795426783-32f6c6d/run.json)
+
 ## Full retest after pacing fix `82a8325`\*
 
 Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)

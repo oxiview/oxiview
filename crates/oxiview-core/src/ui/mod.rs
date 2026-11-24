@@ -24,6 +24,7 @@ mod keyboard;
 mod keymap;
 mod mailbox;
 mod paint;
+mod scroll;
 mod text;
 mod theme;
 mod view;
@@ -112,6 +113,12 @@ pub enum UiError {
     /// The viewport must have finite, nonnegative dimensions.
     #[error("invalid UI viewport or scale")]
     InvalidViewport,
+    /// A scroll offset or content extent contains invalid coordinates.
+    #[error("invalid scroll geometry")]
+    InvalidScrollGeometry,
+    /// The retained node has no configured scroll content extent.
+    #[error("node is not a scroll viewport")]
+    ScrollUnavailable,
     /// Style validation rejected an edit.
     #[error("invalid style: {0}")]
     Style(String),
@@ -343,6 +350,7 @@ struct Node {
     text: Option<Rc<text::TextNode>>,
     theme: Option<Box<theme::NodeStyles>>,
     painting: Option<Box<paint::NodePainting>>,
+    scroll: Option<Box<scroll::Viewport>>,
 }
 
 /// One window's retained UI tree. All methods run on its window thread.
@@ -365,6 +373,7 @@ pub struct UiTree {
     theme: theme::ThemeState,
     editors: HashMap<NodeId, editable::EditorNode>,
     pointer: input::PointerState,
+    scroll_input: scroll::ScrollInput,
     interaction: interaction::Interaction,
     queue: VecDeque<input::Batch>,
     mailbox: UiCommandSender,
@@ -416,6 +425,7 @@ impl UiTree {
             text: None,
             theme: None,
             painting: None,
+            scroll: None,
         };
         let mailbox = UiCommandSender::new(Rc::clone(&identities));
         Ok(Self {
@@ -433,6 +443,7 @@ impl UiTree {
             theme,
             editors: HashMap::new(),
             pointer: input::PointerState::default(),
+            scroll_input: scroll::ScrollInput::default(),
             interaction: interaction::Interaction::default(),
             queue: VecDeque::new(),
             mailbox,
@@ -571,8 +582,10 @@ impl UiTree {
             text: None,
             theme: None,
             painting: None,
+            scroll: None,
         });
         self.node_mut(parent)?.children.insert(index, id);
+        self.invalidate_focus_order();
         self.dirty_layout(id, true, true)?;
         self.dirty_layout(parent, false, true)?;
         Ok(())
@@ -600,11 +613,15 @@ impl UiTree {
         let rebuild = box_geometry || old.opacity != style.opacity || old.z_index != style.z_index;
         let background = old.background != style.background;
         let border = old.border_color != style.border_color;
+        let old_display = old.layout.display;
         node.style = style;
         if box_geometry {
             node.painting = None;
         }
         if layout {
+            if (old_display == Display::None) != (node.style.layout.display == Display::None) {
+                self.invalidate_focus_order();
+            }
             self.dirty_layout(id, true, false)?;
         } else if rebuild {
             self.dirty_paint();
@@ -704,6 +721,7 @@ impl UiTree {
         self.node_mut(old_parent)?.children.remove(old_index);
         self.node_mut(parent)?.children.insert(index, id);
         self.node_mut(id)?.parent = Some(parent);
+        self.invalidate_focus_order();
         self.dirty_layout(parent, false, true)?;
         if old_parent != parent {
             self.dirty_layout(old_parent, false, true)?;
@@ -751,8 +769,11 @@ impl UiTree {
         };
         self.engine = engine;
         let stats = result.map_err(|error| UiError::Layout(error.to_string()))?;
+        if self.scroll_input.viewports != 0 && (!output.is_empty() || self.viewport != viewport) {
+            self.scroll_input.hover_pending = true;
+        }
         for (id, layout) in output {
-            self.node_mut(id)?.layout = layout;
+            self.commit_scroll_layout(id, layout)?;
         }
         self.viewport = viewport;
         self.layout_dirty = false;
@@ -789,8 +810,11 @@ impl UiTree {
         for &(id, _) in &output {
             self.node(id)?;
         }
+        if self.scroll_input.viewports != 0 && (!output.is_empty() || self.viewport != viewport) {
+            self.scroll_input.hover_pending = true;
+        }
         for (id, layout) in output {
-            self.node_mut(id)?.layout = layout;
+            self.commit_scroll_layout(id, layout)?;
         }
         self.viewport = viewport;
         self.layout_dirty = false;
@@ -800,15 +824,31 @@ impl UiTree {
         self.diagnostics.record_layout(stats);
         Ok(stats)
     }
-    /// Returns a committed border box in logical window coordinates.
+    /// Returns the committed border box in logical window coordinates after
+    /// translating by all enclosing scroll viewport offsets.
     pub fn bounds(&self, id: NodeId) -> Result<Rect, UiError> {
+        self.bounds_with_scroll(id, true)
+    }
+    /// Returns the committed border box before enclosing scroll translations.
+    pub fn layout_bounds(&self, id: NodeId) -> Result<Rect, UiError> {
+        self.bounds_with_scroll(id, false)
+    }
+    fn bounds_with_scroll(&self, id: NodeId, translated: bool) -> Result<Rect, UiError> {
         let path = self.path(id)?;
         let mut x = 0.0;
         let mut y = 0.0;
         for ancestor in path {
-            let p = self.node(ancestor)?.layout.location;
+            let node = self.node(ancestor)?;
+            let p = node.layout.location;
             x += p.x();
             y += p.y();
+            if translated
+                && ancestor != id
+                && let Some(viewport) = &node.scroll
+            {
+                x -= viewport.offset.x();
+                y -= viewport.offset.y();
+            }
         }
         Ok(Rect::from_origin_size(
             Point::new(x, y),
@@ -998,6 +1038,7 @@ impl UiTree {
         let order = self.postorder(id)?;
         let parent = self.node(id)?.parent.ok_or(UiError::RootOperation)?;
         self.node_mut(parent)?.children.retain(|child| *child != id);
+        self.invalidate_focus_order();
         self.dirty_layout(parent, false, true)?;
         for current in order {
             self.pointer.hover.retain(|hovered| *hovered != current);
@@ -1009,6 +1050,9 @@ impl UiTree {
                 self.editors.remove(&current);
             }
             let node = self.nodes.get_mut(current.slot).and_then(Option::take);
+            if node.as_ref().is_some_and(|node| node.scroll.is_some()) {
+                self.scroll_input.viewports -= 1;
+            }
             self.identities
                 .try_borrow_mut()
                 .map_err(|_| UiError::ReservationBusy)?
@@ -1178,6 +1222,8 @@ fn validate_viewport(size: Size) -> Result<(), UiError> {
 
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod scroll_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

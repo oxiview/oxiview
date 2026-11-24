@@ -9,7 +9,7 @@
 //! frames. Both paths composite in linear light and expose straight sRGB RGBA8
 //! offscreen. Native presentation preserves the surface's premultiplied alpha.
 
-// Native surface creation is the adapter's only unsafe boundary.
+// Native surface and Metal interoperability are confined to this adapter.
 #![allow(unsafe_code)]
 
 mod acquisition;
@@ -17,8 +17,14 @@ mod atlas;
 mod copy;
 mod device;
 mod glyph;
+#[cfg(target_os = "macos")]
+mod metal_output;
 mod surface;
 mod vector;
+#[cfg(target_os = "macos")]
+pub use metal_output::{MetalPresentation, MetalRenderEvent, MetalRenderObserver};
+#[cfg(target_os = "macos")]
+pub use surface::MetalFrameOutcome;
 pub use surface::{FrameOutcome, WindowSurface};
 mod encoding;
 

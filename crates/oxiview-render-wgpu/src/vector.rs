@@ -7,6 +7,7 @@ use crate::{
 use oxiview_base::{Color, CornerRadii, GlyphKind, Point, Rect};
 use oxiview_scene::{
     BezierPath, Brush, Clip, EncodedNode, EncodedScene, FillRule, PathCommand, Primitive,
+    ResolvedClip,
 };
 use std::{
     collections::HashSet,
@@ -75,13 +76,20 @@ impl Backend {
         self.scene.reset_and_resize(width, height);
         self.glyphs.maintain();
 
+        let mut nodes = input.nodes.as_slice();
+        let mut options = RenderOptions::default();
+        while let Some((first, remaining)) = nodes.split_first()
+            && let Some(color) = viewport_background(first, size)?
+        {
+            options.target_init =
+                vello_gpu::TargetInit::Clear(vello_gpu::ClearSettings::Viewport {
+                    color: peniko::color::AlphaColor::new(color),
+                });
+            nodes = remaining;
+        }
         // Pin every atlas item referenced by the frame, including draws which have
         // not been translated yet. Texture writes precede submission of all draws.
-        let required = input
-            .nodes
-            .iter()
-            .filter_map(source_key)
-            .collect::<HashSet<_>>();
+        let required = nodes.iter().filter_map(source_key).collect::<HashSet<_>>();
         let mut frame = self.atlas.frame(required);
         let mut paint = Paint {
             scene: &mut self.scene,
@@ -91,12 +99,19 @@ impl Backend {
             device,
             queue,
         };
-        for node in &input.nodes {
+        let mut active_clips: &[ResolvedClip] = &[];
+        for node in nodes {
             match node {
                 EncodedNode::BeginOpacity(opacity) => {
-                    paint.scene.push_opacity_layer(*opacity as f32)
+                    paint.set_clips(active_clips, &[])?;
+                    active_clips = &[];
+                    paint.scene.push_opacity_layer(*opacity as f32);
                 }
-                EncodedNode::EndOpacity => paint.scene.pop_layer(),
+                EncodedNode::EndOpacity => {
+                    paint.set_clips(active_clips, &[])?;
+                    active_clips = &[];
+                    paint.scene.pop_layer();
+                }
                 EncodedNode::Draw {
                     primitive,
                     transform,
@@ -106,24 +121,14 @@ impl Backend {
                     if transform.determinant() == 0.0 {
                         continue;
                     }
-                    for clip in clips {
-                        paint
-                            .scene
-                            .set_transform(affine(clip.transform.coefficients())?);
-                        let (rect, radii) = match clip.shape {
-                            Clip::Rect(rect) => (rect, CornerRadii::default()),
-                            Clip::RoundedRect(rect, radii) => (rect, radii),
-                        };
-                        paint.scene.push_clip_path(&rounded(rect, radii)?);
-                    }
+                    paint.set_clips(active_clips, clips)?;
+                    active_clips = clips;
                     paint.scene.set_transform(transform);
-                    paint.draw(primitive, transform)?;
-                    for _ in clips {
-                        paint.scene.pop_clip();
-                    }
+                    paint.draw(primitive, transform, clips.is_empty())?;
                 }
             }
         }
+        paint.set_clips(active_clips, &[])?;
 
         self.renderer
             .render(
@@ -135,7 +140,7 @@ impl Backend {
                     depth_view: None,
                 },
                 &frame.bindings,
-                RenderOptions::default(),
+                options,
             )
             .map_err(|error| Error::SceneEncoding(error.to_string()))?;
         let counters = self.atlas.counters;
@@ -145,6 +150,33 @@ impl Backend {
             overflow_uploads = counters.overflow_uploads, "Vello frame encoded");
         Ok(())
     }
+}
+
+// A leading opaque fill that exactly covers the target can use the attachment
+// clear. Successive full backgrounds replace one another before other draws.
+fn viewport_background(node: &EncodedNode, size: PixelSize) -> Result<Option<[f32; 4]>, Error> {
+    let EncodedNode::Draw {
+        primitive: Primitive::Fill(rect, radii, Brush::Solid(color)),
+        transform,
+        clips,
+    } = node
+    else {
+        return Ok(None);
+    };
+    let [a, b, c, d, x, y] = transform.coefficients();
+    let [x0, y0, x1, y1] = rect.edges();
+    if !clips.is_empty()
+        || *radii != CornerRadii::default()
+        || b != 0.0
+        || c != 0.0
+        || [a * x0 + x, d * y0 + y, a * x1 + x, d * y1 + y]
+            != [0.0, 0.0, f64::from(size.width), f64::from(size.height)]
+    {
+        return Ok(None);
+    }
+    checked([a, d, x, y, x0, y0, x1, y1])?;
+    let color = valid_color(*color)?;
+    Ok((color[3] == 1.0).then_some(color))
 }
 
 fn source_key(node: &EncodedNode) -> Option<crate::atlas::Key> {
@@ -174,28 +206,78 @@ struct Paint<'a> {
 }
 
 impl Paint<'_> {
-    fn draw(&mut self, primitive: &Primitive, transform: kurbo::Affine) -> Result<(), Error> {
+    fn set_clips(&mut self, previous: &[ResolvedClip], next: &[ResolvedClip]) -> Result<(), Error> {
+        // Clip paths mask individual draws. Retain the common prefix across
+        // adjacent draws to reuse their rasterized intersections.
+        let shared = previous
+            .iter()
+            .zip(next)
+            .take_while(|(a, b)| a == b)
+            .count();
+        for _ in shared..previous.len() {
+            self.scene.pop_clip();
+        }
+        for clip in next.iter().skip(shared) {
+            self.scene
+                .set_transform(affine(clip.transform.coefficients())?);
+            let (rect, radii) = match clip.shape {
+                Clip::Rect(rect) => (rect, CornerRadii::default()),
+                Clip::RoundedRect(rect, radii) => (rect, radii),
+            };
+            if radii == CornerRadii::default() {
+                let [x0, y0, x1, y1] = rect.edges();
+                checked([x0, y0, x1, y1])?;
+                self.scene
+                    .push_clip_rect(&kurbo::Rect::new(x0, y0, x1, y1).abs());
+            } else {
+                self.scene.push_clip_path(&rounded(rect, radii)?);
+            }
+        }
+        Ok(())
+    }
+
+    fn draw(
+        &mut self,
+        primitive: &Primitive,
+        transform: kurbo::Affine,
+        unclipped: bool,
+    ) -> Result<(), Error> {
         self.scene.reset_paint_transform();
         match primitive {
             Primitive::Fill(rect, radii, brush) => {
-                self.brush(brush)?;
-                self.scene.fill_path(&rounded(*rect, *radii)?);
+                if unclipped && *radii == CornerRadii::default() && pixel_aligned(*rect, transform)
+                {
+                    let [x0, y0, x1, y1] = rect.edges();
+                    checked([x0, y0, x1, y1])?;
+                    if self.brush(brush)? {
+                        self.scene
+                            .fill_rect(&kurbo::Rect::new(x0, y0, x1, y1).abs());
+                    }
+                } else {
+                    let path = rounded(*rect, *radii)?;
+                    if self.brush(brush)? {
+                        self.scene.fill_path(&path);
+                    }
+                }
             }
             Primitive::FillPath(path, rule, brush) => {
                 let path = bezier(path, transform)?;
-                self.brush(brush)?;
-                self.scene.set_fill_rule(match rule {
-                    FillRule::NonZero => peniko::Fill::NonZero,
-                    FillRule::EvenOdd => peniko::Fill::EvenOdd,
-                });
-                self.scene.fill_path(&path);
-                self.scene.set_fill_rule(peniko::Fill::NonZero);
+                if self.brush(brush)? {
+                    self.scene.set_fill_rule(match rule {
+                        FillRule::NonZero => peniko::Fill::NonZero,
+                        FillRule::EvenOdd => peniko::Fill::EvenOdd,
+                    });
+                    self.scene.fill_path(&path);
+                    self.scene.set_fill_rule(peniko::Fill::NonZero);
+                }
             }
             Primitive::Stroke(rect, radii, width, brush) if *width > 0.0 => {
                 checked([*width])?;
-                self.brush(brush)?;
-                self.scene.set_stroke(kurbo::Stroke::new(*width));
-                self.scene.stroke_path(&rounded(*rect, *radii)?);
+                let path = rounded(*rect, *radii)?;
+                if self.brush(brush)? {
+                    self.scene.set_stroke(kurbo::Stroke::new(*width));
+                    self.scene.stroke_path(&path);
+                }
             }
             Primitive::Stroke(..) => {}
             Primitive::Image(rect, image) => {
@@ -228,9 +310,26 @@ impl Paint<'_> {
         Ok(())
     }
 
-    fn brush(&mut self, brush: &Brush) -> Result<(), Error> {
+    fn brush(&mut self, brush: &Brush) -> Result<bool, Error> {
         match brush {
-            Brush::Solid(color) => self.texture(Source::Solid(valid_color(*color)?)),
+            Brush::Solid(color) => {
+                let rgba = valid_color(*color)?;
+                if rgba[3] == 0.0 {
+                    return Ok(false);
+                }
+                if rgba[3] == 1.0
+                    && rgba[..3]
+                        .iter()
+                        .all(|&channel| channel == 0.0 || channel == 1.0)
+                {
+                    // Both Vello's packed solid and our half-float atlas represent
+                    // these colors exactly. The solid skips a texture sample.
+                    self.scene
+                        .set_paint(peniko::color::AlphaColor::<peniko::color::Srgb>::new(rgba));
+                } else {
+                    self.texture(Source::Solid(rgba))?;
+                }
+            }
             Brush::LinearGradient(start, end, stops) => {
                 let positions = [start.x(), start.y(), end.x(), end.y()];
                 checked(positions)?;
@@ -245,21 +344,37 @@ impl Paint<'_> {
                     )));
                 }
                 self.scene.set_paint(gradient);
-                Ok(())
             }
         }
+        Ok(true)
     }
 
     fn texture(&mut self, source: Source<'_>) -> Result<(), Error> {
+        let quality = match source {
+            Source::Solid(_) => peniko::ImageQuality::Low,
+            Source::Image(_) => peniko::ImageQuality::Medium,
+        };
         let source = self
             .atlas
             .image(self.device, self.queue, self.frame, source)?;
         self.scene.set_paint(Image {
             image: source,
-            sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
+            sampler: peniko::ImageSampler::default().with_quality(quality),
         });
         Ok(())
     }
+}
+
+fn pixel_aligned(rect: Rect, transform: kurbo::Affine) -> bool {
+    let [a, b, c, d, x, y] = transform.as_coeffs();
+    let [x0, y0, x1, y1] = rect.edges();
+    // Let Vello record a rectangle directly at whole-pixel edges. Preserve the
+    // path coverage of clipped, skewed and fractional fill geometry.
+    b == 0.0
+        && c == 0.0
+        && [a * x0 + x, d * y0 + y, a * x1 + x, d * y1 + y]
+            .into_iter()
+            .all(|edge| edge.fract() == 0.0 && f64::from(edge as f32) == edge)
 }
 
 fn affine(coefficients: [f64; 6]) -> Result<kurbo::Affine, Error> {

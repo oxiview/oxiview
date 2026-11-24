@@ -1,6 +1,6 @@
 # Benchmarks and performance baselines
 
-`cargo xtask bench` is the workspace performance verification entry point. Ordinary `cargo xtask verify` skips benchmarks; `cargo xtask verify --full` opens real macOS windows for latency and idle measurements and adds bench after ordinary checks and continues aggregating even if earlier checks fail (doctor environment failures still return early). Use Rust stable 1.97 and edition 2024 only; nightly is unnecessary.
+`cargo xtask bench` is the workspace performance verification entry point. Ordinary `cargo xtask verify` runs without benchmark windows. Its `--full` option adds benchmarks, including real macOS windows for latency, idle and scrolling. Verification aggregates checks after doctor passes. Use Rust stable 1.97 and edition 2024.
 
 ## Writing benchmarks
 
@@ -16,7 +16,7 @@ Full bench runs `cargo bench --workspace --benches --locked` sequentially three 
 
 Divan currently emits terminal statistics tables. The parser validates headers and column counts, reconstructs tree names as `target/function/argument`, and supports ps/ns/µs/μs/us/ms/s. It requires finite positive values and nonzero sample counts, rejecting duplicate metrics, empty output, and inconsistent metric sets across runs. Clear inherited `DIVAN_*` overrides so filtering or test mode cannot alter measurement. New benchmarks use whitespace-free names without counter rows or custom output. Format changes require parser and test updates; parsing failure must never count as success. Standard libtest output with zero benchmarks is ignored.
 
-Reports go to `target/xtask/report.json`. `performance.metrics` includes each current value, baseline, status, and threshold. In a full report, the three M1 metrics include `hard_check_pass` and measurement details (including latency percentiles and frames), and the M7 list metric shows `pending`. `bench-results.json` is a standalone artifact with the same details. `bench.log` records the decision summary, and `bench-1.log` through `bench-3.log` preserve raw stdout/stderr. Native stdout and stderr are preserved in `bench-latency-1.json` through `bench-latency-3.json` and their matching `.log` files, as well as `bench-idle.json` and `bench-idle.log`. Each run clears the old artifacts for its scope before measurement. `--json` prints only the report to stdout.
+Reports go to `target/xtask/report.json`. `performance.metrics` gives each current value, baseline, status and threshold. The native entries include measurement details and hard-check results. `bench-results.json` is a standalone artifact with the same details. `bench.log` records the decision summary and `bench-1.log` through `bench-3.log` preserve Divan output. Full native runs write `bench-latency-1.json` through `bench-latency-3.json`, `bench-idle.json`, `bench-scroll.json` and matching logs. Each run clears the old artifacts for its scope before measurement. `--json` prints only the report to stdout.
 
 ## M2 retained tree and layout benchmarks
 
@@ -131,13 +131,27 @@ The scoped report is `target/xtask/bench-m5-results.json`. Recording updates the
 | `cached_wrapped_geometry_32_lines` | Hit-test and resolve selection rectangles on a cached 32-line layout. |
 | `preedit_16_updates_then_commit` | Apply sixteen marked-text updates and commit one candidate. |
 
+## M7 virtualization and native scrolling
+
+`cargo xtask bench --m7` measures an indexed row-height change and lookup, advancing a retained list over one row, and scrolling a wide virtual table across both axes. Fixture setup checks the number of live data rows and cells. The measured operations use the layout protocol and retained collection implementation. The scoped result is `target/xtask/bench-m7-results.json`. [Benchmark source](../../crates/oxiview-widgets/benches/m7.rs)
+
+`cargo xtask bench --m7-native` opens the release log viewer with 100,000 sample records at 1120×720 logical points. Each scrolling opportunity moves 12 logical points through the application's normal scroll route. After a two-second warm-up, the probe captures ten seconds at the display's calibrated cadence. It records each submitted drawable ID, first visible row, scroll offset, interval and Metal presentation timestamp. xtask independently maps actual display times to refresh slots, including both edges of the measured interval. Every expected slot must display advancing content. A zero presentation timestamp fails the hard check. Missing feedback or inconsistent evidence prevents a valid measurement. [Capture](../../examples/log-viewer-oxi/src/measurement.rs) · [Report validation](../../xtask/src/bench/scroll.rs)
+
+The FPS result's `display_clock` details report nominal slots covered by OS ticks, positive in-sample Metal timestamps within matching tolerance of a tick, and a histogram of displayed tick index minus source tick index with an unmeasured count, or `null` when the ordered clock is unavailable.
+
+The standalone native result is `target/xtask/bench-m7-native-results.json`. Each native run retains raw feedback in `target/xtask/bench-m7-native-scroll-<stamp>-<pid>/viewer.json` alongside its executable, `viewer.log` and `result.json`. After desktop readiness and approval, `--m7-native --record` writes only the validated native target for the current machine and display interval. `--m7 --record` writes only the three Divan medians. Retain raw evidence from a miss before running another measurement.
+
+Both native checks resolve Cargo's release executable and stage it using the viewer's [macOS packaging script](../../examples/log-viewer-oxi/package-macos.sh). Each capture keeps its own `Oxiview Logs.app`, records the hash of the measured executable and launches it inside that bundle. This gives AppKit the same bundle identifier and Retina manifest as a normal release launch. For a fresh Instruments recording, the launched PID must resolve to that capture's executable in the trace. Hitch and surface ownership follow the PID across executable and display-name aliases. The artifact directory in the result contains the original viewer output.
+
+The 120 Hz reference display has 1,200 expected slots in the native sample. `list_100k_scroll_presented_fps` measures advancing displayed content against this cadence. A second command, `cargo xtask bench --m7-hitches`, selects Xcode's Hitches and Display instruments for the release viewer. This records the Apple hitch events and physical display lifetimes while keeping trace size and profiling overhead down. The observer can also read a saved Animation Hitches template recording. Allow about 15 seconds for the window and additional time for Instruments to save and export its trace. The command writes `target/xtask/bench-m7-hitches-results.json` and retains a unique artifact directory with the original trace, viewer report, exports and observer verdict. The limit is 1.2 ms/s during active scrolling. A below-limit observation requires corroborating Metal feedback and sufficient Apple frame coverage. [Measurement decision](../adr/0046-native-scroll-cadence-and-hitches.md)
+
 ## Recording and updating
 
 ### Publishing measurements in the READMEs
 
 The English and Chinese READMEs show the latest **five measurement
 campaigns in total**, ordered by measurement time. A campaign can include
-native benchmarks, animation samples, or both. Multiple samples at one
+native benchmarks, animation samples, or the M7 native scrolling report. Animation repeats at one
 resolution and duration produce one median. Keep independent before/after
 code states in separate campaigns, even when they share a Git HEAD.
 The [project history](../performance/history.md) retains every archived run,
@@ -159,6 +173,8 @@ cargo xtask perf-report --check
 
 Include the workloads you measured. Save each animation repeat or longer
 observation under its own `animation-*.json` filename in that directory.
+For an M7 campaign, `m7-scroll.json` preserves the individual untraced runs and Apple recordings in order. The report displays confirmed hitch time as a lower bound when trace coverage is incomplete. [Archived M7 example](../performance/runs/1795426783-32f6c6d/m7-scroll.json)
+
 `run.json` captures the full HEAD, its clean/dirty state and the measurement
 start time. Its `label` holds an English and a Chinese caption. The optional
 `implementation` field identifies the later commit that landed a measured
@@ -181,7 +197,7 @@ The machine identifier uses a fixed FNV-1a 64-bit hash of architecture, model, C
 
 Machines with identical hardware configurations share an identifier; distinguishing them cannot be guaranteed without unique private device identifiers. Memory upgrades create a new ID. Linux MemTotal is kernel-available memory, so kernel/boot configuration changes may also change the ID. Unsupported probing environments return explicit errors instead of falling back to an unknown ID. Windows/Linux implementations still need testing on their native platforms.
 
-Files use schema_version=1 and UTC Unix seconds. Metrics record value, unit, direction, regression_percent, and target. Native latency metrics additionally record refresh_interval_ms. Older schema-1 files remain readable: a missing input_to_submit_ms or pixel refresh interval is a missing baseline (exit 1), requiring human-confirmed recording. Default bench never changes values. The M7 metric remains null.
+Files use schema_version=1 and UTC Unix seconds. Metrics record value, unit, direction, regression_percent and target. Native latency and scrolling metrics additionally record refresh_interval_ms. A historical null scroll value is readable and compares as a missing baseline. Recording a first value requires human confirmation. Default bench reads existing baselines.
 
 input_to_submit_ms stores capture-to-submission p95, with a hard target of one measured refresh interval. input_to_pixel_ms stores capture-to-actual-presentation p95 and has a fixed 15% floating regression margin against the human-recorded optimized implementation. There is no absolute one-frame pixel gate. A missing pixel baseline yields a null hard_check_pass, not a passing gate. Recording stores the display interval; a subsequent measurement differing by more than 0.1% (to allow display-clock rounding/jitter) is an environment error (exit 2): use the same display or re-record after human confirmation. Recording is the explicit operation that can change that display. The idle hard target remains 0.1% with zero submitted/presented frames and display-link events.
 
@@ -199,7 +215,9 @@ input_to_submit_ms stores capture-to-submission p95, with a hard target of one m
 | `input_to_submit_ms` | p95 ≤ one refresh interval | measured (M1) | capture to endpoint-clock timestamp immediately after presenter returns Presented |
 | `input_to_pixel_ms` | p95 ≤ human-recorded optimized baseline × 1.15 | measured (M1) | 120 sequential synthetic AppKit pointer moves; capture to actual `MTLDrawable.presentedTime`; stored value is p95 milliseconds |
 | `idle_cpu_percent` | zero presented frames, zero display-link frame events, and process CPU ≤ 0.1% | measured (M1) | thirty-second idle interval after one-second settling; `getrusage(RUSAGE_SELF)` user + system CPU divided by elapsed wall time × 100 |
-| `list_100k_scroll_dropped_frames` | 0 frames | pending until M7 | 100,000-row list scrolling |
+| `list_100k_scroll_dropped_frames` | 0 frames | M7 post-delivery follow-up | Actual Metal refresh-slot coverage while scrolling the 100,000-row log viewer |
+| `list_100k_scroll_presented_fps` | 120 frames/s | M7 post-delivery follow-up | Distinct advancing scenes on the reference display's observed opportunities |
+| `list_100k_scroll_apple_hitch_ms_per_second` | ≤ 1.2 ms/s | M7 post-delivery follow-up | Viewer hitch time during the same active scroll, with trace coverage and independent Metal feedback |
 
 Measured means a real source and enforced check exist; it does not assert that the current implementation meets the target.
 
@@ -221,7 +239,7 @@ Idle measurement sleeps without polling after settling. The example counts all p
 
 Production macOS drawable tracking maintains a per-window compositor-offset estimate without idle polling. It uses presentedTime minus the associated slot vsync, an exponential moving average (1/8 new sample), defaults to one interval, and bounds the estimate to four intervals. Metal presented handlers capture only shared feedback and the acquisition slot; tracking never retains drawables. Handlers may run on arbitrary threads, so feedback uses atomics and a mutex-protected diagnostics queue. Zero timestamps leave the estimate unchanged and produce distinct not-displayed diagnostics records so latency measurement can fail immediately. The `diagnostics` Cargo feature is off by default. The window example and the [continuous animation demo](../../examples/animation-fps/README.md) enable it for native measurements. `MacOsPlatform::with_diagnostics` opts into measurement record collection. Diagnostics expose backend clock time, timestamped synthetic pointer posting, drawable IDs/presentation records, and process CPU time without exposing native objects. They work in release builds and are not product APIs.
 
-Ordinary verify opens no measurement window. Its headless tests use deterministic virtual input phases, assert capture-to-submission latency ≤ one interval, and assert zero frames across 1,000 subsequent idle intervals. xtask self-tests cover strict native JSON, inclusive hard boundaries, fabricated regressions, environment exit codes, and the pending M7 protocol.
+Ordinary verify opens no measurement window. Its headless tests use deterministic virtual input phases, assert capture-to-submission latency ≤ one interval, and assert zero frames across 1,000 subsequent idle intervals. xtask self-tests cover strict native JSON, inclusive hard boundaries, fabricated regressions, environment exit codes and the M7 slot-count protocol.
 
 
 ## Native presentation behavior

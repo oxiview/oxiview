@@ -305,11 +305,9 @@ fn reference_updates_and_scope_restoration() -> Result<(), Error> {
         0,
         NodeKind::Clip(Clip::Rect(Rect::default())),
     )?;
-    scene.insert(
-        Some(clipped),
-        0,
-        NodeKind::Reference(definition, Affine::IDENTITY),
-    )?;
+    let placement = Affine::new([1.0, 0.0, 0.0, 1.0, 2.0, 3.0]);
+    let instance = scene.insert(Some(clipped), 0, NodeKind::Reference(definition, placement))?;
+    scene.insert(Some(instance), 0, draw(8))?;
     scene.insert(
         Some(root),
         1,
@@ -317,12 +315,28 @@ fn reference_updates_and_scope_restoration() -> Result<(), Error> {
     )?;
     scene.replace(definition, draw(7))?;
     let encoded = scene.encode(root)?;
-    assert_eq!(encoded.nodes.len(), 4);
+    assert_eq!(encoded.nodes.len(), 5);
     assert_eq!(encoded.nodes[0], EncodedNode::BeginOpacity(0.25));
-    assert_eq!(encoded.nodes[2], EncodedNode::EndOpacity);
+    let transform = Affine::new([1.0, 0.0, 0.5, 1.0, 10.0, 0.0]);
+    for (index, value) in [(1, 7), (2, 8)] {
+        if let NodeKind::Draw(primitive) = draw(value) {
+            assert_eq!(
+                encoded.nodes[index],
+                EncodedNode::Draw {
+                    primitive,
+                    transform: placement.then(transform),
+                    clips: vec![ResolvedClip {
+                        shape: Clip::Rect(Rect::default()),
+                        transform,
+                    }],
+                }
+            );
+        }
+    }
+    assert_eq!(encoded.nodes[3], EncodedNode::EndOpacity);
     if let NodeKind::Draw(primitive) = draw(7) {
         assert_eq!(
-            encoded.nodes[3],
+            encoded.nodes[4],
             EncodedNode::Draw {
                 primitive,
                 transform: Affine::IDENTITY,

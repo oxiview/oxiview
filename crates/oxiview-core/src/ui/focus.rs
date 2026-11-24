@@ -1,6 +1,5 @@
 use super::{NodeId, UiCommands, UiError, UiTree, View, interaction::ArmedInput};
 use oxiview_reactive::{ReactiveError, Signal, signal};
-use oxiview_style::Display;
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 /// Whether a node can receive logical focus.
@@ -67,6 +66,17 @@ impl FocusScope<'_> {
 }
 
 pub(super) struct FocusRecovery(Option<NodeId>);
+
+#[derive(Default)]
+pub(super) struct FocusOrder {
+    entries: Vec<FocusEntry>,
+    valid: bool,
+}
+
+struct FocusEntry {
+    id: NodeId,
+    policy: FocusPolicy,
+}
 
 impl View {
     /// Opts this node into focus and optionally Tab traversal.
@@ -162,6 +172,12 @@ impl UiTree {
         if !self.focus_eligible(id)? {
             return Err(UiError::FocusUnavailable);
         }
+        if self.scroll_input.viewports != 0 {
+            // A focus command can follow a move or resize in the same batch.
+            // Reveal the target using the resulting geometry before notifying it.
+            self.layout(self.viewport)?;
+            self.reveal_node(id)?;
+        }
         self.transition_focus(Some(id), None)
     }
 
@@ -182,59 +198,85 @@ impl UiTree {
             self.lose_interaction(FocusScope::Node(id))?;
         }
         self.node_mut(id)?.focus_policy = policy;
+        self.invalidate_focus_order();
         Ok(())
     }
 
     pub(super) fn tab_focus(&mut self, backwards: bool) -> Result<(), UiError> {
-        let order = self.focus_order()?;
-        let first_tab = |id: &&NodeId| {
-            self.node(**id)
-                .is_ok_and(|node| node.focus_policy == FocusPolicy::Tab)
-        };
-        let index = order
-            .iter()
-            .position(|id| Some(*id) == self.interaction.focused);
+        self.refresh_focus_order()?;
+        let focused = self.focused_node();
+        let order = &self.interaction.focus_order.entries;
+        let is_tab = |entry: &&FocusEntry| entry.policy == FocusPolicy::Tab;
+        let index = focused.and_then(|id| order.iter().position(|entry| entry.id == id));
         let next = match (backwards, index) {
             (false, Some(index)) => order
                 .iter()
                 .skip(index + 1)
                 .chain(order.iter().take(index + 1))
-                .find(first_tab),
+                .find(is_tab),
             (true, Some(index)) => order
                 .iter()
                 .take(index)
                 .rev()
                 .chain(order.iter().skip(index).rev())
-                .find(first_tab),
-            (false, None) => order.iter().find(first_tab),
-            (true, None) => order.iter().rev().find(first_tab),
+                .find(is_tab),
+            (false, None) => order.iter().find(is_tab),
+            (true, None) => order.iter().rev().find(is_tab),
         };
-        let next = next.copied().or(self.focused_node());
-        if next == self.focused_node() {
+        let next = next.map(|entry| entry.id).or(focused);
+        if next == focused {
             self.take_arm(|source| matches!(source, ArmedInput::Keyboard(_)))?;
+        }
+        if self.scroll_input.viewports != 0
+            && let Some(next) = next
+        {
+            self.layout(self.viewport)?;
+            self.reveal_node(next)?;
         }
         self.transition_focus(next, Some(true))
     }
 
-    // Keep a programmatic-only focused node as a position marker in preorder.
-    fn focus_order(&self) -> Result<Vec<NodeId>, UiError> {
-        let mut order = Vec::new();
-        let mut pending = vec![self.root];
-        while let Some(id) = pending.pop() {
-            let node = self.node(id)?;
-            if node.hidden || node.style.layout.display == Display::None || node.disabled {
-                continue;
-            }
-            if node.focus_policy == FocusPolicy::Tab || Some(id) == self.interaction.focused {
-                order.push(id);
-            }
-            pending.extend(node.children.iter().rev().copied());
-        }
-        Ok(order)
+    pub(super) fn invalidate_focus_order(&mut self) {
+        self.interaction.focus_order.valid = false;
     }
 
-    pub(super) fn plan_focus_loss(
+    fn refresh_focus_order(&mut self) -> Result<(), UiError> {
+        if self.interaction.focus_order.valid {
+            return Ok(());
+        }
+        let mut entries = std::mem::take(&mut self.interaction.focus_order.entries);
+        entries.clear();
+        let result = self.collect_focus_order(self.root, &mut entries);
+        self.interaction.focus_order.entries = entries;
+        self.interaction.focus_order.valid = result.is_ok();
+        result
+    }
+
+    fn collect_focus_order(
         &self,
+        id: NodeId,
+        entries: &mut Vec<FocusEntry>,
+    ) -> Result<(), UiError> {
+        let node = self.node(id)?;
+        if node.blocks_interaction() {
+            return Ok(());
+        }
+        // Programmatic targets mark a position in preorder whenever they have focus.
+        if node.focus_policy != FocusPolicy::None {
+            entries.push(FocusEntry {
+                id,
+                policy: node.focus_policy,
+            });
+        }
+        for &child in &node.children {
+            self.collect_focus_order(child, entries)?;
+        }
+        Ok(())
+    }
+
+    // Plan recovery before changing the tree so the old focus still marks its position.
+    pub(super) fn plan_focus_loss(
+        &mut self,
         scope: FocusScope<'_>,
     ) -> Result<Option<FocusRecovery>, UiError> {
         let Some(old) = self.interaction.focused else {
@@ -256,15 +298,16 @@ impl UiTree {
                 return Ok(Some(FocusRecovery(Some(target))));
             }
         }
-        let order = self.focus_order()?;
-        if let Some(index) = order.iter().position(|id| *id == old) {
-            for &next in order
+        self.refresh_focus_order()?;
+        let order = &self.interaction.focus_order.entries;
+        if let Some(index) = order.iter().position(|entry| entry.id == old) {
+            for entry in order
                 .iter()
                 .skip(index + 1)
                 .chain(order.iter().take(index).rev())
             {
-                if !scope.includes(self, next)? {
-                    return Ok(Some(FocusRecovery(Some(next))));
+                if entry.policy == FocusPolicy::Tab && !scope.includes(self, entry.id)? {
+                    return Ok(Some(FocusRecovery(Some(entry.id))));
                 }
             }
         }

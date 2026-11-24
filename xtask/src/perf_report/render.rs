@@ -1,4 +1,4 @@
-use super::{Animation, Native, Run};
+use super::{Animation, Native, Run, ScrollReport};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
@@ -216,6 +216,54 @@ fn animation(page: &mut String, runs: &[&Run], lang: Lang) {
     }
 }
 
+fn scroll(page: &mut String, report: &ScrollReport, lang: Lang) {
+    table_row(
+        page,
+        [
+            lang.text("100,000-row native scroll", "十万行原生滚动")
+                .into(),
+            lang.text("Displayed / expected slots", "上屏 / 预期时隙")
+                .into(),
+            lang.text("Measurement", "测量结果").into(),
+        ],
+    );
+    page.push_str("| --- | ---: | ---: |\n");
+    let mut cadence_round = 0;
+    let mut trace_round = 0;
+    for sample in &report.samples {
+        let elapsed = sample.measured_duration_ns as f64;
+        let (capture, value) = if let Some(hitch) = &sample.apple {
+            trace_round += 1;
+            let rate = 1000.0 * hitch.observed_hitch_time_ns as f64 / elapsed;
+            let qualifier = if hitch.complete_apple_frame_lifetime_coverage {
+                ""
+            } else {
+                lang.text(" (lower bound)", "（下限）")
+            };
+            (
+                format!("{} {trace_round}", lang.text("Apple trace", "Apple 跟踪")),
+                format!("{rate:.2} ms/s{qualifier}"),
+            )
+        } else {
+            cadence_round += 1;
+            let fps = 1e9 * sample.occupied_slots as f64 / elapsed;
+            (
+                format!("{} {cadence_round}", lang.text("Untraced", "无跟踪")),
+                format!("{fps:.1} FPS"),
+            )
+        };
+        table_row(
+            page,
+            [
+                capture,
+                format!("{} / {}", sample.occupied_slots, sample.expected_slots),
+                value,
+            ],
+        );
+    }
+    page.push('\n');
+}
+
 pub(super) fn summary(runs: &[Run], lang: Lang) -> String {
     let mut page = String::new();
     let mut systems = BTreeMap::<_, Vec<_>>::new();
@@ -228,6 +276,12 @@ pub(super) fn summary(runs: &[Run], lang: Lang) -> String {
             lang.text("Test system", "测试环境"),
             cell(host)
         ));
+        for run in &group {
+            if let Some(report) = &run.scroll {
+                page.push_str(&format!("**{}**\n\n", label(run, lang)));
+                scroll(&mut page, report, lang);
+            }
+        }
         if group.iter().any(|r| r.native.is_some()) {
             page.push_str(lang.text(
                 "### Window latency, idle CPU and offscreen rendering\n\n",
@@ -272,6 +326,9 @@ pub(super) fn history(runs: &[Run]) -> String {
             ));
         }
         page.push_str("\n\n");
+        if let Some(report) = &run.scroll {
+            scroll(&mut page, report, Lang::En);
+        }
         native(&mut page, &[run], Lang::En);
         animation(&mut page, &[run], Lang::En);
         let dir = run.id();

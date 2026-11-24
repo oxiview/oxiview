@@ -2,7 +2,7 @@
 # The dev-only exception lets any checked crate use test tools in tests.
 # Skip crates not yet created; new workspace members must be registered.
 # Examples are applications, so they are exempt; the xtask ban still applies to them.
-exempt = ["xtask", "window", "snake", "snake-oxi", "snake-m5-oxi", "markdown-editor-oxi", "animation-fps"]
+exempt = ["xtask", "window", "snake", "snake-oxi", "snake-m5-oxi", "markdown-editor-oxi", "log-viewer-oxi", "animation-fps"]
 forbidden = ["xtask"]
 dev-only = ["oxiview-testing"]
 
@@ -107,7 +107,12 @@ packages = ["kurbo", "peniko"]
 allow = ["oxiview-base"]
 
 [[external]]
-packages = ["objc2", "objc2-*", "block2"]
+packages = ["objc2", "objc2-foundation", "objc2-metal", "objc2-quartz-core", "block2"]
+allow = ["oxiview-platform-macos", "oxiview-render-wgpu"]
+
+[[external]]
+packages = ["objc2-*"]
+except = ["objc2-foundation", "objc2-metal", "objc2-quartz-core"]
 allow = ["oxiview-platform-macos"]
 
 [[external]]

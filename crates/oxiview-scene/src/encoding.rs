@@ -38,13 +38,10 @@ pub struct EncodedScene {
     pub nodes: Vec<EncodedNode>,
 }
 
-#[derive(Clone)]
-struct State {
-    transform: Affine,
-    clips: Vec<ResolvedClip>,
-}
 enum Work {
-    Visit(NodeId, State),
+    Visit(NodeId),
+    RestoreTransform(Affine),
+    PopClip,
     EndOpacity,
 }
 
@@ -76,44 +73,52 @@ impl Scene {
     /// opacity boundaries remain explicit because per-draw alpha multiplication
     /// would incorrectly composite overlapping children. Traversal is iterative.
     pub fn encode(&self, root: NodeId) -> Result<EncodedScene, Error> {
-        self.node(root)?;
         let mut output = EncodedScene::default();
-        let mut stack = vec![Work::Visit(
-            root,
-            State {
-                transform: Affine::IDENTITY,
-                clips: Vec::new(),
-            },
-        )];
+        let mut transform = Affine::IDENTITY;
+        let mut clips = Vec::new();
+        let mut stack = vec![Work::Visit(root)];
         while let Some(work) = stack.pop() {
-            let Work::Visit(id, mut state) = work else {
-                output.nodes.push(EncodedNode::EndOpacity);
-                continue;
+            let id = match work {
+                Work::Visit(id) => id,
+                Work::RestoreTransform(previous) => {
+                    transform = previous;
+                    continue;
+                }
+                Work::PopClip => {
+                    clips.pop();
+                    continue;
+                }
+                Work::EndOpacity => {
+                    output.nodes.push(EncodedNode::EndOpacity);
+                    continue;
+                }
             };
             let node = self.node(id)?;
             match &node.kind {
                 NodeKind::Draw(primitive) => output.nodes.push(EncodedNode::Draw {
                     primitive: resolve_primitive(primitive),
-                    transform: state.transform,
-                    clips: state.clips.clone(),
+                    transform,
+                    clips: clips.clone(),
                 }),
-                NodeKind::Transform(transform) | NodeKind::Reference(_, transform) => {
-                    state.transform = transform.then(state.transform);
+                NodeKind::Transform(local) | NodeKind::Reference(_, local) => {
+                    stack.push(Work::RestoreTransform(transform));
+                    transform = local.then(transform);
                 }
-                NodeKind::Clip(shape) => state.clips.push(ResolvedClip {
-                    shape: shape.clone(),
-                    transform: state.transform,
-                }),
+                NodeKind::Clip(shape) => {
+                    clips.push(ResolvedClip {
+                        shape: shape.clone(),
+                        transform,
+                    });
+                    stack.push(Work::PopClip);
+                }
                 NodeKind::Opacity(opacity) => {
                     output.nodes.push(EncodedNode::BeginOpacity(*opacity));
                     stack.push(Work::EndOpacity);
                 }
             }
-            for child in node.children.iter().rev() {
-                stack.push(Work::Visit(*child, state.clone()));
-            }
+            stack.extend(node.children.iter().rev().copied().map(Work::Visit));
             if let NodeKind::Reference(target, _) = node.kind {
-                stack.push(Work::Visit(target, state));
+                stack.push(Work::Visit(target));
             }
         }
         Ok(output)

@@ -289,6 +289,19 @@ impl Application for EditorApp {
                 delta_x,
                 delta_y,
                 timestamp,
+            }
+            | WindowEvent::Scroll {
+                position,
+                delta_x,
+                delta_y,
+                timestamp,
+                phase:
+                    oxiview_platform::ScrollPhase::Begin(_)
+                    | oxiview_platform::ScrollPhase::Update
+                    | oxiview_platform::ScrollPhase::End
+                    | oxiview_platform::ScrollPhase::MomentumBegin
+                    | oxiview_platform::ScrollPhase::MomentumUpdate
+                    | oxiview_platform::ScrollPhase::MomentumEnd,
             } => {
                 self.now = self.now.max(*timestamp);
                 self.tree.layout(self.viewport)?;

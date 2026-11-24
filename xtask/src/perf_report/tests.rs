@@ -1,11 +1,15 @@
 use super::*;
 use serde_json::json;
 
-fn fixture(dir: &Path, head: &str, at: u64, native: bool) -> Result<()> {
+fn fixture_meta(dir: &Path, head: &str, at: u64) -> Result<()> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let meta = json!({"measured_at":at,"head":head,"dirty":false,"machine":"Fixture",
         "label":[format!("Run-{at}"),format!("测量-{at}")]});
-    fs::write(dir.join("run.json"), meta.to_string()).map_err(|e| e.to_string())?;
+    fs::write(dir.join("run.json"), meta.to_string()).map_err(|e| e.to_string())
+}
+
+fn fixture(dir: &Path, head: &str, at: u64, native: bool) -> Result<()> {
+    fixture_meta(dir, head, at)?;
     let (name, data) = if native {
         let metric = |name: &str, unit: &str, value: f64| json!({"name":name,"current":{"unit":unit,"value":value}});
         let mut idle = metric("idle_cpu_percent", "%", 0.01);
@@ -57,30 +61,41 @@ fn sixth_campaign_rotates_both_translations_and_preserves_history() -> Result<()
         )?;
     }
     let input = root.join("incoming");
-    fixture(&input, &head, 6, false)?;
+    fixture_meta(&input, &head, 6)?;
+    let measure = input.join("m7-scroll.json");
+    let scroll = json!({"rows":100_000,"samples":[
+        {"occupied_slots":1192,"expected_slots":1200,"measured_duration_ns":10_000_000_000_u64},
+        {"occupied_slots":1162,"expected_slots":1200,"measured_duration_ns":10_000_000_000_u64,
+         "apple":{"observed_hitch_time_ns":8_333_333,"complete_apple_frame_lifetime_coverage":false}}
+    ]});
+    fs::write(&measure, scroll.to_string()).map_err(|e| e.to_string())?;
     let update = PerfReport {
         check: false,
-        add: Some(input.clone()),
+        add: Some(input),
         start: None,
         machine: None,
     };
     update.update(&root)?;
     update.update(&root)?;
     check(&root)?;
-    for (file, title) in [("README.md", "Run"), ("README_ZH.md", "测量")] {
+    for (file, title, hitch) in [
+        ("README.md", "Run", "0.83 ms/s (lower bound)"),
+        ("README_ZH.md", "测量", "0.83 ms/s（下限）"),
+    ] {
         let body = fs::read_to_string(root.join(file)).map_err(|e| e.to_string())?;
         assert!(body.starts_with("intro\n") && body.ends_with("\noutro\n"));
         assert!(!body.contains(&format!("{title}-1")));
+        assert!(body.contains("1192 / 1200 | 119.2 FPS") && body.contains(hitch));
         for i in 2..=6 {
             assert!(body.contains(&format!("{title}-{i}")));
         }
     }
     let history = fs::read_to_string(root.join(HISTORY)).map_err(|e| e.to_string())?;
+    assert!(history.contains("1162 / 1200 | 0.83 ms/s (lower bound)"));
     for i in 1..=6 {
         assert!(history.contains(&format!("## Run-{i} ")));
     }
     assert_eq!(read_archive(&root)?.len(), 6);
-    let measure = input.join("animation-window.json");
     let mut changed = fs::read_to_string(&measure).map_err(|e| e.to_string())?;
     changed.push('\n');
     fs::write(measure, changed).map_err(|e| e.to_string())?;

@@ -28,3 +28,10 @@ divan.workspace = true
 name = "render"
 path = "../../benches/render.rs"
 harness = false
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
+block2.workspace = true
+objc2-metal = { workspace = true, features = ["MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture"] }
+objc2-quartz-core = { workspace = true, features = ["objc2-metal"] }

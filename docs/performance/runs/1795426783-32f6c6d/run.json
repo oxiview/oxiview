@@ -1,0 +1,10 @@
+{
+  "measured_at": 1795426783,
+  "head": "32f6c6d84f47f28c3e8e3f1674e661fd17f20039",
+  "dirty": true,
+  "label": [
+    "M7 log viewer · 2026-11-23",
+    "M7 日志查看器 · 2026-11-23"
+  ],
+  "machine": "Apple M2 Pro (Mac14,10) · 32 GiB · macOS 27.2 · Rust 1.97.0 · 120 Hz Retina (2×)"
+}

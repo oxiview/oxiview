@@ -71,10 +71,53 @@ struct Native {
     gpu_ms: [f64; 3],
 }
 
+#[derive(Deserialize)]
+struct ScrollReport {
+    rows: u64,
+    samples: Vec<ScrollSample>,
+}
+
+#[derive(Deserialize)]
+struct ScrollSample {
+    occupied_slots: u64,
+    expected_slots: u64,
+    measured_duration_ns: u64,
+    apple: Option<ScrollHitchTime>,
+}
+
+#[derive(Deserialize)]
+struct ScrollHitchTime {
+    observed_hitch_time_ns: u64,
+    complete_apple_frame_lifetime_coverage: bool,
+}
+
+impl ScrollReport {
+    fn read(data: &[u8]) -> Result<Self> {
+        let report: Self = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        if report.rows != 100_000 {
+            return Err("expected the 100,000-row M7 workload".into());
+        }
+        if report.samples.is_empty()
+            || report.samples.iter().any(|s| {
+                s.expected_slots == 0
+                    || s.occupied_slots > s.expected_slots
+                    || s.measured_duration_ns == 0
+                    || s.apple
+                        .as_ref()
+                        .is_some_and(|h| h.observed_hitch_time_ns > s.measured_duration_ns)
+            })
+        {
+            return Err("invalid M7 scroll sample counts or duration".into());
+        }
+        Ok(report)
+    }
+}
+
 struct Run {
     meta: Meta,
     native: Option<Native>,
     animation: Vec<Animation>,
+    scroll: Option<ScrollReport>,
     files: BTreeMap<String, Vec<u8>>,
 }
 
@@ -140,8 +183,7 @@ impl Run {
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if name == "run.json"
-                || name == "bench.json"
+            if matches!(name, "run.json" | "bench.json" | "m7-scroll.json")
                 || (name.starts_with("animation-") && name.ends_with(".json"))
             {
                 if !name
@@ -199,13 +241,18 @@ impl Run {
             }
             animation.push(a);
         }
-        if native.is_none() && animation.is_empty() {
-            return Err("expected bench.json or animation-*.json".into());
+        let scroll = files
+            .get("m7-scroll.json")
+            .map(|data| ScrollReport::read(data))
+            .transpose()?;
+        if native.is_none() && animation.is_empty() && scroll.is_none() {
+            return Err("expected bench.json, animation-*.json or m7-scroll.json".into());
         }
         Ok(Self {
             meta,
             native,
             animation,
+            scroll,
             files,
         })
     }

@@ -724,6 +724,31 @@ impl Driver {
             timestamp: timestamp.unwrap_or(now),
         })
     }
+    /// Injects one phase of a continuous scroll stream, in logical units.
+    /// Use the same virtual clock origin for phase and frame timestamps.
+    pub fn scroll(
+        &self,
+        id: WindowId,
+        position: Point,
+        delta_x: f64,
+        delta_y: f64,
+        phase: ScrollPhase,
+        timestamp: Option<Duration>,
+    ) -> Result<()> {
+        if ![position.x(), position.y(), delta_x, delta_y]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return Err(DriverError::Invalid("non-finite scroll coordinates"));
+        }
+        self.inject(id, |now| WindowEvent::Scroll {
+            position,
+            delta_x,
+            delta_y,
+            phase,
+            timestamp: timestamp.unwrap_or(now),
+        })
+    }
     /// Injects an explicit text event, including stale sessions, revisions, or
     /// invalid replacements used to exercise the editor's rejection paths.
     pub fn text_input(&self, id: WindowId, event: TextInputEvent) -> Result<()> {

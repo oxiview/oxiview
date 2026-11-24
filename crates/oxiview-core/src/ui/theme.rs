@@ -302,7 +302,9 @@ impl UiTree {
             let [r, g, b, a] = color.to_srgb();
             [r, g, b, a].into_iter().all(f32::is_finite) && (0.0..=1.0).contains(&a)
         });
-        self.update_theme(None, self.theme.mode, preferences)
+        let changed = self.update_theme(None, self.theme.mode, preferences)?;
+        self.set_scroll_reduced_motion(preferences.reduced_motion == Some(true));
+        Ok(changed)
     }
 
     fn update_theme(

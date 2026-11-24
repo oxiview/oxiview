@@ -8,7 +8,6 @@ use oxiview_platform::{
     PointerButton, TextCommitKind, TextInputEdit, TextInputEvent, TextInputGeometry,
     TextInputSession, TextInputSnapshot,
 };
-use oxiview_style::Overflow;
 use oxiview_text::{
     Caret, EditError, EditLayout, EditMode, Editor, NativeEdit, Selection, TextStyle, TextSystem,
 };
@@ -680,7 +679,7 @@ impl UiTree {
         );
         for node in self.ancestors(id).skip(1) {
             let node = node?;
-            if node.style.overflow == Overflow::Clip {
+            if node.clips_descendants() {
                 let (bounds, _) = self.padding_clip(node.id)?;
                 clip = intersect(clip, bounds);
             }

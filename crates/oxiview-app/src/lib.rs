@@ -1,7 +1,9 @@
 //! Unstable composition root for headless CPU and native macOS GPU windows.
 //! Application and presenter state are initialized on each window thread.
 
+mod file_watch;
 mod theme_file;
+pub use file_watch::FileWatch;
 pub use theme_file::{ThemeFile, ThemeReloadError};
 
 use oxiview_core::{Application, PaintedScene, PresentationOutcome, Presenter};
@@ -149,7 +151,12 @@ pub fn run_headless<A: Application>(
 }
 
 #[cfg(target_os = "macos")]
-struct SurfacePresenter(oxiview_render_wgpu::WindowSurface);
+struct SurfacePresenter {
+    surface: oxiview_render_wgpu::WindowSurface,
+    sync_windowed: bool,
+    metal: Option<oxiview_platform_macos::MetalFrames>,
+    drawable: Option<oxiview_platform_macos::MetalDrawable>,
+}
 #[cfg(target_os = "macos")]
 impl Presenter for SurfacePresenter {
     fn prepare_frame(
@@ -157,11 +164,34 @@ impl Presenter for SurfacePresenter {
         waker: &oxiview_platform::WindowWaker,
     ) -> Result<std::task::Poll<()>, oxiview_core::Error> {
         let waker = waker.clone();
-        self.0
+        self.surface
             .prepare_frame(move || {
                 let _ = waker.presentation_ready();
             })
             .map_err(|e| oxiview_core::Error::Present(e.to_string()))
+    }
+    fn prepare_frame_for(
+        &mut self,
+        waker: &oxiview_platform::WindowWaker,
+        timing: oxiview_core::FrameTiming,
+    ) -> Result<std::task::Poll<bool>, oxiview_core::Error> {
+        use oxiview_platform_macos::MetalFrame;
+        self.drawable = None;
+        if let Some(source) = &self.metal {
+            match source.take(timing.predicted_presentation_timestamp) {
+                MetalFrame::Drawable(drawable) if drawable.can_submit() => {
+                    self.drawable = Some(drawable);
+                    return Ok(std::task::Poll::Ready(true));
+                }
+                MetalFrame::Drawable(_) | MetalFrame::Skipped => {
+                    return Ok(std::task::Poll::Ready(false));
+                }
+                // Resize retries run synchronously. A pending wgpu acquire
+                // must not survive into a subsequent display-link generation.
+                MetalFrame::Fallback => return Ok(std::task::Poll::Ready(true)),
+            }
+        }
+        self.prepare_frame(waker).map(|state| state.map(|()| true))
     }
     fn configure(
         &mut self,
@@ -169,13 +199,14 @@ impl Presenter for SurfacePresenter {
         _: f64,
         display_sync: bool,
     ) -> Result<(), oxiview_core::Error> {
-        self.0
+        self.drawable = None;
+        self.surface
             .configure(
                 PixelSize {
                     width: size.width,
                     height: size.height,
                 },
-                display_sync,
+                display_sync || self.sync_windowed,
             )
             .map_err(|e| oxiview_core::Error::Present(e.to_string()))
     }
@@ -184,16 +215,66 @@ impl Presenter for SurfacePresenter {
         scene: &PaintedScene,
     ) -> Result<PresentationOutcome, oxiview_core::Error> {
         use oxiview_render_wgpu::FrameOutcome;
-        match self
-            .0
-            .render(&scene.scene, scene.root)
-            .map_err(|e| oxiview_core::Error::Present(e.to_string()))?
-        {
+        let outcome = if let Some(drawable) = self.drawable.take() {
+            self.present_metal(scene, drawable)
+        } else {
+            self.surface.render(&scene.scene, scene.root)
+        };
+        match outcome.map_err(|e| oxiview_core::Error::Present(e.to_string()))? {
             FrameOutcome::Presented => Ok(PresentationOutcome::Presented),
             FrameOutcome::Skipped | FrameOutcome::Suspended => Ok(PresentationOutcome::Skipped),
         }
     }
 }
+#[cfg(target_os = "macos")]
+impl SurfacePresenter {
+    fn present_metal(
+        &mut self,
+        scene: &PaintedScene,
+        drawable: oxiview_platform_macos::MetalDrawable,
+    ) -> Result<oxiview_render_wgpu::FrameOutcome, oxiview_render_wgpu::Error> {
+        use oxiview_render_wgpu::{
+            FrameOutcome, MetalFrameOutcome, MetalRenderEvent, MetalRenderObserver,
+        };
+
+        let observer = drawable
+            .timing_sample()
+            .map(|sample| -> MetalRenderObserver {
+                std::sync::Arc::new(move |event| match event {
+                    MetalRenderEvent::SceneEncoded => sample.scene_encoded(),
+                    MetalRenderEvent::SceneSubmitted => sample.scene_submitted(),
+                    MetalRenderEvent::Scheduled => sample.scheduled(),
+                    MetalRenderEvent::Completed { start, end, status } => {
+                        sample.completed(start, end, status);
+                    }
+                })
+            });
+        match self.surface.render_metal(
+            &scene.scene,
+            scene.root,
+            drawable.resource(),
+            || drawable.can_submit(),
+            observer.as_ref(),
+        )? {
+            MetalFrameOutcome::Ready(presentation) => {
+                return Ok(
+                    if drawable.submit(|resource| presentation.present(resource)) == Some(true) {
+                        FrameOutcome::Presented
+                    } else {
+                        FrameOutcome::Skipped
+                    },
+                );
+            }
+            MetalFrameOutcome::Skipped => return Ok(FrameOutcome::Skipped),
+            MetalFrameOutcome::Reconfigure => (),
+        }
+        // Release the old drawable before the surface replaces its device.
+        drop(drawable);
+        self.surface.reconfigure_metal()?;
+        Ok(FrameOutcome::Skipped)
+    }
+}
+
 /// Runs one native macOS window. Call on the process main thread.
 /// The application factory and GPU surface initialization run on the window thread.
 #[cfg(target_os = "macos")]
@@ -202,9 +283,33 @@ pub fn run_macos<A: Application>(
     attributes: WindowAttributes,
     application: impl FnOnce() -> Result<A, oxiview_core::Error> + Send + 'static,
 ) -> Result<(), Error> {
+    run_macos_window(platform, attributes, false, application)
+}
+
+/// Runs one native macOS window with presentation synchronized to the display
+/// in both windowed and fullscreen modes. Call on the process main thread.
+/// The application factory and GPU surface initialization run on the window thread.
+#[cfg(target_os = "macos")]
+pub fn run_macos_with_display_sync<A: Application>(
+    platform: oxiview_platform_macos::MacOsPlatform,
+    attributes: WindowAttributes,
+    application: impl FnOnce() -> Result<A, oxiview_core::Error> + Send + 'static,
+) -> Result<(), Error> {
+    run_macos_window(platform, attributes, true, application)
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_window<A: Application>(
+    platform: oxiview_platform_macos::MacOsPlatform,
+    attributes: WindowAttributes,
+    sync_windowed: bool,
+    application: impl FnOnce() -> Result<A, oxiview_core::Error> + Send + 'static,
+) -> Result<(), Error> {
     let mut worker = None;
+    let control = platform.control();
     let result = platform.run(|context| {
         let window = context.create_window(attributes)?;
+        let metal = control.metal_frames(window.main.id())?;
         worker = Some(
             thread::Builder::new()
                 .name("oxiview-window".into())
@@ -213,10 +318,21 @@ pub fn run_macos<A: Application>(
                         let handle = endpoint.native_surface_handle()?.ok_or_else(|| {
                             oxiview_core::Error::Present("native surface unavailable".into())
                         })?;
-                        let surface = oxiview_render_wgpu::RenderContext::new()
+                        let mut surface = oxiview_render_wgpu::RenderContext::new()
                             .and_then(|context| context.create_surface(handle))
                             .map_err(|error| oxiview_core::Error::Present(error.to_string()))?;
-                        Ok((application()?, SurfacePresenter(surface)))
+                        if metal.is_some() {
+                            surface.enable_metal_drawables();
+                        }
+                        Ok((
+                            application()?,
+                            SurfacePresenter {
+                                surface,
+                                sync_windowed,
+                                metal,
+                                drawable: None,
+                            },
+                        ))
                     })
                 })
                 .map_err(|e| oxiview_platform::Error::OperationFailed(e.to_string()))?,

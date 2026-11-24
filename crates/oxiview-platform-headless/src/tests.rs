@@ -895,3 +895,46 @@ fn editor_services_inject_reordered_replies_and_stale_input() {
         assert_eq!(driver.text_input_snapshot(id).unwrap(), None);
     });
 }
+
+#[test]
+fn native_scroll_phases_keep_fractional_distances_and_capture_order() {
+    run(|mut endpoint, driver| {
+        let id = endpoint.id();
+        let position = Point::new(35.25, 42.5);
+        driver.advance_to(ms(20)).unwrap();
+        let stream = [
+            (
+                ScrollPhase::Begin(ScrollMomentum::Native),
+                0.0,
+                1.25,
+                Some(ms(1)),
+            ),
+            (ScrollPhase::Update, -2.5, 3.25, Some(ms(7))),
+            (ScrollPhase::End, 0.0, 0.0, Some(ms(8))),
+            (ScrollPhase::MomentumBegin, 0.0, 3.0, Some(ms(10))),
+            (ScrollPhase::MomentumUpdate, -0.25, 0.5, Some(ms(15))),
+            (ScrollPhase::MomentumEnd, 0.0, 0.0, None),
+        ];
+        for (phase, x, y, time) in stream {
+            driver.scroll(id, position, x, y, phase, time).unwrap();
+        }
+        assert!(matches!(
+            driver.scroll(id, position, f64::INFINITY, 0.0, ScrollPhase::Update, None),
+            Err(DriverError::Invalid(_))
+        ));
+        for (phase, delta_x, delta_y, timestamp) in stream {
+            assert_eq!(
+                endpoint.wait_event().unwrap(),
+                WindowEvent::Scroll {
+                    position,
+                    delta_x,
+                    delta_y,
+                    phase,
+                    timestamp: timestamp.unwrap_or(ms(20)),
+                }
+            );
+        }
+        assert!(endpoint.poll_event().unwrap().is_none());
+        assert_eq!(driver.counters(id).unwrap().frames, 0);
+    });
+}

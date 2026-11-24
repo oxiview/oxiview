@@ -117,6 +117,7 @@ pub struct Scheduler {
     dirty: bool,
     armed: bool,
     suspended: bool,
+    scroll_animation: bool,
     timed: Option<Duration>,
     input: Option<Duration>,
 }
@@ -124,6 +125,12 @@ impl Scheduler {
     /// Marks application state dirty.
     pub fn invalidate(&mut self) {
         self.dirty = true;
+    }
+    /// Requests opportunities while retained scroll momentum is active.
+    /// Dispatch each opportunity to the UI tree, invalidate if it reports
+    /// changed drawing, then publish its current animation state again.
+    pub fn set_scroll_animation_active(&mut self, active: bool) {
+        self.scroll_animation = active;
     }
     /// Requests a future frame; multiple requests coalesce to the earliest instant.
     pub fn request_at(&mut self, instant: Duration) {
@@ -184,7 +191,8 @@ impl Scheduler {
         self.schedule_if_available(true)
     }
     fn schedule_if_available(&mut self, can_arm: bool) -> Schedule {
-        let request_frame = can_arm && self.dirty && !self.armed && !self.suspended;
+        let request_frame =
+            can_arm && (self.dirty || self.scroll_animation) && !self.armed && !self.suspended;
         self.armed |= request_frame;
         Schedule {
             request_frame,
@@ -256,6 +264,15 @@ pub trait Presenter {
     /// directly, and configure discards any earlier preparation.
     fn prepare_frame(&mut self, _waker: &WindowWaker) -> Result<std::task::Poll<()>, Error> {
         Ok(std::task::Poll::Ready(()))
+    }
+    /// Accepts a particular display opportunity. A native drawable source can
+    /// decline an expired opportunity before the application paints.
+    fn prepare_frame_for(
+        &mut self,
+        waker: &WindowWaker,
+        _timing: FrameTiming,
+    ) -> Result<std::task::Poll<bool>, Error> {
+        self.prepare_frame(waker).map(|state| state.map(|()| true))
     }
     /// Reconfigures or suspends for zero size before painting a resize.
     fn configure(
@@ -384,6 +401,7 @@ fn window_loop_with_runtime(
         | WindowEvent::PointerButton { timestamp, .. }
         | WindowEvent::PointerLeft { timestamp }
         | WindowEvent::Wheel { timestamp, .. }
+        | WindowEvent::Scroll { timestamp, .. }
         | WindowEvent::ActivationChanged { timestamp, .. }
         | WindowEvent::VisibilityChanged { timestamp, .. }
         | WindowEvent::PointerInterrupted { timestamp }
@@ -459,9 +477,12 @@ fn window_loop_with_runtime(
         }
         if check_drawable
             && let Some(timing) = waiting_frame
-            && presenter.prepare_frame(&waker)?.is_ready()
+            && let std::task::Poll::Ready(accepted) = presenter.prepare_frame_for(&waker, timing)?
         {
             waiting_frame = None;
+            if !accepted {
+                continue;
+            }
             if resumed
                 && !timing.refresh_interval.is_zero()
                 && endpoint

@@ -33,4 +33,4 @@ objc2-metal.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSAttributedString", "NSNotification", "NSOperation", "NSURL", "block2"] }
 objc2-app-kit = { workspace = true, features = ["NSAccessibility", "NSAppearance", "NSColor", "NSColorSpace", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSPasteboardItem", "NSSavePanel", "NSTextInputClient", "NSTextInputContext", "NSWorkspace", "block2"] }
-objc2-quartz-core.workspace = true
+objc2-quartz-core = { workspace = true, features = ["CAMetalDisplayLink", "objc2-metal"] }

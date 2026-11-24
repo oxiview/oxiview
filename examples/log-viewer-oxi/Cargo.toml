@@ -1,0 +1,32 @@
+[package]
+name = "log-viewer-oxi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxiview-app.workspace = true
+oxiview-base.workspace = true
+oxiview-core.workspace = true
+oxiview-macros.workspace = true
+oxiview-platform.workspace = true
+oxiview-platform-headless.workspace = true
+oxiview-scene.workspace = true
+oxiview-style.workspace = true
+oxiview-text.workspace = true
+oxiview-widgets.workspace = true
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+oxiview-platform-macos = { workspace = true, features = ["diagnostics"] }
+
+[dev-dependencies]
+oxiview-render-cpu.workspace = true
+oxiview-testing.workspace = true

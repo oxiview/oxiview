@@ -850,6 +850,16 @@ fn input_publication_tracks_geometry_and_caret_clock_without_idle_refreshes() ->
         timestamp,
     })?;
     assert!(window.snapshot()?.caret.origin().y() < resized.caret.origin().y());
+    let after_wheel = window.snapshot()?.caret.origin().y();
+    let timestamp = window.tick();
+    window.dispatch(WindowEvent::Scroll {
+        position: Point::new(origin.x() + 20., origin.y() + 20.),
+        delta_x: 0.,
+        delta_y: -100.,
+        phase: oxiview_platform::ScrollPhase::Begin(oxiview_platform::ScrollMomentum::Native),
+        timestamp,
+    })?;
+    assert!(window.snapshot()?.caret.origin().y() > after_wheel);
     assert!(window.scheduler.schedule().deadline.is_none());
     assert!(window.flush()?.is_empty());
 

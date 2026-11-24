@@ -70,6 +70,11 @@ Successful frame submissions per second, counted by submission timestamp within 
 **Displayed FPS**:
 Frames per second confirmed visible by an actual presentation timestamp within the sample interval.
 
+**Hitch time ratio**:
+Milliseconds of late presentation per second of active scrolling. The M7 Apple
+observer attributes reported hitch intervals to the viewer and its display.
+[Measurement contract](docs/adr/0046-native-scroll-cadence-and-hitches.md)
+
 **Signal**:
 A reactive value whose dependencies can be tracked. Changes directly notify dependent computations and node properties.
 _Avoid_: State, Observable, Atom
@@ -145,6 +150,15 @@ _Avoid_: pseudo-class
 **Layout protocol**:
 The framework-defined interface for node measurement and positioning, implemented by specific layout algorithms.
 _Avoid_: layout engine (reserved for a specific implementation)
+
+**Scroll viewport**:
+The clipped region through which content is visible at a given scroll offset.
+
+**Scroll anchor**:
+An item key and a position within that item that identify a reading position across changes in content geometry.
+
+**Active cell**:
+The cell at the moving end of a table selection, identified by its row and column keys.
 
 ## Text and input
 

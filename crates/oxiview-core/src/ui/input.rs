@@ -102,6 +102,7 @@ pub(super) enum Command {
         style: Style,
     },
     Style(NodeId, Style),
+    ScrollOffset(NodeId, Point),
     Content(NodeId, Vec<Primitive>),
     Text(NodeId, RichText),
     Handler(NodeId, Box<NodeHandler>),
@@ -128,6 +129,7 @@ impl Command {
             Self::CanceledBinding(node) => *node,
             Self::Create { reservation, .. } => reservation.id,
             Self::Style(id, _)
+            | Self::ScrollOffset(id, _)
             | Self::Content(id, _)
             | Self::Text(id, _)
             | Self::Handler(id, _)
@@ -223,6 +225,10 @@ impl UiCommands {
     /// Queues a validated style replacement.
     pub fn set_style(&mut self, id: NodeId, style: Style) {
         self.push(Command::Style(id, style));
+    }
+    /// Queues a clamped viewport offset and interrupts the current scroll gesture.
+    pub fn set_scroll_offset(&mut self, id: NodeId, offset: Point) {
+        self.push(Command::ScrollOffset(id, offset));
     }
     /// Queues replacement of node-local painting content.
     pub fn set_content(&mut self, id: NodeId, content: Vec<Primitive>) {
@@ -414,6 +420,9 @@ impl UiTree {
         let mut work = Work::default();
         self.finish_input(&mut observer, &mut work)?;
         self.layout_for_input(viewport, &mut observer, &mut work)?;
+        if self.scroll_input.hover_pending {
+            self.finish_input(&mut observer, &mut work)?;
+        }
         work.result.changed = self.paint_dirty;
         Ok(work.result)
     }
@@ -430,6 +439,23 @@ impl UiTree {
         handler: impl FnMut(&UiPointerEvent, &UiTree, &mut UiCommands),
     ) -> Result<UiDispatchResult, UiError> {
         self.dispatch_input(event, viewport, false, handler)
+    }
+
+    /// Advances framework momentum using an injected presentation timestamp.
+    /// Dispatching a platform frame event advances it on the same clock.
+    /// Repeated or older timestamps do not advance the motion again.
+    pub fn advance_scroll(&mut self, timestamp: Duration) -> Result<UiDispatchResult, UiError> {
+        if self.closed {
+            return Err(UiError::Closed);
+        }
+        let mut work = Work::default();
+        let mut observer = |_: &UiPointerEvent, _: &UiTree, _: &mut UiCommands| {};
+        self.finish_input(&mut observer, &mut work)?;
+        self.layout_for_input(self.viewport, &mut observer, &mut work)?;
+        self.advance_scroll_motion(timestamp)?;
+        self.finish_input(&mut observer, &mut work)?;
+        work.result.changed = self.paint_dirty;
+        Ok(work.result)
     }
 
     /// Processes an event while consuming any key transition at the input boundary.
@@ -476,6 +502,9 @@ impl UiTree {
                 timestamp,
             } => {
                 self.set_pointer(*position, *timestamp);
+                if *pressed {
+                    self.interrupt_scroll();
+                }
                 if *pressed && self.pointer.active {
                     if !self.pointer.pressed.contains(button) {
                         self.pointer.pressed.push(*button);
@@ -517,6 +546,41 @@ impl UiTree {
                     self.reconcile(Vec::new(), &mut handler, &mut work)?;
                 }
             }
+            WindowEvent::Wheel {
+                position,
+                delta_x,
+                delta_y,
+                timestamp,
+            } => {
+                if self.wheel_scroll(*position, Point::new(*delta_x, *delta_y))? {
+                    self.set_pointer(*position, *timestamp);
+                }
+            }
+            WindowEvent::Scroll {
+                position,
+                delta_x,
+                delta_y,
+                phase,
+                timestamp,
+            } => {
+                if self.phased_scroll(
+                    *position,
+                    Point::new(*delta_x, *delta_y),
+                    *phase,
+                    *timestamp,
+                )? {
+                    self.set_pointer(*position, *timestamp);
+                }
+            }
+            WindowEvent::Frame {
+                predicted_presentation_timestamp,
+                ..
+            } => self.advance_scroll_motion(*predicted_presentation_timestamp)?,
+            WindowEvent::Resized { physical_size, .. }
+                if physical_size.width == 0 || physical_size.height == 0 =>
+            {
+                self.interrupt_scroll();
+            }
             WindowEvent::ActivationChanged { active, timestamp } => {
                 self.update_window_input(Some(*active), None)?;
                 if !active {
@@ -551,6 +615,7 @@ impl UiTree {
                 self.cancel_queue(UiError::QueueClosed, &mut handler, &mut work)?;
                 let order = self.postorder(self.root)?;
                 self.paint_cache = None;
+                self.interaction.focus_order = Default::default();
                 self.editors.clear();
                 for id in order {
                     if let Some(slot) = self.nodes.get_mut(id.slot) {
@@ -866,6 +931,7 @@ impl UiTree {
         Ok(())
     }
     fn interrupt(&mut self, handler: &mut Handler<'_>, work: &mut Work) -> Result<(), UiError> {
+        self.interrupt_scroll();
         let route = if let Some(holder) = self.pointer.capture {
             let mut path = self.path(holder)?;
             path.reverse();
@@ -962,7 +1028,20 @@ impl UiTree {
             self.settle_interaction_styles(handler, work)?;
             self.collect_mailbox()?;
         }
-        while let Some(batch) = self.queue.pop_front() {
+        loop {
+            let Some(batch) = self.queue.pop_front() else {
+                if !std::mem::take(&mut self.scroll_input.hover_pending) {
+                    break;
+                }
+                let old_hover = self.pointer.hover.clone();
+                self.stationary(&old_hover, handler, work)?;
+                self.collect_mailbox()?;
+                if self.theme.has_pending_styles() {
+                    self.settle_interaction_styles(handler, work)?;
+                    self.collect_mailbox()?;
+                }
+                continue;
+            };
             let old_hover = self.pointer.hover.clone();
             let mut report = UiBatchReport {
                 batch: batch.number,
@@ -1007,6 +1086,7 @@ impl UiTree {
                 self.cancel_queue(UiError::BudgetExceeded, handler, work)?;
                 break;
             }
+            self.scroll_input.hover_pending = false;
             let result = self.stationary(&old_hover, handler, work).and_then(|()| {
                 if self.theme.has_pending_styles() {
                     self.collect_mailbox()?;
@@ -1045,6 +1125,7 @@ impl UiTree {
             return Ok(());
         }
         self.layout_for_input(self.viewport, handler, work)?;
+        self.scroll_input.hover_pending = false;
         let next = self.geometric_path()?;
         let qualifies = old.iter().chain(next.iter()).any(|id| {
             self.node(*id).map_or_else(
@@ -1080,6 +1161,7 @@ impl UiTree {
                 self.set_local_style(id, style, handler, work)?;
                 Ok(())
             }
+            Command::ScrollOffset(id, offset) => self.set_scroll_offset(id, offset).map(|_| ()),
             Command::Content(id, content) => self.set_content(id, content),
             Command::Text(id, text) => self.set_rich_text(id, text),
             Command::Handler(id, callback) => {
@@ -1099,6 +1181,7 @@ impl UiTree {
                         self.lose_interaction(FocusScope::Subtree(id))?;
                     }
                     self.node_mut(id)?.hidden = !visible;
+                    self.invalidate_focus_order();
                     self.dirty_layout(id, true, false)?;
                 }
                 Ok(())
@@ -1190,6 +1273,7 @@ impl UiTree {
                 {
                     self.take_arm(|source| matches!(source, ArmedInput::Pointer { .. }))?;
                 }
+                self.interrupt_scroll();
                 self.pointer.capture = Some(id);
                 self.reconcile(next, handler, work)
             }

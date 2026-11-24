@@ -1,0 +1,10 @@
+/// Mounts the persistent log-viewer shell. Collection widgets mount their viewport contents.
+pub(crate) view screen(ui: Ui, inputs: Inputs) {
+    <Node style={shell_style()}>
+        {toolbar(&ui)}
+        {filters(&ui, inputs.mode)}
+        {collection(&ui, inputs.header, inputs.vertical, inputs.horizontal)}
+        {detail(&ui)}
+        {footer(&ui)}
+    </Node>
+}

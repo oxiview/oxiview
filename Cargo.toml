@@ -10,9 +10,10 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+oxiview-widgets = { version = "0.0.0", path = "crates/oxiview-widgets" }
 oxiview-syntax = { version = "0.0.0", path = "crates/oxiview-syntax" }
 lsp-server = "=0.10.0"
-url = "=2.5.8"
+url = "=2.5.9"
 snake = { version = "0.0.0", path = "examples/snake" }
 oxiview-reactive = { version = "0.0.0", path = "crates/oxiview-reactive" }
 oxiview-macros = { version = "0.0.0", path = "crates/oxiview-macros" }

@@ -20,6 +20,8 @@ pub(crate) struct Gpu {
     pub(crate) queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     blitter: copy::Blitter,
+    #[cfg(target_os = "macos")]
+    pub(crate) metal_blitter: crate::metal_output::Blitter,
     pub(crate) vector: Option<vector::Backend>,
     pub(crate) lost: Arc<AtomicBool>,
 }
@@ -86,6 +88,8 @@ impl Process {
             queue,
             pipeline,
             blitter,
+            #[cfg(target_os = "macos")]
+            metal_blitter: Default::default(),
             vector: None,
             lost,
         });
@@ -118,12 +122,49 @@ impl Process {
         result
     }
 }
+enum Output<'a> {
+    Offscreen,
+    Surface(&'a wgpu::Texture),
+    #[cfg(target_os = "macos")]
+    Metal {
+        target: &'a mut crate::metal_output::Target,
+        checks: &'a crate::metal_output::FrameChecks<'a>,
+    },
+}
+
 impl Gpu {
     pub(crate) fn render_scene(
         &mut self,
         scene: &EncodedScene,
         size: PixelSize,
         target: Option<&wgpu::Texture>,
+        read: bool,
+    ) -> Result<Option<RgbaImage>, Error> {
+        self.render_to(
+            scene,
+            size,
+            target.map_or(Output::Offscreen, Output::Surface),
+            read,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn render_metal(
+        &mut self,
+        scene: &EncodedScene,
+        size: PixelSize,
+        target: &mut crate::metal_output::Target,
+        checks: &crate::metal_output::FrameChecks<'_>,
+    ) -> Result<(), Error> {
+        self.render_to(scene, size, Output::Metal { target, checks }, false)
+            .map(|_| ())
+    }
+
+    fn render_to(
+        &mut self,
+        scene: &EncodedScene,
+        size: PixelSize,
+        mut output: Output<'_>,
         read: bool,
     ) -> Result<Option<RgbaImage>, Error> {
         let limits = self.device.limits();
@@ -133,7 +174,8 @@ impl Gpu {
         if !vector::needs_vello(scene) {
             // Large opacity stacks can exceed the SDF storage-buffer budget
             // even when the render target itself is supported.
-            let result = self.render(&Commands::new(scene, size)?, size, target, read);
+            let result =
+                self.render_commands(&Commands::new(scene, size)?, size, &mut output, read);
             if !matches!(result, Err(Error::InvalidSize(_))) {
                 return result;
             }
@@ -158,6 +200,22 @@ impl Gpu {
             let view = linear.create_view(&Default::default());
             backend.encode(&self.device, &self.queue, &mut encoder, scene, &view, size)?;
 
+            let target = match output {
+                Output::Offscreen => None,
+                Output::Surface(target) => Some(target),
+                #[cfg(target_os = "macos")]
+                Output::Metal { target, checks } => {
+                    target.submit_scene(
+                        &self.metal_blitter,
+                        &self.queue,
+                        encoder,
+                        &linear,
+                        copy::Alpha::Premultiplied,
+                        checks,
+                    )?;
+                    return Ok(None);
+                }
+            };
             let offscreen;
             let output = match target {
                 Some(target) => target,
@@ -193,11 +251,27 @@ impl Gpu {
             )
         })?
     }
+    #[cfg(test)]
     pub(crate) fn render(
         &self,
         commands: &Commands,
         size: PixelSize,
         target: Option<&wgpu::Texture>,
+        read: bool,
+    ) -> Result<Option<RgbaImage>, Error> {
+        self.render_commands(
+            commands,
+            size,
+            &mut target.map_or(Output::Offscreen, Output::Surface),
+            read,
+        )
+    }
+
+    fn render_commands(
+        &self,
+        commands: &Commands,
+        size: PixelSize,
+        output: &mut Output<'_>,
         read: bool,
     ) -> Result<Option<RgbaImage>, Error> {
         let limits = self.device.limits();
@@ -213,7 +287,7 @@ impl Gpu {
             return Err(Error::InvalidSize(size));
         }
         scoped(&self.device, &self.lost, || {
-            self.submit(&data, stack_size, size, target, read)
+            self.submit(&data, stack_size, size, output, read)
         })?
     }
     fn submit(
@@ -221,7 +295,7 @@ impl Gpu {
         data: &[u8],
         stack_size: u64,
         size: PixelSize,
-        target: Option<&wgpu::Texture>,
+        output: &mut Output<'_>,
         read: bool,
     ) -> Result<Option<RgbaImage>, Error> {
         let commands = self
@@ -278,6 +352,22 @@ impl Gpu {
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(size.width.div_ceil(8), size.height.div_ceil(8), 1);
         }
+        let target = match output {
+            Output::Offscreen => None,
+            Output::Surface(target) => Some(*target),
+            #[cfg(target_os = "macos")]
+            Output::Metal { target, checks } => {
+                target.submit_scene(
+                    &self.metal_blitter,
+                    &self.queue,
+                    encoder,
+                    &texture,
+                    copy::Alpha::Encoded,
+                    checks,
+                )?;
+                return Ok(None);
+            }
+        };
         if let Some(target) = target {
             self.blitter.encode(
                 &self.device,

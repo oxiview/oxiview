@@ -135,6 +135,24 @@ fn objc2_is_restricted_even_when_renamed_and_target_specific() {
 }
 
 #[test]
+fn renderer_rejects_appkit_and_accepts_metal_bindings() {
+    for (name, allowed) in [("objc2-metal", true), ("objc2-app-kit", false)] {
+        let fixture = Fixture::new(&[(
+            "oxiview-render-wgpu",
+            &format!("[dependencies]\nbinding = {{ package = '{name}', path = '../external' }}"),
+        )]);
+        fixture.package("external", name, "[workspace]");
+        let errors = fixture.errors();
+        if allowed {
+            assert!(errors.is_empty(), "{errors:?}");
+        } else {
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].contains(name));
+        }
+    }
+}
+
+#[test]
 fn unregistered_workspace_member_is_rejected() {
     let fixture = Fixture::new(&[("oxiview-unknown", "")]);
     assert!(fixture.errors()[0].contains("not registered in layers.toml"));

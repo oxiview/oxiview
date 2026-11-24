@@ -140,6 +140,194 @@ fn image_draw_preserves_scale_alpha_clips_and_following_paint() -> TestResult {
 }
 
 #[test]
+fn vello_full_background_clear_matches_the_clipped_draw_path() -> TestResult {
+    let bounds = Rect::new(0.0, 0.0, f64::from(SIZE.width), f64::from(SIZE.height));
+    let image = RgbaImage::new(
+        PixelSize {
+            width: 1,
+            height: 1,
+        },
+        vec![14, 91, 162, 111],
+    )?;
+    let renderer = RenderContext::new()?;
+    let render = |root_kind| -> Result<RgbaImage, Box<dyn std::error::Error>> {
+        let mut scene = Scene::new();
+        let root = scene.insert(None, 0, root_kind)?;
+        for (index, color) in [
+            red(),
+            Color::from_rgba8(19, 41, 77, 255),
+            Color::from_rgba8(255, 0, 255, 0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            scene.insert(Some(root), index, fill(bounds, color))?;
+        }
+        scene.insert(
+            Some(root),
+            3,
+            NodeKind::Draw(Primitive::Image(
+                Rect::new(8.0, 9.0, 28.0, 19.0),
+                image.clone(),
+            )),
+        )?;
+        Ok(renderer.render(&scene, root, SIZE)?)
+    };
+    let cleared = render(NodeKind::Transform(Affine::IDENTITY))?;
+    assert_eq!(pixel(&cleared, 0, 0), [19, 41, 77, 255]);
+    assert_ne!(pixel(&cleared, 12, 13), pixel(&cleared, 0, 0));
+    assert_eq!(cleared, render(NodeKind::Clip(Clip::Rect(bounds)))?);
+    let clipped = render(NodeKind::Clip(Clip::Rect(Rect::new(5.0, 5.0, 40.0, 20.0))))?;
+    assert_eq!(pixel(&clipped, 0, 0), [0, 0, 0, 0]);
+    assert_eq!(pixel(&clipped, 12, 13), pixel(&cleared, 12, 13));
+    Ok(())
+}
+
+#[test]
+fn vello_rect_fills_match_path_coverage_with_and_without_clips() -> TestResult {
+    use oxiview_scene::{BezierPath, FillRule, PathCommand::*};
+
+    let renderer = RenderContext::new()?;
+    let render =
+        |through_path, clip: Option<Clip>| -> Result<RgbaImage, Box<dyn std::error::Error>> {
+            let mut scene = Scene::new();
+            let root_kind = clip.map_or(NodeKind::Transform(Affine::IDENTITY), NodeKind::Clip);
+            let root = scene.insert(None, 0, root_kind)?;
+            let opacity = scene.insert(Some(root), 0, NodeKind::Opacity(0.75))?;
+            let transform = scene.insert(
+                Some(opacity),
+                0,
+                NodeKind::Transform(Affine::new([2.0, 0.0, 0.0, 2.0, 2.0, 4.0])),
+            )?;
+            let empty = BezierPath::new(Vec::new())?;
+            scene.insert(
+                Some(transform),
+                0,
+                NodeKind::Draw(Primitive::FillPath(
+                    empty,
+                    FillRule::NonZero,
+                    Brush::Solid(red()),
+                )),
+            )?;
+            for (index, (rect, color)) in [
+                (Rect::new(-1.0, 2.0, 21.5, 18.0), red()),
+                (
+                    Rect::new(2.0, 7.0, 17.5, 12.5),
+                    Color::from_rgba8(19, 41, 77, 173),
+                ),
+                (Rect::new(6.125, 11.25, 13.5, 22.0), blue()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let shape = if through_path {
+                    let [x0, y0, x1, y1] = rect.edges();
+                    NodeKind::Draw(Primitive::FillPath(
+                        BezierPath::new(vec![
+                            MoveTo(Point::new(x0, y0)),
+                            LineTo(Point::new(x1, y0)),
+                            LineTo(Point::new(x1, y1)),
+                            LineTo(Point::new(x0, y1)),
+                            Close,
+                        ])?,
+                        FillRule::NonZero,
+                        Brush::Solid(color),
+                    ))
+                } else {
+                    fill(rect, color)
+                };
+                scene.insert(Some(transform), index + 1, shape)?;
+            }
+            Ok(renderer.render(&scene, root, SIZE)?)
+        };
+
+    let bounds = Rect::new(2.25, 3.75, 40.5, 40.25);
+    for clip in [
+        None,
+        Some(Clip::Rect(bounds)),
+        Some(Clip::RoundedRect(bounds, CornerRadii::uniform(4.0))),
+    ] {
+        let aligned = render(false, clip.clone())?;
+        let path = render(true, clip.clone())?;
+        let different = aligned
+            .pixels()
+            .chunks_exact(4)
+            .zip(path.pixels().chunks_exact(4))
+            .position(|(aligned, path)| aligned != path);
+        assert_eq!(different, None, "clip {clip:?}");
+        assert_ne!(pixel(&aligned, 21, 21), &[0, 0, 0, 0]);
+    }
+    Ok(())
+}
+
+#[test]
+fn vello_reuses_adjacent_clips_across_draws_and_restores_isolated_scopes() -> TestResult {
+    let mut scene = Scene::new();
+    let root = scene.insert(None, 0, NodeKind::Transform(Affine::IDENTITY))?;
+    let outer = scene.insert(
+        Some(root),
+        0,
+        NodeKind::Clip(Clip::RoundedRect(
+            Rect::new(8.25, 8.25, 40.25, 40.25),
+            CornerRadii::uniform(4.0),
+        )),
+    )?;
+    let mask = RgbaImage::new(
+        PixelSize {
+            width: 1,
+            height: 1,
+        },
+        vec![255, 0, 0, 255],
+    )?;
+    scene.insert(
+        Some(outer),
+        0,
+        NodeKind::Draw(Primitive::Image(Rect::new(4.0, 10.0, 24.0, 30.0), mask)),
+    )?;
+    scene.insert(
+        Some(outer),
+        1,
+        fill(Rect::new(6.0, 14.0, 22.0, 18.0), red()),
+    )?;
+    let opacity = scene.insert(Some(outer), 2, NodeKind::Opacity(0.5))?;
+    let inner = scene.insert(
+        Some(opacity),
+        0,
+        NodeKind::Clip(Clip::Rect(Rect::new(16.0, 0.0, 32.0, 32.0))),
+    )?;
+    scene.insert(
+        Some(inner),
+        0,
+        fill(Rect::new(14.0, 4.0, 33.0, 26.0), blue()),
+    )?;
+    scene.insert(
+        Some(inner),
+        1,
+        fill(Rect::new(20.0, 4.0, 31.0, 26.0), blue()),
+    )?;
+    scene.insert(
+        Some(outer),
+        3,
+        fill(Rect::new(26.0, 32.0, 55.0, 36.0), red()),
+    )?;
+    scene.insert(
+        Some(root),
+        1,
+        fill(Rect::new(46.0, 12.0, 54.0, 20.0), blue()),
+    )?;
+
+    let rendered = RenderContext::new()?.render(&scene, root, SIZE)?;
+    assert_eq!(pixel(&rendered, 6, 16), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 13, 16), [255, 0, 0, 255]);
+    assert_eq!(pixel(&rendered, 29, 6), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 29, 15), [0, 0, 255, 128]);
+    assert_eq!(pixel(&rendered, 37, 34), [255, 0, 0, 255]);
+    assert_eq!(pixel(&rendered, 47, 34), [0, 0, 0, 0]);
+    assert_eq!(pixel(&rendered, 48, 16), [0, 0, 255, 255]);
+    Ok(())
+}
+
+#[test]
 fn repeated_image_draws_keep_texture_residency_across_frames() -> TestResult {
     let raster = RgbaImage::new(
         PixelSize {

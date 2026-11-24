@@ -1,0 +1,83 @@
+version = 1
+
+[tokens.colors]
+surface = "#ffffff"
+line = "#c5d2cf"
+hover = "#e8f2ef"
+pressed = "#d3e8e3"
+focus = "#328379"
+track = "#edf3f1"
+thumb = "#8ea6a0"
+
+[rules.button]
+background = "@surface"
+border_color = "@line"
+border_radii = 6
+[rules.button.hovered]
+background = "@hover"
+[rules.button.pressed]
+background = "@pressed"
+[rules.button.focused]
+focus_ring = { color = "@focus", width = 1.5 }
+[rules.button.disabled]
+opacity = 0.45
+
+[rules.checkbox]
+border_radii = 5
+[rules.checkbox.hovered]
+background = "@hover"
+[rules.checkbox.pressed]
+background = "@pressed"
+[rules.checkbox.focused]
+focus_ring = { color = "@focus", width = 1.5 }
+[rules.checkbox.disabled]
+opacity = 0.45
+
+[rules.switch]
+border_radii = 5
+[rules.switch.hovered]
+background = "@hover"
+[rules.switch.pressed]
+background = "@pressed"
+[rules.switch.focused]
+focus_ring = { color = "@focus", width = 1.5 }
+[rules.switch.disabled]
+opacity = 0.45
+
+[rules.segments]
+background = "@track"
+border_color = "@line"
+border_radii = 8
+[rules.segment]
+border_radii = 5
+[rules.segment.hovered]
+background = "@hover"
+[rules.segment.pressed]
+background = "@pressed"
+[rules.segment.focused]
+focus_ring = { color = "@focus", width = 1.5 }
+[rules.segment.disabled]
+opacity = 0.45
+
+[rules.text-field]
+background = "@surface"
+border_color = "@line"
+border_radii = 6
+[rules.text-field.hovered]
+border_color = "@thumb"
+[rules.text-field.focused]
+focus_ring = { color = "@focus", width = 1.5 }
+[rules.text-field.disabled]
+opacity = 0.45
+
+[rules.scrollbar]
+background = "@track"
+[rules.scrollbar.hovered]
+background = "@hover"
+[rules.scrollbar.focused]
+focus_ring = { color = "@focus", width = 1.5 }
+[rules.scrollbar.disabled]
+opacity = 0.5
+[rules.scrollbar-thumb]
+background = "@thumb"
+border_radii = 4

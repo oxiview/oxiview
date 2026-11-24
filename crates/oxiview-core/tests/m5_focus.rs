@@ -113,6 +113,88 @@ fn tab_uses_preorder_and_wraps_in_both_directions() {
 }
 
 #[test]
+fn tab_order_follows_policy_changes_and_subtree_moves() {
+    let mut tree = UiTree::new().unwrap();
+    let root = tree.root();
+    let first = tab_stop(&mut tree, root);
+    let branch = tree.mount(root, node()).unwrap();
+    let middle = tab_stop(&mut tree, branch);
+    let last = tab_stop(&mut tree, root);
+    tree.mount(root, node().focusable(FocusPolicy::Programmatic))
+        .unwrap();
+
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(first));
+    tree.set_focus_policy(middle, FocusPolicy::Programmatic)
+        .unwrap();
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(last));
+
+    tree.focus(middle).unwrap();
+    tree.reparent(branch, root, 3).unwrap();
+    assert_eq!(tree.focused_node(), Some(middle));
+    tab(&mut tree, true);
+    assert_eq!(tree.focused_node(), Some(last));
+    tree.focus(middle).unwrap();
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(first));
+
+    tree.set_focus_policy(middle, FocusPolicy::Tab).unwrap();
+    tab(&mut tree, true);
+    assert_eq!(tree.focused_node(), Some(middle));
+    tree.set_focus_policy(middle, FocusPolicy::None).unwrap();
+    assert_eq!(tree.focused_node(), Some(last));
+    let replacement = tab_stop(&mut tree, branch);
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(replacement));
+    tree.clear(branch).unwrap();
+    assert_eq!(tree.focused_node(), Some(last));
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(first));
+}
+
+#[test]
+fn tab_order_follows_interaction_availability_in_ancestor_subtrees() {
+    let mut tree = UiTree::new().unwrap();
+    let root = tree.root();
+    let first = tab_stop(&mut tree, root);
+    let branch = tree.mount(root, node()).unwrap();
+    let child = tab_stop(&mut tree, branch);
+    let last = tab_stop(&mut tree, root);
+
+    tab(&mut tree, false);
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(child));
+
+    tree.set_visible(branch, false).unwrap();
+    assert_eq!(tree.focused_node(), Some(last));
+    tab(&mut tree, true);
+    assert_eq!(tree.focused_node(), Some(first));
+    tree.set_visible(branch, true).unwrap();
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(child));
+
+    tree.set_disabled(branch, true).unwrap();
+    assert_eq!(tree.focused_node(), Some(last));
+    tab(&mut tree, true);
+    assert_eq!(tree.focused_node(), Some(first));
+    tree.set_disabled(branch, false).unwrap();
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(child));
+
+    let visible = tree.style(branch).unwrap().clone();
+    let mut suppressed = visible.clone();
+    suppressed.layout.display = Display::None;
+    tree.set_style(branch, suppressed).unwrap();
+    assert_eq!(tree.focused_node(), Some(last));
+    tab(&mut tree, true);
+    assert_eq!(tree.focused_node(), Some(first));
+    tree.set_style(branch, visible).unwrap();
+    tab(&mut tree, false);
+    assert_eq!(tree.focused_node(), Some(child));
+}
+
+#[test]
 fn focus_recovery_is_observable_before_disposal_and_follows_original_neighbors() {
     let mut tree = UiTree::new().unwrap();
     let root = tree.root();
@@ -308,6 +390,24 @@ fn control(x: f64, sources: Rc<RefCell<Vec<ActionSource>>>) -> View {
                 sources.borrow_mut().push(event.source);
             },
         )
+}
+
+#[test]
+fn wrapping_back_to_the_only_tab_stop_cancels_an_armed_key() {
+    let mut tree = UiTree::new().unwrap();
+    let sources = Rc::new(RefCell::new(Vec::new()));
+    let stop = tree
+        .mount(tree.root(), control(0.0, Rc::clone(&sources)))
+        .unwrap();
+
+    tab(&mut tree, false);
+    dispatch(&mut tree, key(KeyCode::Space, false, true, false));
+    assert!(tree.interaction_state(stop).unwrap().pressed);
+    tab(&mut tree, true);
+    assert_eq!(tree.focused_node(), Some(stop));
+    assert!(!tree.interaction_state(stop).unwrap().pressed);
+    dispatch(&mut tree, key(KeyCode::Space, false, false, false));
+    assert!(sources.borrow().is_empty());
 }
 
 #[test]

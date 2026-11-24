@@ -48,11 +48,12 @@
       "refresh_interval_ms": 8.333333
     },
     "list_100k_scroll_dropped_frames": {
-      "value": null,
+      "value": 0.0,
       "unit": "frames",
       "direction": "lower",
       "regression_percent": 10.0,
-      "target": 0.0
+      "target": 0.0,
+      "refresh_interval_ms": 8.333333
     },
     "render/sparse_ui/1": {
       "value": 4130000.0,
@@ -224,6 +225,27 @@
     },
     "text_editing/replace_and_undo_4k": {
       "value": 201.5,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "m7/m7_variable_extent_update_lookup_ns": {
+      "value": 165.4,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "m7/m7_virtual_list_100k_advance_ns": {
+      "value": 24750.0,
+      "unit": "ns",
+      "direction": "lower",
+      "regression_percent": 10.0,
+      "target": null
+    },
+    "m7/m7_virtual_table_diagonal_ns": {
+      "value": 259300.0,
       "unit": "ns",
       "direction": "lower",
       "regression_percent": 10.0,

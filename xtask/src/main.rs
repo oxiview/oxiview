@@ -75,6 +75,15 @@ enum Task {
         /// Run the three M6 editing workloads without a native window.
         #[arg(long, conflicts_with_all = ["m2", "m3", "m4", "m5"])]
         m6: bool,
+        /// Run the three M7 scrolling workloads without opening a native window.
+        #[arg(long, conflicts_with_all = ["m2", "m3", "m4", "m5", "m6"])]
+        m7: bool,
+        /// Check dropped frames and stable 120 FPS during native 100,000-row scrolling.
+        #[arg(long, conflicts_with_all = ["m2", "m3", "m4", "m5", "m6", "m7"])]
+        m7_native: bool,
+        /// Measure native 100,000-row scrolling with Apple Instruments Animation Hitches.
+        #[arg(long, conflicts_with_all = ["m2", "m3", "m4", "m5", "m6", "m7", "m7_native", "record"])]
+        m7_hitches: bool,
         /// Record the selected scope in the repository baseline. Run only after human confirmation.
         #[arg(long)]
         record: bool,
@@ -187,9 +196,18 @@ fn run(task: Task, root: &Path, report: &mut Report) {
         m4,
         m5,
         m6,
+        m7,
+        m7_native,
+        m7_hitches,
         record,
     } = task
     {
+        if m7_hitches {
+            report
+                .checks
+                .push(execute(&bench::apple::AppleHitchCheck, root));
+            return;
+        }
         let scope = if m2 {
             bench::Scope::M2
         } else if m3 {
@@ -200,6 +218,10 @@ fn run(task: Task, root: &Path, report: &mut Report) {
             bench::Scope::M5
         } else if m6 {
             bench::Scope::M6
+        } else if m7 {
+            bench::Scope::M7
+        } else if m7_native {
+            bench::Scope::M7Native
         } else {
             bench::Scope::Full
         };
@@ -303,12 +325,14 @@ fn main() -> ExitCode {
             }
         }
     }
-    if let Some(scope) = report
-        .checks
-        .iter()
-        .find_map(|item| bench::Scope::from_check_name(&item.name))
-    {
-        report.performance = std::fs::read(root.join("target/xtask").join(scope.results_file()))
+    if let Some(file) = report.checks.iter().find_map(|item| {
+        if item.name == bench::apple::NAME {
+            Some(bench::apple::RESULTS)
+        } else {
+            bench::Scope::from_check_name(&item.name).map(bench::Scope::results_file)
+        }
+    }) {
+        report.performance = std::fs::read(root.join("target/xtask").join(file))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     }
@@ -330,6 +354,7 @@ fn main() -> ExitCode {
         for item in &report.checks {
             println!("{}: {:?} ({} ms)", item.name, item.status, item.duration_ms);
             if (bench::Scope::from_check_name(&item.name).is_some()
+                || item.name == bench::apple::NAME
                 || matches!(
                     item.name.as_str(),
                     "snapshot" | "new-crate" | "install-hooks"
@@ -367,6 +392,8 @@ mod tests {
             Some("--m4"),
             Some("--m5"),
             Some("--m6"),
+            Some("--m7"),
+            Some("--m7-native"),
         ] {
             for flags in [
                 [scope, None],
@@ -379,12 +406,15 @@ mod tests {
                 let cli = Cli::try_parse_from(args).expect("valid bench flags");
                 assert!(matches!(
                     cli.command,
-                    Task::Bench { m2, m3, m4, m5, m6, record }
+                    Task::Bench { m2, m3, m4, m5, m6, m7, m7_native, m7_hitches, record }
                         if m2 == (scope == Some("--m2"))
                            && m3 == (scope == Some("--m3"))
                            && m4 == (scope == Some("--m4"))
                            && m5 == (scope == Some("--m5"))
                            && m6 == (scope == Some("--m6"))
+                           && m7 == (scope == Some("--m7"))
+                           && m7_native == (scope == Some("--m7-native"))
+                           && !m7_hitches
                            && record == flags.contains(&Some("--record"))
                 ));
             }
@@ -402,7 +432,22 @@ mod tests {
             (&["--m5", "--m4"][..], ErrorKind::ArgumentConflict),
             (&["--m6", "--m5"][..], ErrorKind::ArgumentConflict),
             (&["--m6", "--m6"][..], ErrorKind::ArgumentConflict),
-            (&["--m7"][..], ErrorKind::UnknownArgument),
+            (&["--m7", "--m6"][..], ErrorKind::ArgumentConflict),
+            (&["--m7", "--m7"][..], ErrorKind::ArgumentConflict),
+            (&["--m7-native", "--m4"][..], ErrorKind::ArgumentConflict),
+            (&["--m7", "--m7-native"][..], ErrorKind::ArgumentConflict),
+            (
+                &["--m7-hitches", "--m7-native"][..],
+                ErrorKind::ArgumentConflict,
+            ),
+            (
+                &["--record", "--m7-hitches"][..],
+                ErrorKind::ArgumentConflict,
+            ),
+            (
+                &["--m7-native", "--m7-native"][..],
+                ErrorKind::ArgumentConflict,
+            ),
             (&["--m2=true"][..], ErrorKind::TooManyValues),
             (&["layout"][..], ErrorKind::UnknownArgument),
         ] {
@@ -412,5 +457,13 @@ mod tests {
                 .expect("invalid bench flags");
             assert_eq!(error.kind(), kind);
         }
+        let apple = Cli::try_parse_from(["xtask", "bench", "--m7-hitches"]).expect("Apple scope");
+        assert!(matches!(
+            apple.command,
+            Task::Bench {
+                m7_hitches: true,
+                ..
+            }
+        ));
     }
 }

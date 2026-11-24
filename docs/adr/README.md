@@ -47,3 +47,7 @@ Language: **English**
 | [0041](0041-focus-recovery-in-tab-order.md) | Recover focus at the next eligible Tab stop | 6 Retained tree / 10 IME and input |
 | [0042](0042-publish-committed-editor-text.md) | Publish committed editor text separately from inline preedit | 9 Text stack / 10 IME and input |
 | [0043](0043-native-text-input-session-snapshots.md) | Answer native text-input queries from a session snapshot | 2 Platform abstraction / 10 IME and input |
+| [0044](0044-keyed-virtual-table-selection.md) | Keep virtual table selections by row and column key | 5 Components and API / 10 IME and input |
+| [0045](0045-nested-scroll-distance.md) | Pass unused scroll distance to enclosing viewports | 8 Layout / 10 IME and input |
+| [0046](0046-native-scroll-cadence-and-hitches.md) | Measure native scrolling by visible updates and hitch time | 1 Goals and non-goals / 11 Rendering |
+| [0047](0047-present-display-link-drawables.md) | Present the display link's drawable from its final render command | 3 Frame scheduling / 11 Rendering |

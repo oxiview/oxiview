@@ -4,12 +4,20 @@ use crate::{check::Check, report::Status};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::Path, process::Command, time::SystemTime};
 
+pub(crate) mod apple;
 mod native;
 mod record;
 #[cfg(test)]
 mod scope_tests;
+mod scroll;
 
 type Result<T> = std::result::Result<T, String>;
+
+const LEGACY_NATIVE_METRICS: &[&str] = &[
+    "input_to_submit_ms",
+    "input_to_pixel_ms",
+    "idle_cpu_percent",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -290,7 +298,7 @@ fn pending() -> BTreeMap<String, Metric> {
         ("input_to_submit_ms", "ms", 0.0),
         ("input_to_pixel_ms", "ms", 0.0),
         ("idle_cpu_percent", "%", 0.0),
-        ("list_100k_scroll_dropped_frames", "frames", 0.0),
+        (scroll::METRIC, "frames", 0.0),
     ]
     .into_iter()
     .map(|(name, unit, target)| {
@@ -313,6 +321,7 @@ fn validate(baseline: &Baseline) -> Result<()> {
     if baseline.schema_version != 1 || baseline.machine_id != machine_id(&baseline.machine) {
         return Err("Invalid baseline version or machine identifier".into());
     }
+    let reserved_metrics = pending();
     for (name, metric) in &baseline.metrics {
         if !metric.regression_percent.is_finite()
             || !(0.0..=100.0).contains(&metric.regression_percent)
@@ -323,16 +332,23 @@ fn validate(baseline: &Baseline) -> Result<()> {
         {
             return Err(format!("Invalid baseline metric: {name}"));
         }
-        if let Some(reserved) = pending().get(name) {
-            if (name == "list_100k_scroll_dropped_frames" && metric.value.is_some())
-                || metric.target.is_some_and(|v| !v.is_finite() || v < 0.0)
-                || (name == "list_100k_scroll_dropped_frames" && metric.target != reserved.target)
+        if let Some(reserved) = reserved_metrics.get(name) {
+            if metric.target.is_some_and(|v| !v.is_finite() || v < 0.0)
                 || metric.unit != reserved.unit
                 || metric.direction != reserved.direction
             {
-                return Err(format!(
-                    "Invalid hard-target metadata (M7 list must remain pending): {name}"
-                ));
+                return Err(format!("Invalid hard-target metadata: {name}"));
+            }
+            if name == scroll::METRIC
+                && (metric.target != reserved.target
+                    || metric.value.is_some_and(|value| {
+                        value != scroll::TARGET
+                            || !metric
+                                .refresh_interval_ms
+                                .is_some_and(scroll::valid_refresh_ms)
+                    }))
+            {
+                return Err(format!("Invalid recorded scroll hard target: {name}"));
             }
         } else if metric.value.is_none()
             || metric.unit != "ns"
@@ -343,7 +359,7 @@ fn validate(baseline: &Baseline) -> Result<()> {
             ));
         }
     }
-    if pending()
+    if reserved_metrics
         .keys()
         .any(|key| key != "input_to_submit_ms" && !baseline.metrics.contains_key(key))
     {
@@ -424,6 +440,11 @@ const M6_METRICS: &[&str] = &[
     "text_editing/cached_wrapped_geometry_32_lines",
     "text_editing/preedit_16_updates_then_commit",
 ];
+const M7_METRICS: &[&str] = &[
+    "m7/m7_variable_extent_update_lookup_ns",
+    "m7/m7_virtual_list_100k_advance_ns",
+    "m7/m7_virtual_table_diagonal_ns",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scope {
@@ -433,6 +454,8 @@ pub(crate) enum Scope {
     M4,
     M5,
     M6,
+    M7,
+    M7Native,
 }
 
 impl Scope {
@@ -444,6 +467,8 @@ impl Scope {
             Self::M4 => "bench-m4",
             Self::M5 => "bench-m5",
             Self::M6 => "bench-m6",
+            Self::M7 => "bench-m7",
+            Self::M7Native => "bench-m7-native",
         }
     }
 
@@ -455,6 +480,8 @@ impl Scope {
             "bench-m4" => Some(Self::M4),
             "bench-m5" => Some(Self::M5),
             "bench-m6" => Some(Self::M6),
+            "bench-m7" => Some(Self::M7),
+            "bench-m7-native" => Some(Self::M7Native),
             _ => None,
         }
     }
@@ -505,6 +532,13 @@ impl Scope {
                 "bench-m6-2.log",
                 "bench-m6-3.log",
             ],
+            Self::M7 => &[
+                "bench-m7-results.json",
+                "bench-m7-1.log",
+                "bench-m7-2.log",
+                "bench-m7-3.log",
+            ],
+            Self::M7Native => &["bench-m7-native-results.json"],
         }
     }
 
@@ -520,11 +554,13 @@ impl Scope {
             Self::M4 => Some(("M4", M4_METRICS)),
             Self::M5 => Some(("M5", M5_METRICS)),
             Self::M6 => Some(("M6", M6_METRICS)),
+            Self::M7 => Some(("M7", M7_METRICS)),
+            Self::M7Native => Some(("M7 native", &[scroll::METRIC, scroll::FPS_METRIC])),
         }
     }
 
-    fn divan_args(self) -> &'static [&'static str] {
-        match self {
+    fn divan_args(self) -> Option<&'static [&'static str]> {
+        Some(match self {
             Self::Full => &["bench", "--workspace", "--benches", "--locked"],
             Self::M2 => &[
                 "bench",
@@ -570,6 +606,23 @@ impl Scope {
                 "--bench",
                 "text_editing",
             ],
+            Self::M7 => &[
+                "bench",
+                "--locked",
+                "-p",
+                "oxiview-widgets",
+                "--bench",
+                "m7",
+            ],
+            Self::M7Native => return None,
+        })
+    }
+
+    fn scroll_artifact_stem(self) -> Option<&'static str> {
+        match self {
+            Self::Full => Some("bench-scroll"),
+            Self::M7Native => Some("bench-m7-native-scroll"),
+            _ => None,
         }
     }
 
@@ -581,6 +634,8 @@ impl Scope {
             Self::M4 => "cargo xtask bench --m4 --record",
             Self::M5 => "cargo xtask bench --m5 --record",
             Self::M6 => "cargo xtask bench --m6 --record",
+            Self::M7 => "cargo xtask bench --m7 --record",
+            Self::M7Native => "cargo xtask bench --m7-native --record",
         }
     }
 }
@@ -598,6 +653,7 @@ impl BenchCheck {
         probe_machine: impl FnOnce() -> Result<Machine>,
         mut run_divan: impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
         measure_native: impl FnOnce(&Path) -> Result<BTreeMap<String, native::Measurement>>,
+        measure_scroll: impl FnOnce(&Path, &str) -> Result<scroll::Capture>,
     ) -> Result<Status> {
         let artifacts = root.join("target/xtask");
         let legacy = if self.scope == Scope::Full {
@@ -626,6 +682,10 @@ impl BenchCheck {
             Scope::M6 => {
                 log.push_str("Scope: M6 Unicode editing, geometry and preedit (3 metrics)\n")
             }
+            Scope::M7 => log.push_str(
+                "Scope: M7 variable extents, virtual list and virtual table (3 metrics)\n",
+            ),
+            Scope::M7Native => log.push_str("Scope: M7 native 100,000-row list scroll\n"),
         }
         let machine = probe_machine()?;
         let id = machine_id(&machine);
@@ -661,142 +721,164 @@ impl BenchCheck {
                 }
             }
         }
-        let mut rounds = Vec::new();
-        for round in 1..=3 {
-            let mut command =
-                Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
-            command
-                .args(self.scope.divan_args())
-                .current_dir(root)
-                .env("CARGO_TERM_COLOR", "never");
-            if let Some((_, names)) = selection {
-                command
-                    .args(["--", "--exact"])
-                    .args(names.iter().map(|name| name.replace('/', "::")));
-            }
-            for (key, _) in std::env::vars_os() {
-                if key.to_string_lossy().starts_with("DIVAN_") {
-                    command.env_remove(key);
-                }
-            }
-            let output = run_divan(&mut command).map_err(|e| e.to_string())?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let raw = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
-            let raw_file = format!("{}-{round}.log", self.scope.check_name());
-            fs::write(artifacts.join(&raw_file), raw).map_err(|e| e.to_string())?;
-            if !output.status.success() {
-                log.push_str(&format!(
-                    "Benchmark process failed: {}; see {raw_file}\n",
-                    output.status
-                ));
-                return Ok(if output.status.code().is_some() {
-                    Status::Fail
-                } else {
-                    Status::Error
-                });
-            }
-            rounds.push(parse_divan(&stdout)?);
-        }
-        if rounds
-            .iter()
-            .skip(1)
-            .any(|r| !r.keys().eq(rounds[0].keys()))
-        {
-            return Err("Metric sets differ across the three runs".into());
-        }
-        if let Some((milestone, names)) = selection
-            && let Some(name) = rounds[0]
-                .keys()
-                .find(|name| !names.contains(&name.as_str()))
-        {
-            return Err(format!("Unexpected {milestone} metric: {name}"));
-        }
         let mut metrics = match self.scope {
             Scope::Full => pending(),
-            Scope::M2 | Scope::M3 | Scope::M4 | Scope::M5 | Scope::M6 => BTreeMap::new(),
+            Scope::M7Native => pending()
+                .into_iter()
+                .filter(|(name, _)| name == scroll::METRIC)
+                .collect(),
+            _ => BTreeMap::new(),
         };
-        for name in rounds[0].keys() {
-            let mut samples: Vec<_> = rounds.iter().map(|round| round[name]).collect();
-            samples.sort_by(f64::total_cmp);
-            let threshold = previous
-                .as_ref()
-                .and_then(|b| b.metrics.get(name))
-                .map_or(default_threshold(), |m| m.regression_percent);
+        if let Some(args) = self.scope.divan_args() {
+            let mut rounds = Vec::new();
+            for round in 1..=3 {
+                let mut command =
+                    Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+                command
+                    .args(args)
+                    .current_dir(root)
+                    .env("CARGO_TERM_COLOR", "never");
+                if let Some((_, names)) = selection {
+                    command
+                        .args(["--", "--exact"])
+                        .args(names.iter().map(|name| name.replace('/', "::")));
+                }
+                for (key, _) in std::env::vars_os() {
+                    if key.to_string_lossy().starts_with("DIVAN_") {
+                        command.env_remove(key);
+                    }
+                }
+                let output = run_divan(&mut command).map_err(|e| e.to_string())?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let raw = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+                let raw_file = format!("{}-{round}.log", self.scope.check_name());
+                fs::write(artifacts.join(&raw_file), raw).map_err(|e| e.to_string())?;
+                if !output.status.success() {
+                    log.push_str(&format!(
+                        "Benchmark process failed: {}; see {raw_file}\n",
+                        output.status
+                    ));
+                    return Ok(if output.status.code().is_some() {
+                        Status::Fail
+                    } else {
+                        Status::Error
+                    });
+                }
+                rounds.push(parse_divan(&stdout)?);
+            }
+            if rounds
+                .iter()
+                .skip(1)
+                .any(|r| !r.keys().eq(rounds[0].keys()))
+            {
+                return Err("Metric sets differ across the three runs".into());
+            }
+            if let Some((milestone, names)) = selection
+                && let Some(name) = rounds[0]
+                    .keys()
+                    .find(|name| !names.contains(&name.as_str()))
+            {
+                return Err(format!("Unexpected {milestone} metric: {name}"));
+            }
+            for name in rounds[0].keys() {
+                let mut samples: Vec<_> = rounds.iter().map(|round| round[name]).collect();
+                samples.sort_by(f64::total_cmp);
+                let threshold = previous
+                    .as_ref()
+                    .and_then(|b| b.metrics.get(name))
+                    .map_or(default_threshold(), |m| m.regression_percent);
+                metrics.insert(
+                    name.clone(),
+                    Metric {
+                        value: Some(samples[1]),
+                        unit: "ns".into(),
+                        direction: Direction::Lower,
+                        regression_percent: threshold,
+                        target: None,
+                        refresh_interval_ms: None,
+                    },
+                );
+            }
+        }
+        let mut native = BTreeMap::new();
+        let mut environment_errors = BTreeMap::new();
+        if self.scope == Scope::Full {
+            match measure_native(root) {
+                Ok(mut measured) => {
+                    for &name in LEGACY_NATIVE_METRICS {
+                        if let Some(measurement) = measured.remove(name) {
+                            native.insert(name, measurement);
+                        } else {
+                            environment_errors
+                                .insert(name, format!("Missing native measurement: {name}"));
+                        }
+                    }
+                }
+                Err(error) => {
+                    for &name in LEGACY_NATIVE_METRICS {
+                        environment_errors.insert(name, error.clone());
+                    }
+                }
+            }
+        }
+        if let Some(stem) = self.scope.scroll_artifact_stem() {
             metrics.insert(
-                name.clone(),
+                scroll::FPS_METRIC.into(),
                 Metric {
-                    value: Some(samples[1]),
-                    unit: "ns".into(),
-                    direction: Direction::Lower,
-                    regression_percent: threshold,
-                    target: None,
+                    value: None,
+                    unit: "frames/s".into(),
+                    direction: Direction::Higher,
+                    regression_percent: 0.0,
+                    target: Some(scroll::FPS_TARGET),
                     refresh_interval_ms: None,
                 },
             );
-        }
-        let measured = match self.scope {
-            Scope::Full => measure_native(root),
-            Scope::M2 | Scope::M3 | Scope::M4 | Scope::M5 | Scope::M6 => Ok(BTreeMap::new()),
-        };
-        let mut native = match measured {
-            Ok(measurements) => measurements,
-            Err(error) => {
-                let results: Vec<_> = metrics.iter().map(|(name, metric)| {
-                    let native = matches!(name.as_str(), "input_to_submit_ms" | "input_to_pixel_ms" | "idle_cpu_percent");
-                    serde_json::json!({
-                        "name": name, "current": metric,
-                        "baseline_value": previous.as_ref().and_then(|b| b.metrics.get(name)).and_then(|m| m.value),
-                        "status": if native { "environment_error" } else if metric.value.is_none() { "pending" } else { "not_compared" },
-                        "hard_check_pass": null,
-                        "error": if native { Some(&error) } else { None }
-                    })
-                }).collect();
-                fs::write(
-                    artifacts.join(self.scope.results_file()),
-                    serde_json::to_vec_pretty(
-                        &serde_json::json!({"machine_id": id, "metrics": results}),
-                    )
-                    .map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
-                return Err(error);
+            match measure_scroll(root, stem) {
+                Ok(measurement) => {
+                    native.insert(scroll::METRIC, measurement.dropped);
+                    native.insert(scroll::FPS_METRIC, measurement.fps);
+                }
+                Err(error) => {
+                    environment_errors.insert(scroll::METRIC, error.clone());
+                    environment_errors.insert(scroll::FPS_METRIC, error);
+                }
             }
-        };
-        for (name, measurement) in &native {
+        }
+        // Pixel comparisons require the optimized baseline protocol, including
+        // the display interval. Legacy values are deliberately not reused.
+        if let Some(pixel) = native.get_mut("input_to_pixel_ms")
+            && let Some(old) = previous
+                .as_ref()
+                .and_then(|b| b.metrics.get("input_to_pixel_ms"))
+            && let (Some(value), Some(_)) = (old.value, old.refresh_interval_ms)
+        {
+            let target = value * 1.15;
+            pixel.target = Some(target);
+            pixel.hard_pass = Some(pixel.value <= target);
+        }
+        for (&name, measurement) in &native {
             let metric = metrics
                 .get_mut(name)
                 .ok_or("missing native metric definition")?;
             metric.value = Some(measurement.value);
             metric.target = measurement.target;
             metric.refresh_interval_ms = measurement.refresh_interval_ms;
-            metric.regression_percent = previous
-                .as_ref()
-                .and_then(|b| b.metrics.get(name))
-                .map_or(default_threshold(), |m| m.regression_percent);
-        }
-        let mut environment_error = None;
-        // Pixel comparisons require the optimized baseline protocol, including
-        // the display interval. Legacy values are deliberately not reused.
-        if let Some(pixel) = native.get_mut("input_to_pixel_ms") {
-            let old = previous
-                .as_ref()
-                .and_then(|b| b.metrics.get("input_to_pixel_ms"));
-            if let Some(old) = old {
-                if !self.record {
-                    environment_error =
-                        same_display(old.refresh_interval_ms, pixel.refresh_interval_ms).err();
-                }
-                if let (Some(value), Some(_)) = (old.value, old.refresh_interval_ms) {
-                    let target = value * 1.15;
-                    pixel.target = Some(target);
-                    pixel.hard_pass = Some(pixel.value <= target);
-                }
+            let old = previous.as_ref().and_then(|b| b.metrics.get(name));
+            metric.regression_percent = if name == "input_to_pixel_ms" {
+                15.0
+            } else {
+                old.map_or(default_threshold(), |m| m.regression_percent)
+            };
+            if !self.record
+                && (name == "input_to_pixel_ms"
+                    || (name == scroll::METRIC && measurement.hard_pass == Some(true)))
+                && let Some(old) = old
+                && (name == "input_to_pixel_ms" || old.value.is_some())
+                && let Err(error) =
+                    same_display(old.refresh_interval_ms, measurement.refresh_interval_ms)
+            {
+                environment_errors.insert(name, error);
             }
-            let metric = metrics
-                .get_mut("input_to_pixel_ms")
-                .ok_or("missing pixel metric")?;
-            metric.regression_percent = 15.0;
-            metric.target = pixel.target;
         }
         let mut status = Status::Pass;
         let mut results = Vec::new();
@@ -811,13 +893,16 @@ impl BenchCheck {
                         m.value
                     }
                 });
-            let hard = native.get(name);
-            let state = if name == "input_to_pixel_ms" && environment_error.is_some() {
+            let hard = native.get(name.as_str());
+            let environment_error = environment_errors.get(name.as_str());
+            let state = if environment_error.is_some() {
                 "environment_error"
+            } else if name == scroll::FPS_METRIC && hard.and_then(|m| m.hard_pass) == Some(true) {
+                "pass"
             } else {
                 metric_state(metric, old, self.record, hard.and_then(|m| m.hard_pass))
             };
-            if metric.value.is_some() && old.is_none() && !self.record {
+            if state == "missing_baseline" {
                 log.push_str(&format!("Unmeasured recorded metric or missing baseline: {name}; confirm with the owner, then run {} after human confirmation.\n", self.scope.record_command()));
             }
             if ["fail", "missing_baseline", "hard_fail"].contains(&state) {
@@ -833,8 +918,12 @@ impl BenchCheck {
                     hard.hard_pass, hard.details
                 ));
             }
-            results.push(serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old,
-                "hard_check_pass": hard.and_then(|m| m.hard_pass), "details": hard.map(|m| &m.details)}));
+            let mut result = serde_json::json!({"name": name, "status": state, "current": metric, "baseline_value": old,
+                "hard_check_pass": hard.and_then(|m| m.hard_pass), "details": hard.map(|m| &m.details)});
+            if let Some(error) = environment_error {
+                result["error"] = error.as_str().into();
+            }
+            results.push(result);
         }
         let expected: Vec<&str> = match selection {
             None => previous
@@ -863,30 +952,44 @@ impl BenchCheck {
                 }));
             }
         }
-        if previous.is_none() && !self.record {
+        if previous.is_none()
+            && !self.record
+            && environment_errors.is_empty()
+            && !native
+                .values()
+                .any(|measurement| measurement.hard_pass == Some(false))
+        {
             log.push_str(&format!(
                 "No baseline for this machine; run {} after human confirmation.\n",
                 self.scope.record_command()
             ));
         }
         let mut report = serde_json::json!({"machine_id":id,"metrics":results});
-        if let Some((milestone, _)) = selection {
-            report["scope"] = milestone.to_ascii_lowercase().into();
+        if let Some(scope) = self.scope.check_name().strip_prefix("bench-") {
+            report["scope"] = scope.into();
         }
         fs::write(
             artifacts.join(self.scope.results_file()),
             serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-        if let Some(error) = environment_error {
-            return Err(error);
+        if !environment_errors.is_empty() {
+            let summary = environment_errors
+                .into_iter()
+                .map(|(name, error)| format!("{name}: {error}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(summary);
         }
         if self.record && status == Status::Pass {
+            metrics.remove(scroll::FPS_METRIC);
             let content = match (selection, original.as_deref()) {
                 (Some(_), Some(text)) => record::merge_measured(text, &metrics)?,
                 (scope, _) => {
                     if scope.is_some() {
-                        metrics.extend(pending());
+                        for (name, metric) in pending() {
+                            metrics.entry(name).or_insert(metric);
+                        }
                     }
                     let baseline = Baseline {
                         schema_version: 1,
@@ -919,7 +1022,14 @@ impl Check for BenchCheck {
     }
     fn run(&self, root: &Path) -> (Status, String) {
         let mut log = String::new();
-        match self.process(root, &mut log, machine, Command::output, native::measure) {
+        match self.process(
+            root,
+            &mut log,
+            machine,
+            Command::output,
+            native::measure,
+            scroll::measure,
+        ) {
             Ok(status) => (status, log),
             Err(error) => (Status::Error, format!("{log}{error}")),
         }
@@ -1030,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    fn baseline_accepts_native_but_rejects_pending_measurements() {
+    fn baseline_accepts_historical_null_and_a_measured_scroll_pass() {
         let machine = Machine {
             model: "model".into(),
             cpu: "cpu".into(),
@@ -1054,11 +1164,21 @@ mod tests {
         assert!(validate(&baseline).is_ok());
         baseline.metrics.get_mut("input_to_pixel_ms").unwrap().value = Some(8.0);
         assert!(validate(&baseline).is_ok());
+        let scroll = baseline.metrics.get_mut(scroll::METRIC).unwrap();
+        scroll.value = Some(0.0);
+        assert!(validate(&baseline).is_err());
         baseline
             .metrics
-            .get_mut("list_100k_scroll_dropped_frames")
+            .get_mut(scroll::METRIC)
             .unwrap()
-            .value = Some(0.0);
+            .refresh_interval_ms = Some(16.666667);
+        assert!(validate(&baseline).is_ok());
+        for value in [0.5, 1.0] {
+            baseline.metrics.get_mut(scroll::METRIC).unwrap().value = Some(value);
+            assert!(validate(&baseline).is_err());
+        }
+        baseline.metrics.get_mut(scroll::METRIC).unwrap().value = Some(0.0);
+        baseline.metrics.get_mut(scroll::METRIC).unwrap().target = Some(1.0);
         assert!(validate(&baseline).is_err());
         baseline.metrics = pending();
         baseline

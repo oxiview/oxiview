@@ -1,7 +1,7 @@
 use super::{
     Keymap, Node, NodeId, UiError, UiTree, View,
     action::RegisteredAction,
-    focus::{FocusHandler, FocusScope},
+    focus::{FocusHandler, FocusOrder, FocusScope},
     keyboard::{HeldKey, KeyboardState},
 };
 use oxiview_reactive::{ReactiveError, Signal, batch, effect, signal};
@@ -24,11 +24,16 @@ impl Node {
     pub(super) fn interaction_mut(&mut self) -> &mut NodeInteraction {
         self.interaction.get_or_insert_with(Box::default)
     }
+
+    pub(super) fn blocks_interaction(&self) -> bool {
+        self.hidden || self.style.layout.display == Display::None || self.disabled
+    }
 }
 
 pub(super) struct Interaction {
     pub(super) focused: Option<NodeId>,
     pub(super) focused_signal: Cell<Option<Signal<Option<NodeId>>>>,
+    pub(super) focus_order: FocusOrder,
     pub(super) keyboard_visible: bool,
     pub(super) armed: Option<ArmedActivation>,
     pub(super) keyboard: KeyboardState,
@@ -41,6 +46,7 @@ impl Default for Interaction {
         Self {
             focused: None,
             focused_signal: Cell::default(),
+            focus_order: FocusOrder::default(),
             keyboard_visible: true,
             armed: None,
             keyboard: KeyboardState::default(),
@@ -135,8 +141,7 @@ impl UiTree {
 
     pub(super) fn interaction_available(&self, id: NodeId) -> Result<bool, UiError> {
         for node in self.ancestors(id) {
-            let node = node?;
-            if node.hidden || node.style.layout.display == Display::None || node.disabled {
+            if node?.blocks_interaction() {
                 return Ok(false);
             }
         }
@@ -154,6 +159,7 @@ impl UiTree {
             None
         };
         self.node_mut(id)?.disabled = disabled;
+        self.invalidate_focus_order();
         if disabled {
             self.apply_focus_loss(scope, recovery)?;
         }

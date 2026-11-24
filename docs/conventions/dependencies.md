@@ -152,13 +152,15 @@ these fixtures.
 M3+1 editor tooling shares the existing parser pins through `oxiview-syntax`.
 Source analysis uses proc-macro2 span locations and syn's visitor to retain
 original byte ranges. The native server uses `lsp-server =0.10.0` from
-rust-analyzer for LSP framing, requests and errors, and `url =2.5.8` for
+rust-analyzer for LSP framing, requests and errors, and `url =2.5.9` for
 platform file paths and escaped file URIs. Both are pure Rust and offer MIT
 or Apache-2.0. Rust's standard library supplies neither protocol. The
 unpacked sources inspected locally were approximately 100 KiB and 616 KiB.
 The lockfile adds eight packages including the channels and URL/IDNA
 adapters. These dependencies belong only to the editor binary. Workspace
 verification checks their licenses and current advisories.
+The November 2026 `url` patch addresses the vulnerable origin calculation
+in 2.5.8. [RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2026-0592.html)
 [rust-analyzer LSP transport](https://github.com/rust-lang/rust-analyzer/tree/master/lib/lsp-server) · [rust-url](https://github.com/servo/rust-url)
 
 `oxiview-macros` uses the workspace pins for `syn =2.0.119`,
@@ -492,3 +494,19 @@ inherited only by the macOS adapter. `block2` joins the existing objc2-family
 external rule, restricted to that adapter. No new package or version is added;
 the existing transitive graph is reused. All native block and Metal types stay
 private to the adapter, with no public API or baseline changes.
+
+## Display-link drawable output (M7)
+
+The opt-in macOS display-link path uses the pinned Objective-C bindings in
+both native adapters. The platform uses QuartzCore's `CAMetalDisplayLink`
+feature to receive and retain each actual drawable. The wgpu adapter uses the
+same pinned `objc2`, `objc2-quartz-core`, `objc2-foundation`, `objc2-metal`, and
+`block2` directly for drawable validation, the final Metal render pass, and
+optional command-buffer timing. These are macOS-only direct dependencies
+inherited from the workspace. Both adapters explicitly enable QuartzCore's
+Metal bindings so each builds independently. AppKit is a platform dependency.
+
+The composition root forwards a scoped Rust `Any` borrow and invokes the
+consuming platform submission guard. Each adapter keeps its native types
+private. The two adapters share no crate dependency, and the existing surface
+handle remains the only unsafe constructor in the shared foundation.

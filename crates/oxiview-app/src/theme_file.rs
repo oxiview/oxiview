@@ -1,7 +1,4 @@
-use notify::{
-    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{AccessKind, AccessMode},
-};
+use crate::FileWatch;
 use oxiview_core::{UiError, UiTree};
 use oxiview_platform::WindowWaker;
 use oxiview_style::{Theme, ThemeError};
@@ -210,7 +207,7 @@ impl Shared {
 }
 
 fn run_worker(path: &Path, shared: &Arc<Shared>, waker: &WindowWaker) {
-    let (_watcher, target) = match start_watch(path, shared) {
+    let watcher = match start_watch(path, shared) {
         Ok(watch) => watch,
         Err(error) => {
             if let Ok(mut inbox) = shared.inbox.lock()
@@ -224,7 +221,7 @@ fn run_worker(path: &Path, shared: &Arc<Shared>, waker: &WindowWaker) {
     };
     while let Some((revision, request)) = shared.next_request() {
         let result = match request {
-            Request::Load => load(&target, path),
+            Request::Load => load(watcher.path(), path),
             Request::WatchError(error) => Err(error),
         };
         if !shared.finish(&revision, result, waker) {
@@ -233,46 +230,14 @@ fn run_worker(path: &Path, shared: &Arc<Shared>, waker: &WindowWaker) {
     }
 }
 
-fn start_watch(
-    path: &Path,
-    shared: &Arc<Shared>,
-) -> Result<(RecommendedWatcher, PathBuf), ThemeReloadError> {
-    let absolute = std::path::absolute(path).map_err(|error| watch_error(path, error))?;
-    let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) else {
-        return Err(watch_error(path, "expected a theme file path"));
-    };
-    let parent = parent
-        .canonicalize()
-        .map_err(|error| watch_error(path, error))?;
-    let target = parent.join(name);
-    let event_target = target.clone();
+fn start_watch(path: &Path, shared: &Arc<Shared>) -> Result<FileWatch, ThemeReloadError> {
     let shared = Arc::clone(shared);
     let display_path = path.to_owned();
-    let mut watcher = RecommendedWatcher::new(
-        move |event: notify::Result<Event>| match event {
-            Ok(event) if is_save(&event, &event_target) => shared.request(Request::Load),
-            Err(error) => shared.request(Request::WatchError(watch_error(&display_path, error))),
-            _ => {}
-        },
-        Config::default(),
-    )
-    .map_err(|error| watch_error(path, error))?;
-    watcher
-        .watch(&parent, RecursiveMode::NonRecursive)
-        .map_err(|error| watch_error(path, error))?;
-    Ok((watcher, target))
-}
-
-fn is_save(event: &Event, target: &Path) -> bool {
-    event.need_rescan()
-        || (matches!(
-            event.kind,
-            EventKind::Any
-                | EventKind::Create(_)
-                | EventKind::Modify(_)
-                | EventKind::Remove(_)
-                | EventKind::Access(AccessKind::Close(AccessMode::Write))
-        ) && event.paths.iter().any(|path| path == target))
+    FileWatch::start(path, move |event| match event {
+        Ok(()) => shared.request(Request::Load),
+        Err(error) => shared.request(Request::WatchError(watch_error(&display_path, error))),
+    })
+    .map_err(|error| watch_error(path, error))
 }
 
 fn load(target: &Path, path: &Path) -> Candidate {

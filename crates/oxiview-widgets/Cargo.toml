@@ -1,0 +1,28 @@
+[package]
+name = "oxiview-widgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxiview-base.workspace = true
+oxiview-core.workspace = true
+oxiview-layout.workspace = true
+oxiview-platform.workspace = true
+oxiview-scene.workspace = true
+oxiview-style.workspace = true
+oxiview-text.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name = "m7"
+path = "benches/m7.rs"
+harness = false

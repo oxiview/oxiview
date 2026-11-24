@@ -1,0 +1,87 @@
+{
+  "executable_sha256": "44362d8e8ed2af6e7c804da6f7fbb80afcc3e3f997f6fe8cdaeec4e902efee00",
+  "rows": 100000,
+  "window_points": [
+    1120,
+    720
+  ],
+  "drawable_pixels": [
+    2240,
+    1440
+  ],
+  "scale_factor": 2,
+  "warmup_seconds": 2,
+  "stride_points": 12,
+  "samples": [
+    {
+      "capture": "bench-m7-native-scroll-1795426784232889000-92009",
+      "started_unix": 1795426783.769214,
+      "expected_slots": 1200,
+      "occupied_slots": 1192,
+      "measured_duration_ns": 9999999600,
+      "zero_presented_times": 3,
+      "missing_feedback": 0,
+      "viewer_json_sha256": "bcd0bdc0a07b9ec04f878cf091c80a6a5079f1fcc03194b70e3ce87199302329",
+      "result_json_sha256": "cf58f05615def45028715148f1ecf0d70d2c309d391e06919f2439f819b21c35",
+      "clock_slots": 1200
+    },
+    {
+      "capture": "bench-m7-native-scroll-1795426798428353000-92754",
+      "started_unix": 1795426797.9663758,
+      "expected_slots": 1200,
+      "occupied_slots": 1160,
+      "measured_duration_ns": 9999999600,
+      "zero_presented_times": 22,
+      "missing_feedback": 0,
+      "viewer_json_sha256": "319d607f0ce97c0692c1daf11aadadd734020121bec1384106b62c55da498b2a",
+      "result_json_sha256": "78ab0275aab87deb12323a342611cf6b1b188ab55811e99c19ebfb72950dec85",
+      "clock_slots": 1199
+    },
+    {
+      "capture": "bench-m7-native-scroll-1795426812565114000-93490",
+      "started_unix": 1795426812.104089,
+      "expected_slots": 1200,
+      "occupied_slots": 1186,
+      "measured_duration_ns": 9999999600,
+      "zero_presented_times": 1,
+      "missing_feedback": 0,
+      "viewer_json_sha256": "10c6a7749a3e02390f9d87e2300fba6cde4436d391b7d031b03b4e987cda860a",
+      "result_json_sha256": "6cd87508bb3d88831421585913e1112a91a6206db9d408d6e96fcc443b15f51a",
+      "clock_slots": 1200
+    },
+    {
+      "capture": "m7-hitches-1795426826667710000-94269",
+      "started_unix": 1795426826.252691,
+      "expected_slots": 1200,
+      "occupied_slots": 751,
+      "measured_duration_ns": 9999999600,
+      "zero_presented_times": 20,
+      "missing_feedback": 0,
+      "viewer_json_sha256": "58364c149cc5c91c702c824502e9696126cbca22eae1b5dc311264533b05d466",
+      "result_json_sha256": "29161914243b0284a3b72bc80de88c3aed47cac69ef7333003fea777e729f218",
+      "apple": {
+        "observed_hitch_time_ns": 8333333,
+        "complete_apple_frame_lifetime_coverage": false,
+        "apple_frame_lifetime_matches": 751,
+        "unmatched_app_hitches": 1
+      }
+    },
+    {
+      "capture": "Hitches and Display with the target-scoped Core Animation frame lifetime table",
+      "started_unix": 1795428178.622354,
+      "expected_slots": 1200,
+      "occupied_slots": 1162,
+      "measured_duration_ns": 9999999600,
+      "zero_presented_times": 33,
+      "missing_feedback": 0,
+      "viewer_json_sha256": "fa87dbeafd8cbe297e668c0985bce051809c92bc4c9633593d390183ae40f04f",
+      "result_json_sha256": "232c95b724f8dae9cf5e7080a03a7fb02ee16877d847b5217f064b966e6e4bd8",
+      "apple": {
+        "observed_hitch_time_ns": 8333333,
+        "complete_apple_frame_lifetime_coverage": false,
+        "apple_frame_lifetime_matches": 1160,
+        "unmatched_app_hitches": 0
+      }
+    }
+  ]
+}
